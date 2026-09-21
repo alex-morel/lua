@@ -1,0 +1,1227 @@
+================================================================================
+ DX7-FM ENGINE — DOCUMENTACAO DE ARQUITETURA
+ Synth FM de 8 operadores, 64 vozes, 4 partes (A/B/C/D), estilo DX7 + extensoes
+ Gerado em: 2026-09-21
+================================================================================
+
+Este arquivo documenta TUDO que foi decidido e implementado ate agora, para
+que o trabalho possa continuar offline sem depender do historico da conversa.
+Ele cobre: objetivo, decisoes de arquitetura, todos os arquivos-fonte (com
+cada struct/classe/funcao e o que faz), como compilar/rodar, o que foi
+validado por teste, limitacoes conhecidas, bugs ja corrigidos (e por que
+aconteceram) e um roteiro do que falta para virar um plugin/produto real.
+
+
+--------------------------------------------------------------------------------
+1. OBJETIVO E ESCOPO
+--------------------------------------------------------------------------------
+
+Motor de sintese FM (Frequency/Phase Modulation) em C++, inspirado no Yamaha
+DX7, mas deliberadamente estendido:
+
+  - 8 operadores por voz (DX7 original: 6), com matriz de roteamento LIVRE
+    8x8 (DX7 original: 32 "algoritmos" fixos pre-desenhados).
+  - Cada operador pode ter um efeito proprio (filtro, ring mod, saturacao,
+    bitcrusher/sample-rate reducer, frequency shifter, comb, phase
+    distortion estilo Casio CZ). O DX7 original NAO tem filtro nenhum.
+  - Envelopes de amplitude e de "FX" no formato classico do DX7: 4 pares
+    (rate, level), 0-99.
+  - Pitch Envelope Generator (PEG) por voz, com profundidade configuravel
+    por operador.
+  - 2 LFOs por voz (DX7 real: 1 LFO GLOBAL compartilhado por todas as
+    vozes — aqui decidimos ter LFOs independentes por voz, mais flexivel
+    porem menos fiel ao hardware original).
+  - Alvo: PC (plugin ou standalone), sem restricao de CPU/memoria como
+    teria um microcontrolador. Por isso o codigo prioriza corretude e
+    clareza sobre otimizacao (SIMD/oversampling ainda NAO foram feitos,
+    ver secao 8 "Proximos passos").
+  - Pool compartilhado de 64 vozes fisicas, dividido entre ate 4 "partes"
+    (A, B, C, D), cada uma com seu proprio patch/timbre completo — ou seja,
+    multitimbria de 4 zonas/canais MIDI simultaneos (o DX7 original e
+    MONOtimbrico, um patch por vez).
+  - Poly aftertouch de verdade, por nota (o DX7 original so tem aftertouch
+    de canal, monofonico).
+  - Modos de voz por parte: Poly, Mono (com glide/portamento e opcao de
+    legato) e Unison (varias vozes detunadas por nota — NAO existe no DX7
+    original).
+  - Sustain pedal (CC64) e sostenuto (CC66, tambem nao existe no DX7
+    original).
+
+Este documento NAO cobre UI, persistencia de patch (sysex/arquivo) nem
+integracao com um host de plugin (VST3/CLAP/AU) — isso e trabalho futuro,
+listado na secao 8.
+
+
+--------------------------------------------------------------------------------
+2. ESTRUTURA DE ARQUIVOS
+--------------------------------------------------------------------------------
+
+dx7fm/
+  src/
+    dx7_params.h    - Structs de DADOS puros (o "patch"): sem estado de
+                      execucao, sem logica. E o que um editor/UI ou um
+                      leitor de arquivo de patch preencheria.
+    dx7_dsp.h       - Blocos de DSP reutilizaveis, com estado de execucao:
+                      EG (envelope), LFO, osciladores, filtro SVF-TPT,
+                      saturador, crusher, comb, frequency shifter.
+                      Nao sabem nada sobre "operador" ou "voz" — sao
+                      blocos genericos.
+    dx7_engine.h    - A VOZ: junta os blocos de dx7_dsp.h seguindo a
+                      matriz de dx7_params.h. Contem tambem o "compilador
+                      de algoritmo" (calcula em que ordem avaliar os 8
+                      operadores dada uma matriz de roteamento livre).
+    dx7_alloc.h     - O ALOCADOR/SYNTH: pool de 64 vozes fisicas, 4 partes,
+                      logica de Poly/Mono/Unison, sustain/sostenuto,
+                      dispatch de controladores MIDI (bend, mod wheel,
+                      aftertouch).
+    dx7_patch_io.h  - [ADICIONADO em 2026-09-21] Persistencia de patch:
+                      um JSON minimo proprio (classe JsonValue, parser +
+                      writer, sem lib externa) mais as funcoes
+                      voiceParamsToJson/FromJson, partParamsToJson/FromJson
+                      e os helpers de arquivo savePatchFile/loadPatchFile,
+                      savePartFile/loadPartFile. Ver secao 6B.
+    demo.cpp        - 25 checagens de sanidade em 15 funcoes de teste (nao
+                      e um framework de teste "de verdade", e um main()
+                      com asserts impressos) + gera 4 arquivos .wav de
+                      demonstracao.
+    wav_writer.h    - Escritor de WAV PCM16 estereo/mono, so para os
+                      demos (nao faz parte do motor).
+  output/           - WAVs gerados pelo demo.cpp (nao versionar; e saida).
+  docs/
+    ARQUITETURA.txt - Este arquivo.
+
+Dependencias: apenas a biblioteca padrao C++ (STL). Nenhuma lib externa
+(inclusive a persistencia de patch usa um JSON escrito a mao, ver
+dx7_patch_io.h, em vez de puxar nlohmann/json ou similar).
+Testado com g++ 16.2 (Arch Linux), padrao C++20.
+
+
+--------------------------------------------------------------------------------
+3. COMO COMPILAR E RODAR
+--------------------------------------------------------------------------------
+
+Os headers sao "header-only" (tudo dentro de dx7fm namespace, funcoes
+`inline` ou definidas dentro da classe). Nao ha .cpp de implementacao
+separado alem do demo.
+
+Compilar e rodar os testes/demos:
+
+    g++ -std=c++20 -O2 -Wall -Wextra -o demo src/demo.cpp
+    ./demo
+
+Isso deve imprimir 25 linhas "[PASS] ..." e no final:
+    == Resultado: 25 passaram, 0 falharam ==
+
+E cria a pasta output/ com:
+    01_simple_fm.wav          - FM de 2 operadores (op1 modula op0), mono
+    02_filtered_modulator.wav - mesmo patch, mas com filtro passa-baixa
+                                TPT no MODULADOR (operador 1), com o corte
+                                variando ao longo do tempo via fxEG
+    03_mono_glide.wav         - modo Mono com glide: nota C2 (48), depois
+                                legato para G4 (67), desliza suavemente
+    04_unison.wav             - nota unica em modo Unison com 5 vozes
+                                detunadas +-15 cents e espalhadas no
+                                estereo (unisonSpread=0.9)
+
+Para usar o motor em outro programa, basta:
+
+    #include "dx7_params.h"
+    #include "dx7_dsp.h"
+    #include "dx7_engine.h"
+    #include "dx7_alloc.h"
+
+    dx7::Synth synth;
+    synth.init(48000.0f, 64);           // sample rate, tamanho do pool
+    synth.part(0).voice = meuPatch;     // preenche o patch da parte A
+    synth.recompile(0);                 // OBRIGATORIO apos mudar a matriz!
+    synth.noteOn(0, 60, 100);           // parte, nota MIDI, velocity
+    float l, r;
+    synth.renderStereo(l, r);           // uma amostra estereo por chamada
+    synth.noteOff(0, 60);
+
+IMPORTANTE: `recompile(idx)` precisa ser chamado sempre que
+`part(idx).voice.matrix` for alterada (adicionar/remover conexoes entre
+operadores). Ele recalcula a ordem de avaliacao dos operadores (ver secao
+5, `compileAlgorithm`). Isso e uma operacao O(8!) = 40320, rapida (da ordem
+de microssegundos) mas NAO deve ser chamada a cada amostra — so ao trocar
+de patch/algoritmo. Alterar outros parametros (EG, nivel, ratio, FX) NAO
+precisa de recompile, so a topologia da matriz.
+
+
+--------------------------------------------------------------------------------
+4. dx7_params.h — OS DADOS DO PATCH
+--------------------------------------------------------------------------------
+
+Filosofia: structs "burros", sem metodos alem de defaults. Tudo que uma UI
+ou um leitor de arquivo preencheria.
+
+  kNumOps = 8
+      Numero de operadores por voz. Se um dia isso precisar ser diferente
+      de 8, va com cuidado: dx7_engine.h::compileAlgorithm faz uma busca
+      em 8! permutacoes — para N operadores isso vira O(N!), so viavel
+      ate uns 10 no maximo. Para mais que isso, trocar por um algoritmo de
+      ordenacao topologica real (Kahn's algorithm) em vez de forca bruta.
+
+  EGParams { rate[4], level[4] }  (uint8_t, 0..99)
+      O envelope classico do DX7: 4 estagios. rate[0..2]/level[0..2] sao
+      percorridos em sequencia ao apertar a tecla; o ultimo estagio
+      atingido (indice 2) "segura" (sustain) ate soltar a tecla; ai entra
+      rate[3]/level[3] (o release). Usado tanto para o envelope de
+      amplitude (ampEG) quanto para o de efeito (fxEG) de cada operador.
+
+  PEGParams { rate[4], level[4], rangeOctaves }
+      Mesmo formato de EGParams, mas o "level" representa PITCH: 50 =
+      centro (sem desvio), 0 = -rangeOctaves oitavas, 99 = quase
+      +rangeOctaves oitavas. rangeOctaves default = 4.0.
+
+  enum Waveform { Sine, Triangle, Saw, Square, Noise }
+      Forma de onda do oscilador de cada operador (DX7 original: so Sine).
+
+  enum FxType { Bypass, LowPass, BandPass, HighPass, RingMod, Saturate,
+                Crush, FreqShift, Comb }
+      Qual efeito (se algum) roda DENTRO do operador, depois do oscilador
+      e antes do envelope de amplitude. Ver secao 5 para o que cada um faz
+      sonoramente.
+
+  enum LfoWave { Triangle, SawUp, SawDown, Square, Sine, SampleHold }
+
+  LFOParams { rate(Hz), wave, delaySec, keySync, pitchDepth(0..1),
+              ampDepth(0..1) }
+      pitchDepth/ampDepth sao a PROFUNDIDADE MAXIMA do LFO; a quantidade
+      real que cada operador recebe ainda e escalada por
+      op.lfoPitchModSens (0..7) / op.lfoAmpModSens (0..3), exatamente como
+      no DX7 (o LFO tem uma profundidade global, e cada operador tem sua
+      propria "sensibilidade" a ela).
+
+  KeyLevelScaling { breakpoint(nota MIDI), leftDepth, rightDepth(int8_t,
+                    dB-ish por oitava), leftExp, rightExp(bool) }
+      Controla como o outputLevel de um operador muda conforme a tecla se
+      afasta do breakpoint (para a esquerda ou direita). leftExp/rightExp
+      escolhem entre uma curva linear ou "quadratica" (aproximacao de
+      exponencial) — ver keyLevelScaleDb() em dx7_engine.h.
+
+  OperatorParams — o operador inteiro:
+      fixedFreq (bool)      - se true, usa fixedHz em vez de ratio*nota
+      coarseRatio (float)   - razao harmonica (usado se !fixedFreq)
+      fineCents             - ajuste fino em cents
+      fixedHz               - frequencia fixa em Hz (usado se fixedFreq)
+      detuneCents           - detune extra (soma-se ao fine)
+      outputLevel (0..99)   - nivel de saida do operador
+      ampEG (EGParams)      - envelope de amplitude
+      fxEG (EGParams)       - envelope que modula fxParam1 ao longo do
+                              tempo (ex.: filtro "abrindo" com o tempo)
+      levelScaling (KeyLevelScaling)
+      rateScaling (0..7)    - acelera o EG em teclas agudas
+      velocitySens (0..7)   - quanto a velocity afeta o nivel (+-12dB max)
+      lfoAmpModSens (0..3)  - tremolo via LFO
+      lfoPitchModSens (0..7)- vibrato via LFO
+      feedback (0..1)       - usado se este operador tiver auto-modulacao
+                              (a diagonal da matriz, matrix.mod[i][i])
+      waveform (Waveform)
+      phaseDistortion (0..1)- warp de fase estilo Casio CZ, ANTES da
+                              tabela de onda
+      fxType, fxParam1, fxParam2, ringModSource - configuracao do efeito
+                              por operador (ver secao 5)
+      fxEGReleaseWithAmp (bool, default true) - se true, fxEG recebe
+                              noteOff() junto com ampEG (o efeito "fecha"
+                              no release, acompanhando a amplitude); se
+                              false, fxEG nunca recebe noteOff() e fica
+                              preso no estagio de sustain (indice 2) ate a
+                              voz ser desalocada -- decisao POR OPERADOR,
+                              porque o comportamento desejado varia por
+                              timbre (ver Voice::noteOff() e
+                              testFxEGReleaseFollowsAmp() em demo.cpp)
+      pegDepth (0..1)       - quanto o Pitch EG afeta ESTE operador
+                              especificamente (permite, por ex., so a
+                              portadora cair de pitch no ataque, como um
+                              bumbo, mantendo os moduladores estaveis)
+      pegAffectsFixed (bool)- se false (default), operadores fixedFreq
+                              ignoram o PEG (comportamento tipico: sinos
+                              inarmonicos nao devem "glissar")
+
+  ModSource { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend }
+  ModDest   { None, OperatorLevel, OperatorFx1, OperatorFeedback,
+              VoicePitch }
+  ModRoute { src, dest, opIndex, depth(-1..1) }
+      Uma matriz de modulacao pequena e generica (8 slots, kNumModRoutes).
+      Cada ModRoute liga uma fonte a um destino com uma profundidade.
+      E aqui que voce liga, por exemplo, Poly Aftertouch -> corte do
+      filtro do operador 3. Ver testPolyAftertouch() em demo.cpp para um
+      exemplo funcionando.
+      ModDest::OperatorFeedback e aplicado somando fbTrim[i] (calculado a
+      partir das ModRoute) ao opParams.feedback do operador, com o
+      resultado clampado em 0..1 antes de multiplicar op.prevOut (ver
+      Voice::process(), passo 5b). Ver testOperatorFeedbackModulation()
+      em demo.cpp.
+
+  AlgorithmMatrix
+      mod[8][8] (float)  - mod[i][j] = quanto o operador j modula (Phase
+                            Modulation) o operador i. A DIAGONAL mod[i][i]
+                            e o feedback proprio do operador i.
+      ring[8][8] (bool)  - se true, a conexao j->i e por MULTIPLICACAO
+                            (Ring Modulation) em vez de somar na fase.
+      outputMix[8] (float) - quanto de cada operador vai pro barramento
+                            de saida da voz (isso define quais operadores
+                            sao "portadoras").
+      Isso substitui os 32 "algoritmos" fixos do DX7: aqui a topologia e
+      totalmente livre. Se quiser recriar um algoritmo classico do DX7,
+      basta preencher mod[][] e outputMix[] imitando o diagrama dele.
+
+  VoiceParams
+      op[8] (OperatorParams), matrix (AlgorithmMatrix), peg (PEGParams),
+      lfo1, lfo2 (LFOParams), modMatrix[8] (ModRoute).
+      O construtor default ja cria um patch minimo tocavel: op0 e a unica
+      portadora (outputMix[0]=1), op1 modula op0 com indice 1.0
+      (matrix.mod[0][1]=1.0), op1.outputLevel=60. Todos os outros
+      operadores ficam com outputLevel default (99) mas sem contribuir
+      pro som porque nao estao na matriz nem no outputMix — ou seja, sao
+      inofensivos mas DESPERDICAM CPU rodando osciladores mudos. Ao criar
+      um patch do zero, e boa pratica zerar ampEG.level de operadores nao
+      usados (ver makeSimpleFmPatch() em demo.cpp) para eles ficarem
+      idle e nem processar.
+
+  enum VoiceMode { Poly, Mono, Unison }
+
+  PartParams — uma das 4 "zonas"/canais (A, B, C, D):
+      name (string), voice (VoiceParams) - o patch completo
+      midiChannel (0=omni), loKey/hiKey, loVel/hiVel - filtro de entrada
+      transpose (int8_t, semitons) - desloca a nota ANTES de tocar
+      level (float) - ganho da parte no mix final
+      pan (-1..1)
+      voiceMode (Poly/Mono/Unison)
+      unisonCount, unisonDetuneCents, unisonSpread - so usados se Unison
+      glideEnabled, glideTimeSec, glideLegatoOnly - portamento
+      monoLegatoEnvReuse (bool) - no modo Mono/Unison, se uma nota chega
+              em legato (outra ja estava presa), reaproveita o envelope
+              em vez de redisparar (comportamento classico de synth mono)
+      reservedVoices (int) - mínimo de vozes do pool de 64 que esta parte
+              tenta preservar ao competir por roubo de voz (ver secao 6)
+      enabled (bool)
+      bendRangeSemis (float) - faixa do pitch bend em semitons
+
+  GlobalParams { sampleRate, maxVoices, oversample }
+      Declarado mas AINDA NAO USADO por Synth::init() alem do que ja e
+      passado manualmente (sampleRate, maxVoices). oversample e so um
+      placeholder para quando o oversampling for implementado
+      (ver secao 8).
+
+
+--------------------------------------------------------------------------------
+5. dx7_dsp.h — BLOCOS DE DSP (SEM SABER O QUE E "OPERADOR" OU "VOZ")
+--------------------------------------------------------------------------------
+
+  dbToLinear(db) -> pow(10, db/20)
+
+  egLevelToAmplitude(level0to99) -> amplitude linear
+      Aproximacao: ~0.75 dB por passo (8 passos = 6dB, igual ao
+      comportamento real do DX7). NAO e a tabela exata do ROM do
+      hardware original — e uma curva continua equivalente. Level 0
+      retorna amplitude exatamente 0 (silencio total), nao apenas muito
+      baixo.
+
+  egRateToSpeed(rate0to99) -> velocidade em "unidades de nivel por
+      segundo"
+      Formula: speed = 5.0 * 1.0897^rate
+      Calibrada para: rate=99 percorre as 99 unidades em ~4ms; rate=0
+      percorre em ~20s. Isso e uma APROXIMACAO MINHA, nao a tabela real
+      do DX7 (que e nao-linear e dependente de mais fatores). O importante
+      e que o EG roda em "slope constante" (unidades/segundo fixas para
+      um dado rate), que E como o hardware real funciona: pulos de nivel
+      maiores demoram mais tempo, mesmo com o mesmo rate — isso da o
+      "jeito" caracteristico do envelope DX7, diferente de um ADSR comum
+      que tem TEMPOS fixos independente da distancia percorrida.
+
+  class SegmentEG
+      O envelope de 4 estagios em si. Funciona tanto para amplitude
+      quanto para pitch (PEG) — quem chama e que decide a escala/dominio
+      do "level" (0-99 direto p/ EG normal; ou reinterpretado como pitch
+      pelo chamador, no caso do PEG).
+      Metodos:
+        configure(rate[4], level[4])  - carrega os parametros do patch
+        noteOn(rateScaleAdd)          - dispara do zero (estagio 0). O
+                                         rateScaleAdd (key rate scaling)
+                                         e somado ao rate de CADA estagio
+                                         durante o process().
+        noteOff()                     - pula direto pro estagio 3
+                                         (release), preservando o nivel
+                                         atual como ponto de partida
+        process(controlRateHz) -> float
+                                       - avanca o envelope em 1/controlRateHz
+                                         segundos e retorna o nivel atual
+                                         (0..99, ou o dominio que o
+                                         PEG usa). Chamado 1x por amostra
+                                         no motor atual (controlRateHz =
+                                         sampleRate) — nao ha downsampling
+                                         de taxa de controle ainda.
+        isIdle() -> bool               - true apos o release terminar
+                                          (chegou em level[3])
+
+  class LFO
+      configure(LFOParams), noteOn() (reresta fase se keySync, sempre
+      reseta o fade-in de delay), process(sampleRate) -> -1..1 (ou
+      0..1*fade durante o delay).
+      Formas: Triangle, SawUp, SawDown, Square, Sine, SampleHold (ruido
+      degrau, muda de valor a cada ciclo de `rate`).
+
+  oscWave(phase01, Waveform, rng, dist) -> -1..1
+      Osciladores NAO SAO BAND-LIMITED (sem anti-aliasing proprio) — Saw
+      e Square vao gerar aliasing em frequencias altas se tocados sem
+      oversampling. Isso e uma decisao consciente: o oversampling fica
+      para depois (ver secao 8), e o motor atual roda na taxa de amostra
+      nativa.
+
+  phaseDistort(phase01, amount) -> phase01 deformado
+      Implementacao simples estilo Casio CZ: acelera/desacelera a
+      posicao de fase com base em sin(2*pi*phase) antes de ler a tabela
+      de onda. amount=0 e identidade.
+
+  class TPTStateVariableFilter
+      Filtro State-Variable "Topology-Preserving Transform" (zero-delay
+      feedback), a topologia recomendada na conversa original justamente
+      por ser ESTAVEL sob modulacao RAPIDA de corte (importante porque o
+      fxEG pode variar o corte amostra a amostra). setParams(cutoffHz, Q)
+      recalcula os coeficientes TODA VEZ que e chamado — ou seja, e
+      seguro (e esperado) chamar isso a cada amostra se o corte estiver
+      sendo modulado, mas tambem significa que ha algum custo de CPU
+      recorrente (3 tan/divisoes por chamada) que poderia ser otimizado
+      (cache de coeficientes quando o corte nao muda, ver secao 8).
+      process(x) -> {lp, bp, hp} (retorna os 3 simultaneamente; o
+      operador escolhe qual usar conforme op.fxType).
+
+  softSaturate(x, drive) -> tanh(x * (1 + drive*8))
+
+  class Crusher
+      Reducao de sample rate (sample & hold) + reducao de bits.
+      process(x, crushSampleHz, bits) -> x processado.
+
+  class CombFilter
+      Delay curto com feedback e interpolacao linear (para dar
+      caracter de corda/tubo). Buffer de 50ms alocado em setSampleRate().
+      process(x, delayHz, feedback) -> retorna APENAS o sinal atrasado
+      (nao mistura com o seco — quem chama decide o mix, hoje o operador
+      usa 100% do retorno do comb quando fxType==Comb).
+
+  class FreqShifter
+      APROXIMACAO grosseira de um single-sideband shifter (Hilbert de
+      1 polo, NAO e um Hilbert de qualidade). Serve para timbres
+      inarmonicos/metalicos, mas nao e cirurgicamente preciso — documentado
+      no proprio codigo como limitacao conhecida. Se precisar de um
+      shifter de qualidade, trocar por um Hilbert FIR de ordem mais alta.
+
+  class HalfbandDecimator2x
+      [ADICIONADO em 2026-09-21] Decimador FIR 2:1 com filtro half-band
+      (windowed-sinc, janela de Hamming, 31 taps, corte normalizado em
+      0.25 -- exatamente o Nyquist do sinal decimado). process(x, out&)
+      e chamado 1x por amostra NA TAXA DE ENTRADA (superamostrada) e
+      retorna true + escreve out a cada 2 chamadas (na taxa decimada).
+      Cascatear 2 instancias decima 4:1 (usado pelo oversampling da
+      Voice, ver secao 6). Prioriza clareza (convolucao direta) sobre a
+      otimizacao classica de half-band (pular os coeficientes zero).
+
+
+--------------------------------------------------------------------------------
+6. dx7_engine.h — A VOZ (Voice) E O COMPILADOR DE ALGORITMO
+--------------------------------------------------------------------------------
+
+  struct CompiledAlgorithm { order[8], feedbackEdge[8][8] }
+      Resultado de "compilar" uma AlgorithmMatrix. Nao carrega dados do
+      patch, so a TOPOLOGIA de avaliacao.
+
+  compileAlgorithm(const AlgorithmMatrix&) -> CompiledAlgorithm
+      Problema que resolve: como os 8 operadores podem se modular em
+      QUALQUER ordem (matriz livre, nao os 32 algoritmos fixos do DX7),
+      precisamos decidir em que ORDEM calcular os 8 operadores a cada
+      amostra. Se o operador A modula o operador B, e B e calculado
+      DEPOIS de A na mesma amostra, A pode usar o valor "fresco" (deste
+      mesmo instante) de A. Se B for calculado ANTES de A, so pode usar o
+      valor de A da AMOSTRA ANTERIOR (1 sample de atraso) — isso sempre
+      acontece na diagonal (auto-feedback) e pode acontecer em ciclos
+      (A modula B e B modula A).
+      Algoritmo: busca por FORCA BRUTA entre as 8! = 40320 permutacoes
+      possiveis dos 8 operadores, a que MINIMIZA o numero de conexoes que
+      precisam de atraso (arestas "para tras" na ordem escolhida). Para
+      qualquer algoritmo SEM ciclos (a maioria dos algoritmos DX7
+      classicos, exceto os que tem feedback), encontra uma ordem com ZERO
+      atrasos (alem da diagonal, que e SEMPRE atrasada por definicao).
+      Custo: ~40320 permutacoes x ate 56 verificacoes de aresta =
+      ~2.2 milhoes de operacoes. Rapido (microssegundos) mas NAO deve
+      rodar no thread de audio a cada amostra — so quando o patch muda
+      (por isso Synth::recompile() existe como uma chamada separada e
+      explicita).
+      Se um dia precisar de mais de ~10 operadores, trocar por Kahn's
+      algorithm (ordenacao topologica O(V+E)) + tratar ciclos restantes
+      como feedback forcado, em vez de forca bruta.
+
+  struct OperatorState
+      Estado de execucao de 1 operador dentro de 1 voz: phase (double,
+      precisao dupla para evitar deriva de fase em notas longas), ampEG,
+      fxEG (SegmentEG), filter (TPTStateVariableFilter), crusher, comb,
+      shifter (uma instancia de cada FX POSSIVEL, sempre alocadas, mesmo
+      que o operador nao use aquele FX — simples porem gasta memoria/RAM
+      desnecessaria; para 64 vozes x 8 operadores x (1 filtro + 1 crusher
+      + 1 comb com buffer de 50ms + 1 shifter) isso e nao-trivial: o
+      CombFilter sozinho aloca ~2400 floats (50ms a 48kHz) por operador,
+      entao 64*8 = 512 combs = ~1.2M floats = ~4.7MB so de buffers de
+      comb, mesmo em operadores que nunca usam FxType::Comb. Se memoria
+      virar problema, isso pode ser trocado por alocacao preguicosa
+      (so cria o objeto de FX quando fxType != Bypass) — ver secao 8).
+      signal (saida deste sample), prevOut (saida do sample anterior,
+      usada pelas arestas que precisam de atraso).
+
+  struct VoiceControllers
+      pitchBendSemis, modWheel01, channelAT01, polyAT01 — valores "ao
+      vivo" que o alocador (Synth) escreve de fora. A Voice so LE esses
+      campos via controllers().
+
+  class Voice — a voz fisica completa (8 operadores + PEG + 2 LFOs).
+      NAO possui o patch (guarda so um `const VoiceParams* patch_` e
+      `const CompiledAlgorithm* compiled_`) — o patch e compartilhado
+      por todas as vozes de uma parte, entao trocar um parametro no
+      patch afeta IMEDIATAMENTE todas as vozes que o estao tocando
+      (inclusive as que ja soam). Isso e intencional (permite editar o
+      timbre em tempo real ouvindo o resultado), mas significa que
+      TROCAR A TOPOLOGIA DA MATRIZ enquanto vozes estao tocando e
+      PERIGOSO (o CompiledAlgorithm antigo pode nao bater mais com a
+      matriz nova) — recompile() deve, na pratica, ser seguido de nova
+      alocacao de notas, nao trocado "embaixo" de vozes que ja estao
+      soando. Isso NAO e tratado com seguranca de thread nenhuma hoje
+      (ver secao 8, "thread safety").
+
+      setOversample(factor) - [ADICIONADO em 2026-09-21] 1 (default), 2 ou
+          4. Se baseSampleRate_ ja foi setado, recalcula sampleRate_ na
+          hora (ordem com setSampleRate() nao importa). Ver process().
+
+      setSampleRate(sr) - guarda sr em baseSampleRate_ e calcula
+          sampleRate_ = sr * oversampleFactor_ (a taxa INTERNA, usada por
+          todo o pipeline de audio -- fase dos osciladores, EGs, LFOs,
+          filtros, etc.). Propaga sampleRate_ (ja multiplicado) pra todos
+          os blocos de DSP internos.
+
+      noteOn(patch, compiled, note, velocity, extraDetuneCents=0,
+             legato=false)
+          - extraDetuneCents: usado pelo modo Unison pra espalhar cada
+            voz-irma um pouco fora de afinacao
+          - legato: se true E reuseEnvOnLegato_ for true, NAO redispara
+            os envelopes (ampEG, fxEG, PEG, LFOs) nem reseta a fase dos
+            operadores — so atualiza a nota-alvo (pra o glide deslizar).
+            Se false (ou reuseEnvOnLegato_ false), redispara tudo do
+            zero, incluindo fase=0 (exceto operadores com waveform=Noise,
+            que nao tem fase relevante).
+          - rate scaling: cada EG recebe um rateScaleAdd calculado como
+            op.rateScaling * max(0, note-60) / 12 * 2.0 (teclas ACIMA de
+            C3 aceleram o EG; abaixo, nao ha desaceleracao — e uma
+            simplificacao, o DX7 real tambem desacelera um pouco abaixo
+            do breakpoint dependendo do parametro).
+
+      noteOff() - marca releasing_=true, dispara noteOff() em todos os
+          ampEG e no PEG. Para cada operador i, TAMBEM dispara
+          ops_[i].fxEG.noteOff() SE patch_->op[i].fxEGReleaseWithAmp for
+          true (default). Se for false, o fxEG daquele operador nunca
+          recebe o sinal de "solte" e fica preso no estagio 2 (sustain)
+          ate a voz ser desalocada — comportamento intencional, por
+          operador (ver campo fxEGReleaseWithAmp em OperatorParams, secao
+          4, e testFxEGReleaseFollowsAmp() em demo.cpp).
+
+      setGlide(enabled, timeSec), setLegatoEnvReuse(reuse) - configuracao
+          chamada pelo alocador antes de cada noteOn.
+
+      isActive() -> active_ && tem pelo menos 1 ampEG != idle
+      isReleasing() -> bool (setado em noteOff, NUNCA resetado
+          explicitamente para false — permanece true ate a voz virar
+          inativa e ser realocada por outra noteOn, que reseta
+          releasing_ via noteOn() -> releasing_=false)
+      note(), debugCurrentHz() (exposto so pra teste/depuracao),
+      controllers() -> referencia mutavel pros controladores externos
+
+      process() -> float (uma amostra, MONO, na taxa BASE; pan e aplicado
+          fora, no Synth::renderStereo)
+          [ATUALIZADO em 2026-09-21] Se oversampleFactor_ <= 1, so chama
+          processOneSample() direto (caminho antigo, sem overhead). Se >1,
+          chama processOneSample() oversampleFactor_ vezes (cada chamada
+          avanca fase/EG/LFO em 1/sampleRate_ segundos, ja na taxa
+          INTERNA superamostrada) e empurra cada sub-amostra pelos
+          decimadores half-band (decim1_, e decim2_ em cascata se for 4x)
+          ate obter 1 amostra final decimada de volta pra taxa base — ver
+          HalfbandDecimator2x na secao 5 e testOversamplingReducesAliasing()
+          na secao 8. processOneSample() e PRIVADO e contem o pipeline
+          completo abaixo (era o corpo de process() antes desta mudanca):
+            1. Atualiza glide (interpolacao em log2 de frequencia,
+               one-pole com coeficiente derivado de glideTimeSec —
+               ver formula abaixo)
+            2. Processa os 2 LFOs
+            3. Processa o PEG, normaliza pra -1..1, calcula pegSemis
+            4. Calcula as fontes da matriz de modulacao (mod wheel,
+               aftertouch, etc.) e acumula os "trims" (levelTrim[8],
+               fx1Trim[8], fbTrim[8] — este ultimo calculado mas NUNCA
+               aplicado, ver limitacoes) e voicePitchTrimSemis
+            5. Para cada operador, NA ORDEM DE compiled_->order[]:
+               a. calcula freq (fixa ou nota*ratio*peg*vibrato*bend)
+               b. soma modulacao de fase recebida (PM aditiva) e/ou
+                  multiplicacao (RM), lendo signal[] (mesma amostra,
+                  se a aresta for "para frente") ou prevOut[] (amostra
+                  anterior, se for "pra tras"/feedback/diagonal)
+               c. avanca a fase (double), aplica phaseDistort, le a
+                  forma de onda
+               d. aplica ring mod entre operadores (se configurado na
+                  matriz — nao confundir com FxType::RingMod, que e um
+                  ring mod contra um operador especifico via
+                  ringModSource, DENTRO do FX slot)
+               e. aplica o FX slot do operador (filtro/saturacao/
+                  crush/etc.), com fxEG modulando fxParam1
+               f. aplica o envelope de amplitude + key/velocity scaling
+                  + tremolo (LFO AM) + levelTrim (da matriz de
+                  modulacao)
+               g. guarda o resultado em ops_[i].signal
+            6. Soma signal[i] * matrix.outputMix[i] de todos os
+               operadores pra formar a saida da voz; DEPOIS copia
+               signal[] -> prevOut[] pra TODOS os operadores de uma vez
+               (importante: isso acontece SO no final da amostra, nao
+               durante o loop — e o que garante a semantica "forward =
+               mesma amostra, backward = amostra anterior" descrita
+               acima)
+            7. Se todos os ampEG ficaram idle, marca active_=false
+
+          Formula do glide (portamento continuo, em dominio log2 de
+          frequencia, para soar linear em "semitons por segundo"
+          percebidos):
+              coef = 1 - exp(-1 / (glideTimeSec * sampleRate))
+              lg0 = log2(currentHz); lg1 = log2(targetHz)
+              currentHz = 2^(lg0 + (lg1-lg0)*coef)
+          Isso e um filtro one-pole classico aplicado no dominio log —
+          NUNCA converge EXATAMENTE ao alvo (assintota), mas fica
+          imperceptivelmente perto (~1Hz de erro) apos poucos segundos.
+          Ver secao 7 (bug historico) sobre a tolerancia de teste.
+
+      keyLevelScaleDb(KeyLevelScaling, note) -> float (dB)
+          Metodo estatico privado. Calcula o ajuste de nivel em dB
+          conforme a distancia (em oitavas) da nota ao breakpoint,
+          escolhendo o lado esquerdo/direito e a curva linear/"exp"
+          (aproximacao: db^2 * 0.05, com o sinal de leftDepth/
+          rightDepth).
+
+      Membros publicos "soltos" (nao encapsulados por getter/setter,
+      de proposito, pra o alocador poder settar direto):
+          bendRangeSemis_, glideEnabled_, glideTimeSec_,
+          reuseEnvOnLegato_
+
+
+--------------------------------------------------------------------------------
+6B. dx7_patch_io.h — PERSISTENCIA DE PATCH (JSON)
+--------------------------------------------------------------------------------
+
+[ADICIONADO em 2026-09-21] Item 3 original do roteiro (secao 11). Serializa
+VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
+
+  class JsonValue
+      Valor JSON generico minimo: Null/Bool/Number/String/Array/Object.
+      set(key, v)/push(v) pra MONTAR (escrita); find(key)/at(i)/asBool()/
+      asNumber()/asString() (todos com default) pra LER (leitura tolerante
+      a campos ausentes). dump(indent) serializa com indentacao de 2
+      espacos. parse(text) e um parser recursivo-descendente PROPRIO --
+      nao e um parser JSON robusto contra QUALQUER entrada malformada
+      (assume texto gerado por dump() ou editado com cuidado), mas lida
+      bem com campos ausentes/fora de ordem (ver abaixo).
+
+  Convencao de robustez: toda funcao *FromJson(j) COMEÇA com o struct
+  default-construido e SO SOBRESCREVE um campo se a chave correspondente
+  existir no JSON. Isso significa que:
+    (a) um arquivo de patch de uma versao FUTURA do formato (com campos
+        que esta versao do codigo nao conhece) carrega normalmente,
+        ignorando os campos extras;
+    (b) um arquivo de uma versao ANTERIOR (sem um campo novo, ex.: um
+        patch salvo antes de fxEGReleaseWithAmp existir) carrega com o
+        default atual daquele campo, em vez de zerar/quebrar;
+    (c) JSON vazio "{}" produz o MESMO patch que VoiceParams() default
+        (incluindo o patch minimo tocavel do construtor — op0 carrier,
+        op1 modulador). Ver testPatchJsonRoundTrip() em demo.cpp: essa
+        propriedade ja causou um bug real (v.matrix era sobrescrita
+        incondicionalmente por uma AlgorithmMatrix vazia quando a chave
+        "matrix" nao existia, apagando o patch minimo do construtor) --
+        corrigido guardando a atribuicao atras de `if (auto* x = j.find(...))`.
+
+  Enums sao serializados como STRING (ex.: "waveform": "Saw"), nao como
+  inteiro cru -- mais legivel e mais estavel se a ordem de um enum mudar
+  no futuro (ver waveformName()/waveformFromName() e equivalentes pra
+  FxType, LfoWave, ModSource, ModDest, VoiceMode).
+
+  Funcoes de mapeamento (todas inline, namespace dx7fm), uma ToJson/
+  FromJson por struct de dx7_params.h: egParamsToJson/FromJson,
+  pegParamsToJson/FromJson, keyLevelScalingToJson/FromJson,
+  lfoParamsToJson/FromJson, operatorParamsToJson/FromJson,
+  modRouteToJson/FromJson, algorithmMatrixToJson/FromJson,
+  voiceParamsToJson/FromJson, partParamsToJson/FromJson.
+
+  Helpers de arquivo:
+      savePatchFile(path, VoiceParams) / loadPatchFile(path, VoiceParams&)
+      savePartFile(path, PartParams) / loadPartFile(path, PartParams&)
+      Todos retornam bool (sucesso). loadPatchFile/loadPartFile so falham
+      se o arquivo nao abrir -- um JSON malformado dentro do arquivo nao
+      faz o parser lancar excecao, so produz um resultado parcial/default
+      (ver JsonValue::parse, tolerante por design).
+
+  NAO faz: bancos de multiplos patches num arquivo so, compatibilidade
+  com sysex do DX7 (ainda no roteiro, secao 11), nem versionamento
+  explicito do formato (um campo "formatVersion" seria facil de
+  adicionar se/quando o schema mudar de forma incompativel).
+
+  Uso tipico:
+      dx7fm::Synth synth;
+      synth.init(48000.0, 64);
+      dx7fm::savePartFile("meu_sino.json", synth.part(0));
+      ...
+      dx7fm::loadPartFile("meu_sino.json", synth.part(0));
+      synth.recompile(0); // OBRIGATORIO se a matriz carregada mudou
+
+
+--------------------------------------------------------------------------------
+7. dx7_alloc.h — O SYNTH (POOL DE 64 VOZES, 4 PARTES)
+--------------------------------------------------------------------------------
+
+  kNumParts = 4
+
+  struct VoiceSlot
+      Um slot fisico do pool: voice (Voice), ownerPart (-1 = livre),
+      note (MIDI da tecla FISICA, ja SEM transpose), physicallyHeld
+      (tecla ainda pressionada?), sustainHeld (segurando so por causa do
+      pedal?), subPan (offset de pan, usado por vozes-irmas do Unison),
+      triggerCounter (usado pra saber qual e a voz "mais velha" na hora
+      de roubar).
+
+  struct PartRuntime
+      params (PartParams — o patch e config da parte), compiled
+      (CompiledAlgorithm cacheado, recalculado por recompile()),
+      heldStack (pilha de notas fisicamente pressionadas, em ordem de
+      chegada — usada pro modo Mono/Unison saber pra qual nota "voltar"
+      quando a nota atual solta), activeSlots (quais slots do pool
+      pertencem ao grupo mono/unison atual), noteToSlot (mapa nota->slot,
+      SO usado no modo Poly), sostenutoCaptured (quais notas foram
+      capturadas quando o pedal de sostenuto foi pressionado), bend/
+      modWheel/channelAT (cache do ultimo valor recebido, aplicado a
+      QUALQUER voz nova que essa parte alocar dali em diante).
+
+  class Synth — API publica:
+
+      init(sampleRate, maxVoices=64, oversample=1)
+          Aloca o pool, propaga oversample e sampleRate pra cada Voice
+          (setOversample() ANTES de setSampleRate(), mas a ordem nao
+          importa -- ver Voice::setOversample()), chama recompile() nas
+          4 partes (com os patches default). oversample=2 ou 4 ativa o
+          anti-aliasing por oversampling (ver secao 6, Voice::process()).
+
+      part(idx) -> PartParams&
+          Acesso de LEITURA/ESCRITA direta ao patch da parte idx (0..3).
+          Editar isso NAO tem efeito imediato em vozes ja tocando (elas
+          guardam ponteiro pro VoiceParams inteiro, entao mudancas de
+          PARAMETRO refletem ao vivo; mas se voce mexer na MATRIZ, e
+          preciso chamar recompile() — ver acima).
+
+      recompile(idx)
+          Recalcula compiled a partir de part(idx).voice.matrix. Chamar
+          sempre apos editar a matriz.
+
+      noteOn(part, note, velocity) / noteOff(part, note)
+          Filtra por enabled/loKey-hiKey/loVel-hiVel (noteOn apenas).
+          Despacha pra polyNoteOn/monoGroupNoteOn ou
+          polyNoteOff/monoGroupNoteOff conforme voiceMode. IMPORTANTE:
+          'note' aqui e sempre a tecla FISICA — o transpose e aplicado
+          DEPOIS, internamente, so na hora de mandar pro motor de
+          sintese (Voice::noteOn recebe a nota JA transposta). Isso
+          significa que heldStack/noteToSlot/sostenutoCaptured
+          trabalham todos com a nota fisica, entao trocar o transpose
+          no meio de notas seguradas NAO vai bagunçar o tracking (mas
+          vai soar diferente na proxima nota, como esperado).
+
+      polyAftertouch(part, note, pressure01)
+          No modo Poly: acha o slot da nota via noteToSlot e escreve
+          polyAT01. No modo Mono/Unison: so aplica se a nota informada
+          for a que esta "por cima" no heldStack (heldStack.back()) —
+          ou seja, poly aftertouch em modo mono/unison so faz sentido
+          pra ultima nota tocada, que e a que esta realmente soando.
+
+      channelAftertouch(part, pressure01), pitchBend(part, semis),
+      modWheel(part, v01)
+          Escrevem em TODAS as vozes atualmente ativas daquela parte, E
+          cacheiam o valor em PartRuntime pra vozes FUTURAS herdarem
+          (ver triggerSlot).
+
+      sustainPedal(part, down) / sostenutoPedal(part, down)
+          Sustain: ao soltar (down=false), varre TODOS os slots daquela
+          parte com sustainHeld=true e !physicallyHeld (ou seja,
+          realmente foram soltos fisicamente, so estavam presos pelo
+          pedal) e chama noteOff() de verdade.
+          Sostenuto: ao pressionar, captura o conjunto de notas
+          FISICAMENTE pressionadas naquele instante (sostenutoCaptured).
+          So essas notas, quando soltas enquanto o pedal continuar
+          pressionado, ficam "presas" (sustainHeld=true). Notas tocadas
+          DEPOIS do pedal ja estar pressionado nao sao capturadas —
+          comportamento identico ao sostenuto de piano acustico.
+
+      allNotesOff(part) - forca noteOff() em tudo da parte e limpa o
+          tracking.
+
+      renderStereo(outL&, outR&)
+          Itera TODOS os 64 slots (nao so os de uma parte — mixa as 4
+          partes de uma vez), soma sample*level com pan (pr.params.pan +
+          s.subPan, clampado -1..1), usando um pan LINEAR simples (nao
+          e constant-power/equal-power — se precisar de um pan mais
+          "correto" psicoacusticamente, trocar por curva seno/cosseno,
+          ver secao 8).
+
+      activeVoiceCount() / activeVoiceCount(part) - contagem de vozes
+          ativas (uteis pra depuracao/telemetria)
+      debugVoiceOfPart(part, k=0) - acesso direto a k-esima Voice ativa
+          de uma parte, SO EXISTE PARA TESTES/DEPURACAO (nao deveria
+          ser usado em codigo "de producao", quebra o encapsulamento).
+
+  Metodos privados (logica interna):
+
+      countActive(part) - conta vozes ativas de uma parte especifica
+          (usado pela heuristica de reserva de vozes)
+
+      allocateSlot(requestingPart) -> indice do slot escolhido
+          1) Primeiro tenta achar um slot totalmente OCIOSO
+             (!voice.isActive()).
+          2) Se nao houver, ROUBA um slot: varre todos, ignora slots
+             "protegidos" (pertencem a OUTRA parte que esta com
+             countActive <= reservedVoices — ou seja, nao rouba de uma
+             parte que ja esta no minimo garantido, A MENOS que nao
+             sobre alternativa), e entre os candidatos prefere: (a) um
+             que ja esteja em RELEASE (isReleasing()) sobre um que
+             ainda esta em ataque/sustain; (b) entre os empatados nesse
+             criterio, o de MENOR triggerCounter (mais antigo).
+             Fallback final: rouba o slot 0 incondicionalmente (nunca
+             falha silenciosamente).
+          NOTA: essa heuristica de reserva e simplificada — nao
+          garante matematicamente que uma parte NUNCA fique abaixo do
+          seu reservedVoices sob pressao extrema (ex.: se todas as 4
+          partes tem reservedVoices somando mais que 64, ou se uma
+          unica parte pede mais notas que o pool inteiro).
+
+      configureVoice(voice, partRuntime, glideActiveForThisNote)
+          Aplica glide/legato-reuse/bendRange na Voice ANTES do noteOn.
+
+      triggerSlot(idx, part, note, velocity, extraDetuneCents, legato)
+          O ponto CENTRAL onde qualquer nota (poly, mono ou uma
+          voz-irma de unison) e efetivamente disparada. Aplica o
+          transpose (soundingNote = clamp(note+transpose, 0, 127)),
+          chama Voice::noteOn, e copia os controladores cacheados da
+          parte (bend/modWheel/channelAT) pra voz recem-disparada —
+          importante pra uma voz NOVA ja nascer com o pitch bend atual
+          da roda, por exemplo, em vez de esperar o proximo evento de
+          bend chegar.
+
+      releaseSlot(idx, part, note)
+          Decide se a nota deve realmente soltar (voice.noteOff()) ou
+          ficar "presa" por sustain/sostenuto (sustainHeld=true).
+
+      polyNoteOn/polyNoteOff - modo Poly: 1 nota = 1 slot, via
+          noteToSlot. Reataca (retrigger, sem alocar slot novo) se a
+          mesma nota ja estiver com um slot associado (caso classico:
+          nota foi solta com sustain pressionado, ainda esta soando, e
+          a MESMA tecla e apertada de novo antes do pedal soltar).
+
+      monoGroupNoteOn(part, note, velocity, voiceCount)
+          Usado tanto por Mono (voiceCount=1) quanto Unison
+          (voiceCount=unisonCount). Se ja havia um grupo tocando
+          (legato=true), REUTILIZA os mesmos slots (activeSlots),
+          senao aloca voiceCount slots novos. CUIDADO: aloca e dispara
+          CADA slot IMEDIATAMENTE dentro do mesmo loop (nao aloca todos
+          primeiro e dispara depois) — isso e proposital, ver a secao
+          de bugs corrigidos abaixo. Cada voz-irma recebe um detune/pan
+          proporcional a sua posicao no grupo: t = (k/(N-1) - 0.5)*2,
+          variando de -1 a +1 ao longo das N vozes; detune = t *
+          unisonDetuneCents; pan = t * unisonSpread.
+
+      monoGroupNoteOff(part, note)
+          Se ainda ha notas na heldStack (outra tecla continua
+          pressionada), REATACA pra a ULTIMA nota da pilha
+          (heldStack.back(), ou seja, prioridade de "ultima nota" —
+          nao "nota mais aguda" nem "mais grave") em modo legato (desliza
+          se glide estiver ligado). Senao, libera de fato (via
+          releaseSlot) e limpa activeSlots.
+
+      monoGroupNoteOnInternal(part, note, velocity, voiceCount)
+          Variante interna usada so pelo reataque acima: NAO reavalia
+          "legato" a partir do tamanho de activeSlots (ja sabido > 0,
+          entao sempre legato=true aqui) — evita duplicar a logica de
+          decisao de legato/alocacao do monoGroupNoteOn.
+          LIMITACAO CONHECIDA: a velocity usada no reataque e sempre
+          fixa em 100 (comentario no proprio codigo), porque a
+          velocity ORIGINAL de cada nota da heldStack nao e rastreada
+          hoje — so a nota (int), nao o par (nota, velocity). Se
+          precisar de velocity correta no reataque mono, trocar
+          heldStack de vector<int> pra vector<pair<int,int>> (nota,
+          velocity).
+
+
+--------------------------------------------------------------------------------
+7B. BUGS JA ENCONTRADOS E CORRIGIDOS (fica registrado o "porque", pra nao
+    reintroduzir o mesmo erro numa refatoracao futura)
+--------------------------------------------------------------------------------
+
+  1) Unison alocava o MESMO slot 5 vezes.
+     Causa: o codigo original fazia um loop "aloca todos os N slots
+     primeiro" e SO DEPOIS um segundo loop "dispara cada um". Como
+     allocateSlot() escolhe slots olhando voice.isActive(), e um slot
+     so fica "ativo" DEPOIS que voice.noteOn() e chamado, o primeiro
+     loop chamava allocateSlot() 5 vezes seguidas e recebia o MESMO
+     indice de volta (o unico slot livre, que continuava "livre" aos
+     olhos do allocateSlot ate ser efetivamente disparado).
+     Correcao: alocar e disparar dentro do MESMO passo do loop (ver
+     monoGroupNoteOn acima) — cada iteracao aloca 1 slot E o dispara
+     antes de passar pra proxima iteracao.
+
+  2) Iterator do unordered_map podia invalidar em polyNoteOn.
+     Causa: o codigo fazia `it = noteToSlot.find(note)`, depois
+     `noteToSlot[note] = idx` (uma insercao, que PODE causar rehash do
+     unordered_map), e SO DEPOIS reusava `it` pra decidir se era
+     retrigger — um iterator pode ser invalidado por uma insercao que
+     cause rehash, entao compara-lo depois da insercao e
+     comportamento indefinido (UB) em tese, mesmo que na pratica
+     costume "funcionar".
+     Correcao: guardar `bool retrigger = (it != noteToSlot.end())` ANTES
+     de fazer a insercao, e nunca mais tocar em `it` depois disso.
+
+  3) part(idx).transpose era lido/armazenado mas NUNCA aplicado.
+     Causa: PartParams::transpose existia desde o inicio, mas
+     Synth::triggerSlot() chamava Voice::noteOn(..., note, ...) com a
+     nota fisica direto, sem somar o transpose em lugar nenhum.
+     Correcao: `int soundingNote = clamp(note + transpose, 0, 127)` e
+     passar soundingNote pro motor, mantendo 'note' (fisica) em todo o
+     resto do tracking (heldStack, noteToSlot, VoiceSlot::note, etc.).
+
+  4) (Nao e bug de codigo, mas de teste) A tolerancia do teste de glide
+     era apertada demais (1.0 Hz) pra um convergencia assintotica em
+     float: o one-pole em log2-frequencia nunca chega EXATAMENTE no
+     alvo, so bem perto (erro residual de arredondamento de float, que
+     estabiliza num "ponto fixo" a ~1Hz do alvo nesse caso especifico).
+     Ajustada a tolerancia do teste pra 2.0 Hz — sonoramente
+     IMPERCEPTIVEL, o motor em si esta correto.
+
+
+--------------------------------------------------------------------------------
+7C. OUTRAS LIMITACOES CONHECIDAS (nao corrigidas, listadas de proposito)
+--------------------------------------------------------------------------------
+
+  - [RESOLVIDO em 2026-09-21] ModDest::OperatorFeedback agora e aplicado:
+    fbTrim[i] e somado a opParams.feedback (clampado 0..1) antes de
+    multiplicar op.prevOut em Voice::process(). Ver secao 4
+    (ModRoute/ModDest) e testOperatorFeedbackModulation() em demo.cpp.
+
+  - [RESOLVIDO em 2026-09-21] fxEG agora recebe noteOff() condicionalmente:
+    novo campo OperatorParams::fxEGReleaseWithAmp (default true) decide,
+    POR OPERADOR, se o fxEG acompanha o release do ampEG ou fica preso no
+    sustain (comportamento antigo, ainda disponivel com o campo=false, pra
+    quando o timbre quer um efeito que nao fecha junto com a amplitude).
+    Ver secao 4, secao 6 (Voice::noteOff()) e
+    testFxEGReleaseFollowsAmp() em demo.cpp.
+
+  - [MITIGADO em 2026-09-21] Osciladores continuam sem anti-aliasing
+    proprio (nao sao band-limited: Saw/Square ainda geram harmonicos
+    "infinitos" na sintese naive). O que mudou: `Synth::init(sr, maxVoices,
+    oversample)` agora aceita oversample=2 ou 4, processando a voz inteira
+    numa taxa interna maior e decimando com HalfbandDecimator2x (secao 5)
+    antes de devolver a amostra — isso empurra o problema pra uma taxa de
+    Nyquist bem mais alta e filtra o que sobra antes de decimar, reduzindo
+    MUITO a energia aliasada na pratica (ver testOversamplingReducesAliasing()
+    na secao 8: ~77% de reducao medida com 4x numa sonda de square wave).
+    NAO e um oscilador band-limited de verdade (tipo PolyBLEP) — continua
+    valendo a pena trocar os osciladores por uma tecnica band-limited no
+    futuro se precisão espectral perfeita for necessária, mas o oversampling
+    ja resolve a maior parte do problema audivel com custo de implementação
+    bem menor.
+
+  - Sem thread safety nenhuma: trocar parametros de PartParams::voice
+    enquanto o audio esta rodando em outra thread e uma DATA RACE em
+    C++ (comportamento indefinido), mesmo que "pareça funcionar" na
+    pratica em single-thread como o demo.cpp. Pra um plugin de
+    verdade, isso precisa de um mecanismo de troca atomica de patch
+    (ex.: double-buffering com ponteiro atomico, ou uma fila
+    lock-free de "patch novo" processada no inicio de cada bloco de
+    audio) — AINDA NAO EXISTE.
+
+  - CombFilter aloca um buffer de 50ms POR OPERADOR POR VOZ mesmo que
+    o operador nunca use FxType::Comb (ver nota em OperatorState na
+    secao 6) — desperdicio de memoria (~4.7MB com 64 vozes x 8
+    operadores), sem impacto em CPU de audio (so em RAM/inicializacao).
+
+  - allocateSlot() escaneia os 64 slots LINEARMENTE a cada nota (e de
+    novo em countActive() dentro do proprio loop, entao e O(N^2) no
+    pior caso ao roubar voz). Pra 64 vozes isso e irrelevante em CPU
+    moderna, mas nao escala bem se o pool crescer muito (ex.: 256+
+    vozes) — nesse caso, manter uma lista/heap de slots ociosos e
+    outra de "roubaveis" ordenada por idade seria melhor.
+
+  - Pan em renderStereo() e LINEAR (nao equal-power/constant-power):
+    uma nota panejada ao centro (pan=0) soa ~3dB mais baixa no meio
+    quando comparada a extremos, comparado a uma curva seno/cosseno
+    (que mantém a potência percebida constante). Diferença sutil mas
+    perceptível em mixagens críticas.
+
+  - egRateToSpeed() e egLevelToAmplitude() sao aproximacoes MINHAS da
+    curva do DX7 real, nao as tabelas exatas do ROM original (que sao
+    conhecidas e documentadas em projetos como o Dexed/msfa, mas nao
+    foram copiadas aqui por preferir uma formula propria simples —
+    se a fidelidade sonora ao DX7 original for prioridade, substituir
+    essas duas funcoes pelas tabelas reais e o proximo passo natural).
+
+
+--------------------------------------------------------------------------------
+8. demo.cpp — O QUE CADA TESTE VALIDA
+--------------------------------------------------------------------------------
+
+  testEnvelopeShape()      - o EG sobe perto do pico, sustenta, e decai
+                              a ~0 apos noteOff+release completo.
+  testPegCentered()        - um PEG "default" (todos os levels=50) fica
+                              parado no centro (sem desvio de pitch).
+  testSimpleFmRender()     - patch de 2 operadores gera sinal audivel
+                              (RMS > 0.01) e fica idle apos o release.
+                              Grava output/01_simple_fm.wav.
+  testFilteredModulatorFx()- mesmo patch, com filtro no operador
+                              modulador + fxEG variando o corte no
+                              tempo. Confirma que o sinal nao produz
+                              NaN/Inf e continua audivel (RMS > 0.001)
+                              com o filtro ativo. Grava output/
+                              02_filtered_modulator.wav.
+  testMonoGlide()           - modo Mono com glide (glideTimeSec=0.3s):
+                              dispara nota 48, depois 60 em legato,
+                              confirma que a frequencia sobe
+                              GRADUALMENTE (nao pula: medida em 0.05s
+                              ainda esta entre a nota de origem e a de
+                              destino) e CONVERGE pro alvo (261.6Hz,
+                              tolerancia 2Hz) apos 3s. Tambem grava um
+                              WAV audivel com as duas notas em legato
+                              (output/03_mono_glide.wav).
+  testUnison()               - nota unica em modo Unison consome
+                              EXATAMENTE unisonCount (5) vozes do pool,
+                              e todas liberam (activeVoiceCount volta a
+                              0) apos o release. Grava output/
+                              04_unison.wav (estereo, com o espalhamento
+                              de pan).
+  testSustainPedal()         - nota com pedal ja pressionado continua
+                              soando apos noteOff (nao solta o EG); ao
+                              soltar o pedal, libera de verdade e fica
+                              idle.
+  testPolyAftertouch()       - configura uma ModRoute (PolyAT ->
+                              OperatorFx1 do operador 1, depth=1.0),
+                              mede RMS antes/depois de aplicar
+                              polyAftertouch(pressure=1.0), confirma que
+                              o timbre muda (RMS antes != RMS depois —
+                              no run mais recente: 0.69200 antes,
+                              0.68765 depois, porque o filtro ressonante
+                              (Q=4) varre o corte pela fundamental do
+                              modulador e muda o espectro do sinal).
+  testOperatorFeedbackModulation() - operador unico auto-modulado (matrix.
+                              mod[0][0]=1.0 + op.feedback=0.1 de base),
+                              ModRoute liga ModWheel -> OperatorFeedback
+                              (opIndex=0, depth=0.9). Mede RMS com mod
+                              wheel em 0 e em 1, confirma que o timbre
+                              muda (RMS antes != depois), validando que
+                              fbTrim[] e efetivamente somado ao feedback
+                              do operador (ver secao 7C, item resolvido).
+  testFxEGReleaseFollowsAmp() - dois Synth separados com o mesmo patch
+                              (fxEG rapido, ampEG com release LENTO pra
+                              manter a voz ativa por tempo suficiente de
+                              observar), um com fxEGReleaseWithAmp=true
+                              e outro =false. Apos noteOff, confirma que
+                              o primeiro fica com fxEG idle (recebeu o
+                              release) e o segundo continua preso no
+                              sustain (nunca recebeu), usando o getter de
+                              depuracao Voice::debugFxEGIdle(opIndex).
+  testOversamplingReducesAliasing() - [ADICIONADO em 2026-09-21] operador
+                              unico, square wave fixa em 5000Hz (fixedFreq).
+                              Usa goertzelMagnitude() (Goertzel de uma raia,
+                              sem precisar de FFT inteira) pra medir energia
+                              em 3000Hz -- a frequencia pra onde o 9o
+                              harmonico (45000Hz) alia quando amostrado sem
+                              cuidado a 48kHz (|45000-48000|=3000). Compara
+                              synth.init(sr, n, oversample=1) vs
+                              oversample=4: confirma que SEM oversampling
+                              ha energia mensuravel em 3kHz (aliasing real)
+                              e que COM 4x essa energia cai bem abaixo
+                              (threshold: < 30% da medida sem oversampling;
+                              no run mais recente, ~77% de reducao). Ver
+                              secao 7C ("MITIGADO").
+  testPatchJsonRoundTrip()   - [ADICIONADO em 2026-09-21] monta um
+                              VoiceParams com varios campos nao-default
+                              (waveform, fixedFreq/fixedHz, fxType+params,
+                              fxEGReleaseWithAmp=false, levelScaling,
+                              feedback, matrix.mod/ring/outputMix,
+                              peg.rangeOctaves, lfo1, modMatrix), serializa
+                              com voiceParamsToJson().dump() e desserializa
+                              de volta, confirma que TODOS esses campos
+                              batem (com tolerancia de float). Confirma
+                              tambem que JSON vazio "{}" produz o mesmo
+                              patch minimo do construtor default (ver
+                              secao 6B sobre o bug que esse teste pegou).
+  testPatchFileSaveLoad()    - [ADICIONADO em 2026-09-21] monta um
+                              PartParams com nome, voiceMode=Unison e
+                              alguns campos do operador setados, salva com
+                              savePartFile() em output/test_patch.json,
+                              carrega de volta com loadPartFile() num
+                              PartParams novo, confirma que todos os
+                              campos testados sao identicos ao original.
+  testMultitimbral4Parts()   - dispara uma nota em CADA uma das 4
+                              partes simultaneamente, confirma
+                              activeVoiceCount() == 4 (todas tocando do
+                              MESMO pool de 64).
+  testPolyphonyCap()         - dispara 80 notas (mais que o pool) numa
+                              unica parte com release LENTO (pra forcar
+                              roubo de voz), confirma que
+                              activeVoiceCount() NUNCA excede 64.
+
+  Todas as 25 checagens (`check(condicao, nome)`) passam no estado
+  atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
+  o programa retorna exit code 1 se qualquer uma falhar (util pra
+  rodar em CI no futuro, embora nao haja CI configurado ainda).
+
+
+--------------------------------------------------------------------------------
+9. wav_writer.h
+--------------------------------------------------------------------------------
+
+  writeWavStereo(path, left[], right[], sampleRate)
+      Escreve um WAV PCM16 estereo minimo (44 bytes de cabecalho +
+      dados intercalados). Faz clamp de cada amostra pra -1..1 antes de
+      converter pra int16. Sem dithering, sem suporte a outros formatos
+      (float32, 24-bit) — suficiente pros demos, mas NAO e um writer de
+      producao.
+  writeWavMono(path, mono[], sampleRate)
+      Atalho que chama writeWavStereo com o mesmo buffer nos dois
+      canais (duplicado, nao e "mono de verdade" no arquivo — o WAV
+      gerado sempre tem 2 canais).
+  Isso e uma ferramenta SO PRO DEMO/TESTE, nao faz parte do motor.
+
+
+--------------------------------------------------------------------------------
+10. DECISOES DE ARQUITETURA E POR QUE FORAM TOMADAS
+--------------------------------------------------------------------------------
+
+  - Header-only, sem .cpp separado: escolha de simplicidade pro estagio
+    atual (prototipagem). Pra um projeto maior/plugin, provavelmente vale
+    separar declaracao (.h) de implementacao (.cpp) pra reduzir tempo de
+    compilacao (esses headers sao incluidos por qualquer arquivo que use
+    o motor, e template-heavy nao sao, entao o custo de recompilacao
+    ainda e gerenciavel, mas cresce).
+
+  - PM (Phase Modulation) como padrao, nao FM verdadeira: fielmente ao
+    que o DX7 real faz (apesar do nome "FM synthesis" ser usado
+    popularmente) — o modulador soma na FASE do carrier, nao na
+    frequencia instantanea. Isso e mais estavel numericamente e mais
+    previsivel que FM verdadeira.
+
+  - Matriz de modulacao (ModRoute) separada da matriz de algoritmo
+    (AlgorithmMatrix): a matriz de ALGORITMO define a topologia FIXA do
+    patch (quem modula quem, sempre); a matriz de MODULACAO (LFO,
+    aftertouch, mod wheel) e para variacoes EXPRESSIVAS EM TEMPO REAL
+    sobre parametros especificos (nivel, corte do FX, pitch), nao pra
+    topologia. Sao conceitos diferentes e foram mantidos em structs
+    diferentes de proposito.
+
+  - compileAlgorithm por forca bruta (8!): aceitavel porque 8 e pequeno
+    e a operacao e rara (so ao trocar de patch, nao por amostra nem por
+    nota). Documentado explicitamente pra nao ser chamado no caminho
+    quente.
+
+  - Voice nao possui o patch, so aponta pra ele (ponteiro): decisao
+    consciente pra permitir edicao "ao vivo" do timbre ouvindo o
+    resultado (comportamento esperado num soft-synth moderno), aceitando
+    o preco de nao ter thread-safety ainda (ver limitacoes, secao 7C).
+
+  - Pool de vozes UNICO e COMPARTILHADO entre as 4 partes (em vez de 4
+    pools fixos de 16): decisao explicita do usuario ("64 vozes de
+    polifonia com ate 4 timbres por vez") — permite que uma parte "roube"
+    vozes de outra sob demanda, mais eficiente que particionar
+    estaticamente, ao custo de uma heuristica de reserva (reservedVoices)
+    que e apenas apoximada, nao uma garantia matematica rígida.
+
+
+--------------------------------------------------------------------------------
+11. PROXIMOS PASSOS (na ordem sugerida durante a conversa original)
+--------------------------------------------------------------------------------
+
+  JA FEITO (2026-09-21): aplicar ModDest::OperatorFeedback, decidir/
+  implementar noteOff() do fxEG (via campo OperatorParams::fxEGReleaseWithAmp),
+  oversampling anti-aliasing e persistencia de patch em JSON — eram os
+  itens 1, 2, 3 e 4 originais desta lista, ver secao 7C ("RESOLVIDO"/
+  "MITIGADO"), secao 6B (dx7_patch_io.h) e secao 8 (testOperatorFeedback-
+  Modulation, testFxEGReleaseFollowsAmp, testOversamplingReducesAliasing,
+  testPatchJsonRoundTrip, testPatchFileSaveLoad). NOTAS: (1) o
+  oversampling superamostra a VOZ INTEIRA, nao so os operadores com
+  nao-linearidade forte como a ideia original sugeria — mais simples de
+  implementar corretamente, ao custo de mais CPU do que uma versao
+  seletiva teria; (2) a persistencia usa JSON escrito a mao (sem lib
+  externa) em vez de formato binario ou sysex DX7 — o "compilador" de
+  32 algoritmos DX7 -> AlgorithmMatrix pra importar patches classicos
+  continua nao implementado, se for necessario no futuro. Lista
+  renumerada abaixo.
+
+  1. Vetorizacao SIMD (AVX2 ou std::simd) com layout SoA (Structure of
+     Arrays): hoje o codigo e AoS (Array of Structs, um Voice inteiro
+     por slot) — pra rodar 64 vozes x 8 operadores em paralelo de
+     verdade, precisa reestruturar pra ter, por exemplo, phase[64],
+     freq[64], etc. como arrays contiguos por operador, processados
+     8-a-8 (ou 16-a-16 com AVX512) via instrucoes vetoriais. Isso e uma
+     REESCRITA significativa do dx7_engine.h, nao um ajuste incremental.
+  2. Thread safety: mecanismo de troca atomica de patch (double buffer
+     ou fila lock-free) pra permitir editar o timbre a partir da thread
+     de UI enquanto o audio toca em outra thread, sem data race.
+  3. Integracao com um host de plugin: JUCE (C++) ou nih-plug (Rust,
+     precisaria reescrever) pra VST3/CLAP/AU, incluindo UI.
+  4. UI de edicao (pelo menos uma matriz visual 8x8 + envelopes
+     desenhados) — hoje so existe a API C++, sem nenhuma interface
+     grafica.
+  5. Efeitos globais (pos-mix): chorus/ensemble, delay, reverb — a
+     conversa original ja mapeou quais combinam melhor com FM (chorus
+     pra sinos/eletric piano, reverb de placa, etc.) mas nada disso
+     foi implementado ainda, so o FX POR OPERADOR (dentro da voz).
+  6. Glissando (portamento em semitons discretos) como alternativa ao
+     glide continuo — mencionado como faltante na checklist de
+     fidelidade ao DX7 classico.
+  7. Breath controller / foot controller como fontes adicionais de
+     ModSource, se for importante pra fidelidade historica.
+  8. Trocar egRateToSpeed()/egLevelToAmplitude() pelas tabelas reais do
+     ROM do DX7 (documentadas em projetos como Dexed/msfa), se
+     fidelidade sonora exata ao hardware original for prioridade sobre
+     a aproximacao atual.
+
+
+--------------------------------------------------------------------------------
+12. CHECKLIST DE FIDELIDADE AO DX7 CLASSICO (resumo, ja discutido)
+--------------------------------------------------------------------------------
+
+FIEL (aproximado):
+  - EG de 4 estagios (rate/level 0-99), sustain ate release
+  - Key rate scaling, key level scaling (breakpoint + profundidade)
+  - Velocity sensitivity, output level, ratio/fine/detune, freq fixa
+  - Pitch EG (mesmo formato 4R/4L)
+  - Portamento continuo (glide), fingered/legato-only
+  - Sustain pedal
+  - Poly/Mono mode
+
+ALEM DO DX7 CLASSICO (extensoes deliberadas):
+  - Filtro por operador (TPT/ZDF), ring mod, saturacao, crusher, freq
+    shifter, comb, phase distortion (DX7 original NAO TEM filtro)
+  - 8 operadores, matriz livre 8x8 (DX7: 6 operadores, 32 algoritmos
+    fixos)
+  - Poly aftertouch de verdade (DX7: so aftertouch de canal/mono)
+  - 64 vozes / 4 partes multitimbrais A-D (DX7: monotimbrico, 16 vozes)
+  - Modo Unison (nao existe no DX7)
+  - 2 LFOs por VOZ (DX7 real: 1 LFO GLOBAL compartilhado por todas as
+    vozes, nao por-voz)
+  - Sostenuto (DX7 nao tem)
+
+FALTANDO (nao implementado):
+  - Feedback restrito a 1 operador por algoritmo (aqui e livre em
+    qualquer operador — mais flexivel, menos fiel)
+  - Glissando (stepped, discreto — diferente do glide continuo que
+    ja existe)
+  - Breath controller, foot controller
+  - Armazenamento de patch/sysex, bancos de 32 vozes
+  - Velocity correta no reataque legato do modo Mono (hoje fixa em
+    100, ver limitacao 7C/nota em monoGroupNoteOnInternal)
+
+
+================================================================================
+ FIM DO DOCUMENTO
+================================================================================
