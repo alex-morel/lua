@@ -92,7 +92,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 80 checagens de sanidade em 41 funcoes de teste (nao
+    demo.cpp        - 83 checagens de sanidade em 43 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -159,8 +159,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     g++ -std=c++20 -O2 -Wall -Wextra -pthread -o demo src/demo.cpp
     ./demo
 
-Isso deve imprimir 80 linhas "[PASS] ..." e no final:
-    == Resultado: 80 passaram, 0 falharam ==
+Isso deve imprimir 83 linhas "[PASS] ..." e no final:
+    == Resultado: 83 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -512,6 +512,15 @@ ou um leitor de arquivo preencheria.
       operador escolhe qual usar conforme op.fxType).
 
   softSaturate(x, drive) -> tanh(x * (1 + drive*8))
+
+  softLimit(x, threshold=0.9) -> [ADICIONADO em 2026-09-21] limitador de
+      MASTER BUS, diferente de softSaturate acima (que e um efeito de
+      distorcao POR OPERADOR). TRANSPARENTE (retorna x sem alteracao)
+      enquanto |x| <= threshold; acima disso, comprime o excesso com tanh,
+      aproximando-se assintoticamente de +-1.0 sem jamais ultrapassar
+      (joelho suave -- "soft knee"). Usado por Synth::renderStereo() (ver
+      secao 7) pra evitar clipping quando a soma de varias vozes (um
+      acorde, por exemplo) passa de +-1.0 -- ver bug corrigido na secao 7B.
 
   class Crusher
       Reducao de sample rate (sample & hold) + reducao de bits.
@@ -946,7 +955,10 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           ver secao 8). [ATUALIZADO em 2026-09-21] Depois de somar as 4
           partes, passa o par (outL, outR) pela cadeia de efeitos globais
           pos-mix: chorus_ -> delay_ -> reverb_ (ver globalFx() abaixo e
-          secao 7D).
+          secao 7D). Por ULTIMO, aplica softLimit() (secao 5) em outL/outR
+          -- limitador de master bus que evita clipping quando a soma de
+          varias vozes (um acorde) passa de +-1.0 (ver bug corrigido na
+          secao 7B, item 5).
 
       globalFx() -> GlobalFxParams& - [ADICIONADO em 2026-09-21] acesso
           direto (NAO passa pelo triple-buffer do timbre) aos parametros
@@ -1085,6 +1097,41 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
      estabiliza num "ponto fixo" a ~1Hz do alvo nesse caso especifico).
      Ajustada a tolerancia do teste pra 2.0 Hz — sonoramente
      IMPERCEPTIVEL, o motor em si esta correto.
+
+  5) [ENCONTRADO E CORRIGIDO em 2026-09-21] Acordes clipavam duro -- sem
+     limitador nenhum no master bus.
+     Reportado pelo usuario ("verifique por que acordes nao estao soando
+     bem"). Causa: Synth::renderStereo() SOMA a saida de todas as vozes
+     ativas de todas as partes SEM normalizar por quantidade de fontes.
+     Com o patch default, UMA UNICA nota ja chega bem perto de +-1.0 (nao
+     ha "headroom" nenhum reservado por design). Confirmado com um
+     diagnostico direto: 1 nota so = pico 1.000; uma triade de C maior
+     (notas 60/64/67, 3 notas) = pico 2.997, com 42% das amostras (20345
+     de 48000) passando de +-1.0. Nenhuma protecao existia nem no motor
+     nem no app standalone: o path de audio ALSA em FLOAT_LE (formato
+     preferido, ver alsa_audio.h) escreve as amostras DIRETO pro
+     dispositivo sem clamp nenhum (so o fallback S16 clampava, dentro da
+     conversao float->int16) -- ou seja, tocar qualquer acorde de 2+
+     notas no app de verdade produzia clipping digital audivel.
+     Correcao: softLimit() novo em dx7_dsp.h -- limitador "soft knee":
+     TRANSPARENTE (identidade exata) abaixo de threshold=0.9, comprime
+     suavemente (via tanh) o excesso acima disso, aproximando-se
+     assintoticamente de +-1.0 sem jamais ultrapassar. Aplicado 1x no
+     final de Synth::renderStereo(), depois de somar as 4 partes E dos
+     efeitos globais (chorus/delay/reverb tambem podem empurrar o sinal
+     pra cima, entao o limitador tem que vir DEPOIS deles, nao antes).
+     Resultado apos a correcao: a mesma triade de 3 notas fica com pico
+     EXATO em 1.0000 e 0 amostras acima do limite; uma nota so cai pra
+     pico ~0.976 (compressao de ~2.4%, imperceptivel). Testes de
+     regressao: testChordDoesNotClip() e
+     testMasterLimiterIsTransparentForSingleVoice() (secao 8).
+     NAO CORRIGIDO (fora de escopo desta correcao, ver secao 8 pra
+     detalhes): isso e uma rede de seguranca no MASTER BUS, nao um
+     limitador PSICOACUSTICO de "compensacao de polifonia" (que reduziria
+     o ganho de cada voz individualmente conforme mais notas entram, pra
+     evitar precisar comprimir tanto em primeiro lugar) -- um acorde de
+     muitas notas ainda vai ficar mais comprimido/denso que um acorde de
+     poucas, so nao vai mais CLIPAR duro.
 
 
 --------------------------------------------------------------------------------
@@ -1508,6 +1555,19 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               problemas estruturais (ex.: nenhuma
                               portadora setada) que a contagem de
                               operadores sozinha nao pegaria.
+
+  testChordDoesNotClip() - [ADICIONADO em 2026-09-21] regressao pro bug
+                              reportado pelo usuario ("acordes nao soam
+                              bem"): dispara uma triade de C maior (notas
+                              60/64/67) e confirma que o pico da saida
+                              NUNCA passa de +-1.0 e 0 amostras clipam --
+                              ver secao 7B item 5 pro bug em si.
+  testMasterLimiterIsTransparentForSingleVoice() - [ADICIONADO em
+                              2026-09-21] confirma que o softLimit() novo
+                              nao esmaga uma voz normal sozinha (RMS
+                              continua razoavel) -- o limitador so deveria
+                              atuar quando VARIAS vozes somam.
+
   testMultitimbral4Parts()   - dispara uma nota em CADA uma das 4
                               partes simultaneamente, confirma
                               activeVoiceCount() == 4 (todas tocando do
@@ -1517,7 +1577,7 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 80 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 83 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).

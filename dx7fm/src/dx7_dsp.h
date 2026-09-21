@@ -236,6 +236,27 @@ inline float softSaturate(float x, float drive) {
     return std::tanh(x * (1.0f + drive * 8.0f));
 }
 
+// [ADICIONADO em 2026-09-21] Limitador de saida (master bus), NAO um
+// efeito de distorcao por operador como softSaturate() acima. Diferenca
+// crucial: e TRANSPARENTE (identidade exata) abaixo de `threshold` -- so
+// comprime suavemente (joelho suave, via tanh) o excesso ACIMA disso,
+// aproximando-se assintoticamente de +-1.0 sem jamais ultrapassar. Existe
+// porque Synth::renderStereo() soma varias vozes (um acorde, por exemplo)
+// SEM nenhuma normalizacao por numero de vozes -- uma unica nota ja pode
+// chegar perto de +-1.0 com o patch default, entao um acorde de 3 notas
+// facilmente passa de +-3.0 sem isso (ver ARQUITETURA.txt secao 7 sobre o
+// bug que motivou essa correcao). Aplicado 1x no final de renderStereo(),
+// depois de somar as 4 partes E dos efeitos globais.
+inline float softLimit(float x, float threshold = 0.9f) {
+    float ax = std::fabs(x);
+    if (ax <= threshold) return x;
+    float sign = x < 0.0f ? -1.0f : 1.0f;
+    float excess = ax - threshold;
+    float headroom = 1.0f - threshold;
+    float compressed = threshold + headroom * std::tanh(excess / headroom);
+    return sign * compressed;
+}
+
 // Reducao de sample rate (sample & hold) + reducao de bits.
 class Crusher {
 public:

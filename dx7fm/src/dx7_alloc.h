@@ -228,6 +228,15 @@ public:
         chorus_.process(globalFx_.chorus, outL, outR, chL, chR);
         delay_.process(globalFx_.delay, chL, chR, dlL, dlR);
         reverb_.process(globalFx_.reverb, dlL, dlR, outL, outR);
+
+        // [ADICIONADO em 2026-09-21] Limitador de master bus: nenhuma vez
+        // (uma so nota ja pode chegar perto de +-1.0 no patch default) nem os
+        // efeitos globais sao normalizados por numero de vozes/fontes ativas
+        // -- sem isso, um acorde simples clipava duro (ver ARQUITETURA.txt
+        // secao 7, "acordes nao soam bem"). Transparente pra sinais normais
+        // de 1 voz, so comprime o excesso quando varias vozes somam.
+        outL = softLimit(outL);
+        outR = softLimit(outR);
     }
 
     int activeVoiceCount() const {

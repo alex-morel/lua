@@ -1258,6 +1258,50 @@ static void testAlgorithmPresetsRenderAudibly() {
     check(allOk, "os 32 algoritmos preset renderizam sinal finito e audivel (RMS > 0.001)");
 }
 
+static void testChordDoesNotClip() {
+    // [ADICIONADO em 2026-09-21] Regressao pro bug reportado pelo usuario:
+    // "acordes nao soam bem" -- uma UNICA nota ja chega perto de +-1.0 com
+    // o patch default, entao um acorde de 3+ notas somava sem nenhuma
+    // protecao e passava de +-3.0 (42% das amostras clipando). Corrigido
+    // com softLimit() no master bus (ver dx7_dsp.h e Synth::renderStereo()).
+    Synth synth;
+    synth.init(48000.0, 8);
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100); // triade de C maior
+    synth.noteOn(0, 64, 100);
+    synth.noteOn(0, 67, 100);
+
+    float peak = 0.0f;
+    int overCount = 0;
+    for (int i = 0; i < 48000; ++i) {
+        float l, r;
+        synth.renderStereo(l, r);
+        peak = std::max(peak, std::max(std::abs(l), std::abs(r)));
+        if (std::abs(l) > 1.0001f || std::abs(r) > 1.0001f) ++overCount;
+    }
+
+    std::printf("  (acorde de 3 notas: pico=%.4f, amostras acima de 1.0=%d/48000)\n", peak, overCount);
+    check(peak <= 1.0001f, "acorde de 3 notas nunca ultrapassa +-1.0 na saida (sem clipping duro)");
+    check(overCount == 0, "nenhuma amostra do acorde fica acima de +-1.0");
+}
+
+static void testMasterLimiterIsTransparentForSingleVoice() {
+    // O limitador NAO deveria audivelmente colorir uma unica voz normal --
+    // so entra em acao quando o sinal realmente passa do limiar (0.9).
+    Synth synth;
+    synth.init(48000.0, 8);
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100);
+
+    std::vector<float> mono;
+    mono.reserve(9600);
+    for (int i = 0; i < 9600; ++i) { float l, r; synth.renderStereo(l, r); mono.push_back((l + r) * 0.5f); }
+    float rms = computeRms(mono, 0, mono.size());
+
+    std::printf("  (RMS de 1 voz com limitador ativo=%.5f)\n", rms);
+    check(rms > 0.4f, "limitador continua deixando 1 voz normal audivel e com nivel razoavel (nao esmaga o sinal)");
+}
+
 static void testMultitimbral4Parts() {
     Synth synth;
     synth.init(48000.0, 64);
@@ -1331,6 +1375,8 @@ int main() {
     testOutputLevelCurveMatchesFormula();
     testAlgorithmPresetsUseEachOperatorExactlyOnce();
     testAlgorithmPresetsRenderAudibly();
+    testChordDoesNotClip();
+    testMasterLimiterIsTransparentForSingleVoice();
     testMultitimbral4Parts();
     testPolyphonyCap();
 
