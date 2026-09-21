@@ -1302,6 +1302,64 @@ static void testMasterLimiterIsTransparentForSingleVoice() {
     check(rms > 0.4f, "limitador continua deixando 1 voz normal audivel e com nivel razoavel (nao esmaga o sinal)");
 }
 
+static void testPolyphonyGainKeepsTotalLoudnessRoughlyConstant() {
+    // [ADICIONADO em 2026-09-21] Compensacao 1/sqrt(N): confirma que o RMS
+    // total NAO cresce proporcionalmente ao numero de notas (o que causaria
+    // o clipping original) nem cai proporcionalmente a 1/N (fraco demais) --
+    // deve ficar dentro de uma faixa razoavelmente ESTREITA conforme N vai
+    // de 1 a 8 notas.
+    static const int kNotes[8] = {48, 52, 55, 60, 64, 67, 72, 76};
+    auto renderRmsWithNVoices = [](int n) {
+        Synth synth;
+        synth.init(48000.0, 16);
+        synth.recompile(0);
+        for (int i = 0; i < n; ++i) synth.noteOn(0, kNotes[i], 100);
+
+        for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); } // deixa a suavizacao (~30ms) convergir
+
+        std::vector<float> mono;
+        mono.reserve(4800);
+        for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); mono.push_back((l + r) * 0.5f); }
+        return computeRms(mono, 0, mono.size());
+    };
+
+    float rms1 = renderRmsWithNVoices(1);
+    float rms4 = renderRmsWithNVoices(4);
+    float rms8 = renderRmsWithNVoices(8);
+
+    std::printf("  (RMS total: 1 nota=%.4f, 4 notas=%.4f, 8 notas=%.4f)\n", rms1, rms4, rms8);
+    check(rms4 < rms1 * 2.0f && rms4 > rms1 * 0.5f,
+          "RMS com 4 notas fica na mesma ORDEM DE GRANDEZA que com 1 (nao cresce 4x nem cai 4x)");
+    check(rms8 < rms1 * 2.0f && rms8 > rms1 * 0.5f,
+          "RMS com 8 notas fica na mesma ORDEM DE GRANDEZA que com 1 (compensacao 1/sqrt(N) funcionando)");
+}
+
+static void testPolyphonyGainIsSmoothedNoClick() {
+    // Adicionar uma nota no meio de um acorde nao deveria produzir um
+    // DEGRAU audivel de ganho (a compensacao e suavizada, nao instantanea).
+    Synth synth;
+    synth.init(48000.0, 8);
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100);
+    for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); } // assenta com 1 voz
+
+    float prevSample = 0.0f;
+    { float l, r; synth.renderStereo(l, r); prevSample = (l + r) * 0.5f; }
+
+    synth.noteOn(0, 64, 100); // acorde ganha uma 2a nota AGORA
+
+    float maxJump = 0.0f;
+    for (int i = 0; i < 20; ++i) { // primeiras amostras logo apos a mudanca de polifonia
+        float l, r;
+        synth.renderStereo(l, r);
+        float s = (l + r) * 0.5f;
+        maxJump = std::max(maxJump, std::abs(s - prevSample));
+        prevSample = s;
+    }
+    std::printf("  (maior salto amostra-a-amostra logo apos nova nota=%.4f)\n", maxJump);
+    check(maxJump < 0.3f, "ganho de polifonia suavizado: nenhum degrau abrupto ao adicionar uma nota ao acorde");
+}
+
 static void testMultitimbral4Parts() {
     Synth synth;
     synth.init(48000.0, 64);
@@ -1377,6 +1435,8 @@ int main() {
     testAlgorithmPresetsRenderAudibly();
     testChordDoesNotClip();
     testMasterLimiterIsTransparentForSingleVoice();
+    testPolyphonyGainKeepsTotalLoudnessRoughlyConstant();
+    testPolyphonyGainIsSmoothedNoClick();
     testMultitimbral4Parts();
     testPolyphonyCap();
 

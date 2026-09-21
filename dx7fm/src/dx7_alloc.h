@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
@@ -208,8 +209,10 @@ public:
         const PatchSnapshot* live[kNumParts];
         for (int p = 0; p < kNumParts; ++p) live[p] = parts_[p].live();
 
+        int activeCount = 0;
         for (auto& s : slots_) {
             if (s.ownerPart < 0 || !s.voice.isActive()) continue;
+            ++activeCount;
             auto& pr = parts_[s.ownerPart];
             const PatchSnapshot* snap = live[s.ownerPart];
             s.voice.rebind(&snap->voice, &snap->compiled); // "ao vivo": pega qualquer recompile() publicado ate agora
@@ -222,6 +225,22 @@ public:
             outR += lvl * gR;
         }
 
+        // [ADICIONADO em 2026-09-21] Compensacao de polifonia: 1/sqrt(N) e a
+        // normalizacao classica pra somar N fontes de amplitude comparavel e
+        // NAO-correlacionadas entre si (fases/timbres diferentes) -- preserva
+        // a POTENCIA/RMS total aproximadamente CONSTANTE conforme N cresce,
+        // ao contrario de 1/N (que fica exagerado/fraco demais ja com 2-3
+        // vozes) ou de nao compensar nada (que e o que causava o clipping
+        // documentado no bug da secao 7B item 5). Com N=1 (nota unica),
+        // ganho=1.0 -- NADA muda em relacao ao comportamento de antes.
+        // Suavizada (~30ms, one-pole) pra nao dar "zipper noise"/degrau
+        // audivel quando uma nota entra ou sai de um acorde.
+        float targetGain = 1.0f / std::sqrt(static_cast<float>(std::max(1, activeCount)));
+        float smoothCoef = 1.0f - std::exp(-1.0f / (0.03f * static_cast<float>(sampleRate_)));
+        polyphonyGain_ += (targetGain - polyphonyGain_) * smoothCoef;
+        outL *= polyphonyGain_;
+        outR *= polyphonyGain_;
+
         // Efeitos globais pos-mix, na soma das 4 partes: chorus -> delay ->
         // reverb (cadeia fixa; cada estagio e transparente se !enabled).
         float chL, chR, dlL, dlR;
@@ -229,12 +248,11 @@ public:
         delay_.process(globalFx_.delay, chL, chR, dlL, dlR);
         reverb_.process(globalFx_.reverb, dlL, dlR, outL, outR);
 
-        // [ADICIONADO em 2026-09-21] Limitador de master bus: nenhuma vez
-        // (uma so nota ja pode chegar perto de +-1.0 no patch default) nem os
-        // efeitos globais sao normalizados por numero de vozes/fontes ativas
-        // -- sem isso, um acorde simples clipava duro (ver ARQUITETURA.txt
-        // secao 7, "acordes nao soam bem"). Transparente pra sinais normais
-        // de 1 voz, so comprime o excesso quando varias vozes somam.
+        // Limitador de master bus, camada 2 (rede de seguranca): mesmo com a
+        // compensacao de polifonia acima, um patch com feedback pesado, um
+        // filtro ressonante, ou os efeitos globais ainda PODEM empurrar
+        // transientes pra alem de +-1.0 -- softLimit() garante que isso
+        // nunca vira clipping duro, so uma compressao suave (ver secao 5).
         outL = softLimit(outL);
         outR = softLimit(outR);
     }
@@ -400,6 +418,7 @@ private:
     StereoChorus chorus_;
     StereoDelay delay_;
     SimpleReverb reverb_;
+    float polyphonyGain_ = 1.0f; // suavizado, ver renderStereo() (compensacao 1/sqrt(N))
 };
 
 } // namespace dx7fm

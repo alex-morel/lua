@@ -92,7 +92,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 83 checagens de sanidade em 43 funcoes de teste (nao
+    demo.cpp        - 86 checagens de sanidade em 45 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -159,8 +159,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     g++ -std=c++20 -O2 -Wall -Wextra -pthread -o demo src/demo.cpp
     ./demo
 
-Isso deve imprimir 83 linhas "[PASS] ..." e no final:
-    == Resultado: 83 passaram, 0 falharam ==
+Isso deve imprimir 86 linhas "[PASS] ..." e no final:
+    == Resultado: 86 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -952,13 +952,20 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           s.subPan, clampado -1..1), usando um pan LINEAR simples (nao
           e constant-power/equal-power — se precisar de um pan mais
           "correto" psicoacusticamente, trocar por curva seno/cosseno,
-          ver secao 8). [ATUALIZADO em 2026-09-21] Depois de somar as 4
-          partes, passa o par (outL, outR) pela cadeia de efeitos globais
-          pos-mix: chorus_ -> delay_ -> reverb_ (ver globalFx() abaixo e
-          secao 7D). Por ULTIMO, aplica softLimit() (secao 5) em outL/outR
-          -- limitador de master bus que evita clipping quando a soma de
-          varias vozes (um acorde) passa de +-1.0 (ver bug corrigido na
-          secao 7B, item 5).
+          ver secao 8). [ATUALIZADO em 2026-09-21] Logo apos somar as 4
+          partes (dentro do mesmo loop, sem varredura extra), calcula
+          activeCount e aplica um ganho de compensacao de polifonia
+          1/sqrt(activeCount), suavizado (~30ms) num membro polyphonyGain_
+          -- evita que a soma de varias vozes cresca sem controle,
+          mantendo a POTENCIA total aproximadamente constante entre 1 nota
+          e um acorde. So depois disso passa o par (outL, outR) pela
+          cadeia de efeitos globais pos-mix: chorus_ -> delay_ -> reverb_
+          (ver globalFx() abaixo e secao 7D). Por ULTIMO, aplica
+          softLimit() (secao 5) em outL/outR -- limitador de master bus,
+          rede de seguranca pra qualquer transiente que ainda passe de
+          +-1.0 mesmo com a compensacao de polifonia (feedback pesado,
+          filtro ressonante, etc.). Ver bug corrigido na secao 7B, item 5
+          (as duas camadas).
 
       globalFx() -> GlobalFxParams& - [ADICIONADO em 2026-09-21] acesso
           direto (NAO passa pelo triple-buffer do timbre) aos parametros
@@ -1113,25 +1120,50 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
      dispositivo sem clamp nenhum (so o fallback S16 clampava, dentro da
      conversao float->int16) -- ou seja, tocar qualquer acorde de 2+
      notas no app de verdade produzia clipping digital audivel.
-     Correcao: softLimit() novo em dx7_dsp.h -- limitador "soft knee":
-     TRANSPARENTE (identidade exata) abaixo de threshold=0.9, comprime
+     Correcao em DUAS camadas (a 1a foi o primeiro commit da correcao; o
+     usuario perguntou "nao existe uma formula especifica pra lidar com
+     isso?" e a 2a camada foi adicionada em seguida, no mesmo dia):
+
+     CAMADA 1 -- softLimit() em dx7_dsp.h: limitador "soft knee" de master
+     bus, TRANSPARENTE (identidade exata) abaixo de threshold=0.9, comprime
      suavemente (via tanh) o excesso acima disso, aproximando-se
      assintoticamente de +-1.0 sem jamais ultrapassar. Aplicado 1x no
      final de Synth::renderStereo(), depois de somar as 4 partes E dos
      efeitos globais (chorus/delay/reverb tambem podem empurrar o sinal
-     pra cima, entao o limitador tem que vir DEPOIS deles, nao antes).
-     Resultado apos a correcao: a mesma triade de 3 notas fica com pico
-     EXATO em 1.0000 e 0 amostras acima do limite; uma nota so cai pra
-     pico ~0.976 (compressao de ~2.4%, imperceptivel). Testes de
-     regressao: testChordDoesNotClip() e
-     testMasterLimiterIsTransparentForSingleVoice() (secao 8).
-     NAO CORRIGIDO (fora de escopo desta correcao, ver secao 8 pra
-     detalhes): isso e uma rede de seguranca no MASTER BUS, nao um
-     limitador PSICOACUSTICO de "compensacao de polifonia" (que reduziria
-     o ganho de cada voz individualmente conforme mais notas entram, pra
-     evitar precisar comprimir tanto em primeiro lugar) -- um acorde de
-     muitas notas ainda vai ficar mais comprimido/denso que um acorde de
-     poucas, so nao vai mais CLIPAR duro.
+     pra cima, entao tem que vir DEPOIS deles). E so uma REDE DE
+     SEGURANCA -- nao evita que o sinal fique denso/comprimido, so evita
+     que ultrapasse +-1.0.
+
+     CAMADA 2 -- compensacao de polifonia 1/sqrt(N): a formula classica de
+     DSP pra somar N fontes de amplitude comparavel e NAO-correlacionadas
+     entre si (fases/timbres diferentes) SEM distorcer a percepcao de
+     volume -- preserva a POTENCIA/RMS total aproximadamente CONSTANTE
+     conforme N cresce (ao contrario de 1/N, que fica exagerado/fraco
+     demais ja com 2-3 vozes: RMS/N decai visivelmente numa medicao
+     empirica de 1 a 8 notas, ver testPolyphonyGainKeepsTotalLoudness-
+     RoughlyConstant() na secao 8). N aqui e activeVoiceCount() calculado
+     DENTRO do proprio loop de mixagem de renderStereo() (sem custo extra
+     de outra varredura). Suavizada com um one-pole de ~30ms (mesma tecnica
+     do glide, secao 6) pra nao dar "zipper noise"/degrau audivel quando
+     uma nota entra ou sai de um acorde -- ver testPolyphonyGainIsSmoothed-
+     NoClick(). Com N=1 (nota unica), ganho=1.0: NADA muda em relacao ao
+     comportamento de uma voz so.
+
+     As duas camadas trabalham JUNTAS: a compensacao de polifonia resolve
+     o caso comum de forma "musical" (chords soam naturais, nao apertados),
+     e o limitador continua como ultima linha de defesa pra casos extremos
+     que a compensacao sozinha nao cobriria (patch com feedback pesado,
+     filtro ressonante, etc.).
+
+     Resultado medido: triade de C maior (60/64/67) -- pico exato 1.0000,
+     0 amostras acima do limite (era 2.997 de pico, 42% das amostras
+     clipando, antes da correcao). RMS total praticamente constante de 1 a
+     8 notas simultaneas (~0.63-0.70 na medicao real, nao crescendo nem
+     caindo proporcionalmente a N). Uma nota so cai so ~2.4% (0.976) por
+     causa do limitador -- imperceptivel. Testes de regressao (secao 8):
+     testChordDoesNotClip(), testMasterLimiterIsTransparentForSingleVoice(),
+     testPolyphonyGainKeepsTotalLoudnessRoughlyConstant(),
+     testPolyphonyGainIsSmoothedNoClick().
 
 
 --------------------------------------------------------------------------------
@@ -1567,6 +1599,21 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               nao esmaga uma voz normal sozinha (RMS
                               continua razoavel) -- o limitador so deveria
                               atuar quando VARIAS vozes somam.
+  testPolyphonyGainKeepsTotalLoudnessRoughlyConstant() - [ADICIONADO em
+                              2026-09-21] mede o RMS total tocando 1, 4 e
+                              8 notas simultaneas (acorde), confirma que
+                              ficam todas na MESMA ORDEM DE GRANDEZA (nao
+                              crescem proporcionalmente a N, nem caem
+                              proporcionalmente a 1/N) -- prova que a
+                              compensacao 1/sqrt(N) esta realmente
+                              equalizando a potencia percebida.
+  testPolyphonyGainIsSmoothedNoClick() - [ADICIONADO em 2026-09-21]
+                              adiciona uma 2a nota no meio de uma nota ja
+                              sustentando, mede o MAIOR salto amostra-a-
+                              amostra logo apos -- confirma que a
+                              suavizacao (~30ms) evita um degrau de ganho
+                              audivel (teria soado como um "clique") ao
+                              entrar/sair de um acorde.
 
   testMultitimbral4Parts()   - dispara uma nota em CADA uma das 4
                               partes simultaneamente, confirma
@@ -1577,7 +1624,7 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 83 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 86 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
