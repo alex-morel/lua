@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Manual do dx7fm</title>
+<meta name="description" content="Guia de uso do dx7fm standalone: instalação, tocar notas, entender a interface e desenhar patches FM.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,700;0,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: light dark; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+  :root {
+    --bg: #12151b;
+    --surface: #1b1f28;
+    --surface-2: #232a36;
+    --surface-3: #2c3444;
+    --border: #2c323e;
+    --border-soft: #232833;
+    --text: #eae7df;
+    --text-muted: #8b93a1;
+    --text-faint: #5c6472;
+    --accent: #e8a23d;
+    --accent-soft: #4a3a20;
+    --accent-2: #5b9bd5;
+    --accent-2-soft: #22344a;
+    --white-key: #e9e6de;
+    --white-key-text: #23272f;
+    --black-key: #1a1d24;
+    --black-key-text: #e9e6de;
+    --radius: 8px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f4f1ea;
+      --surface: #ffffff;
+      --surface-2: #ece7dc;
+      --surface-3: #e2dccc;
+      --border: #d8d0bd;
+      --border-soft: #e6e0d2;
+      --text: #201d16;
+      --text-muted: #6b6353;
+      --text-faint: #a39b87;
+      --accent: #b56a1f;
+      --accent-soft: #f1ddb9;
+      --accent-2: #2f6da6;
+      --accent-2-soft: #dbe8f3;
+      --white-key: #ffffff;
+      --white-key-text: #201d16;
+      --black-key: #2a251c;
+      --black-key-text: #f4f1ea;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f1ea;
+    --surface: #ffffff;
+    --surface-2: #ece7dc;
+    --surface-3: #e2dccc;
+    --border: #d8d0bd;
+    --border-soft: #e6e0d2;
+    --text: #201d16;
+    --text-muted: #6b6353;
+    --text-faint: #a39b87;
+    --accent: #b56a1f;
+    --accent-soft: #f1ddb9;
+    --accent-2: #2f6da6;
+    --accent-2-soft: #dbe8f3;
+    --white-key: #ffffff;
+    --white-key-text: #201d16;
+    --black-key: #2a251c;
+    --black-key-text: #f4f1ea;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+    margin: 0;
+    padding-inline: 16px;
+    line-height: 1.6;
+    font-size: 16px;
+  }
+  h1, h2, h3, .eyebrow, .keycap, .nav a, .btn {
+    font-family: "Archivo Expanded", "IBM Plex Sans", sans-serif;
+  }
+  code, .mono, .kbd, kbd, .paramtable td.pname, .file {
+    font-family: "IBM Plex Mono", monospace;
+  }
+
+  a { color: var(--accent-2); }
+
+  .layout {
+    display: flex;
+    gap: 40px;
+    max-width: 1180px;
+    margin: 0 auto;
+    align-items: flex-start;
+  }
+
+  /* ---- sidebar nav ---- */
+  nav.toc {
+    position: sticky;
+    top: max(24px, env(safe-area-inset-top, 0px));
+    flex: 0 0 216px;
+    padding-top: 40px;
+    padding-bottom: 40px;
+    max-height: 100vh;
+    overflow-y: auto;
+  }
+  nav.toc .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  nav.toc .brand .mark {
+    width: 14px; height: 14px;
+    background: var(--accent);
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  nav.toc .brand span {
+    font-family: "Archivo Expanded", sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0; padding: 0;
+    counter-reset: toc;
+  }
+  nav.toc li { counter-increment: toc; }
+  nav.toc a {
+    display: block;
+    padding: 6px 0 6px 26px;
+    position: relative;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 13.5px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    border-left: 2px solid transparent;
+  }
+  nav.toc a::before {
+    content: counter(toc, decimal-leading-zero);
+    position: absolute;
+    left: 0;
+    color: var(--text-faint);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc .themebtn {
+    margin-top: 28px;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: "IBM Plex Mono", monospace;
+  }
+  nav.toc .themebtn:hover { border-color: var(--accent); color: var(--accent); }
+
+  main {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 760px;
+    padding-top: 40px;
+    padding-bottom: 80px;
+  }
+
+  header.hero {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 28px;
+    margin-bottom: 36px;
+  }
+  .eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-size: clamp(30px, 6vw, 42px);
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -0.01em;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  header.hero p {
+    color: var(--text-muted);
+    font-size: 16.5px;
+    max-width: 58ch;
+    margin: 0;
+  }
+  .tagrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+  .tag {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px;
+    padding: 4px 9px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+
+  section { margin-bottom: 52px; scroll-margin-top: 20px; }
+  section > h2 {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  section > h2 .num {
+    font-family: "IBM Plex Mono", monospace;
+    color: var(--accent);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  section > .lede {
+    color: var(--text-muted);
+    margin: 0 0 20px;
+    font-size: 15px;
+    max-width: 62ch;
+  }
+  h3 {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 26px 0 10px;
+  }
+  p { margin: 0 0 14px; }
+  ul, ol { margin: 0 0 14px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    margin: 18px 0;
+  }
+  .panel.blue { border-top-color: var(--accent-2); }
+  .panel-label {
+    text-transform: uppercase;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    margin: 0 0 12px;
+  }
+  .panel.blue .panel-label { color: var(--accent-2); }
+  .panel > *:last-child { margin-bottom: 0; }
+
+  pre {
+    background: var(--surface-2);
+    border: 1px solid var(--border-soft);
+    border-radius: 6px;
+    padding: 13px 16px;
+    overflow-x: auto;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 12px 0;
+  }
+  code {
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.88em;
+  }
+  pre code { background: none; padding: 0; }
+
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  th { font-family: "IBM Plex Mono", monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); font-weight: 600; }
+  .tablewrap { overflow-x: auto; margin: 14px 0; }
+  .tablewrap table { margin: 0; min-width: 460px; }
+
+  .kbd {
+    display: inline-block;
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 1px 7px;
+    font-size: 0.85em;
+    color: var(--text);
+  }
+
+  .steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  .steps li {
+    counter-increment: step;
+    position: relative;
+    padding-left: 40px;
+    margin-bottom: 18px;
+  }
+  .steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0; top: 0;
+    width: 26px; height: 26px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .steps li strong { display: block; margin-bottom: 3px; }
+
+  .callout {
+    border-left: 3px solid var(--accent-2);
+    background: var(--accent-2-soft);
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    font-size: 14.5px;
+    margin: 16px 0;
+  }
+  .callout.warn { border-left-color: var(--accent); background: var(--accent-soft); }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout strong { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; color: var(--text); }
+
+  /* piano keys */
+  .piano-wrap { overflow-x: auto; padding: 4px 0 10px; }
+  .piano { display: inline-flex; gap: 4px; min-width: 560px; }
+  .pkey {
+    width: 56px; height: 74px;
+    border-radius: 6px;
+    display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+    padding: 8px 0 6px;
+    font-family: "IBM Plex Mono", monospace;
+    flex-shrink: 0;
+  }
+  .pkey.white { background: var(--white-key); color: var(--white-key-text); border: 1px solid var(--border); }
+  .pkey.black { background: var(--black-key); color: var(--black-key-text); height: 60px; }
+  .pkey .k { font-size: 15px; font-weight: 700; border: 1px solid currentColor; border-radius: 4px; padding: 2px 7px; opacity: 0.92; }
+  .pkey .n { font-size: 10.5px; opacity: 0.65; }
+  .piano-ext { margin-top: 10px; }
+
+  /* algorithm mini-diagram */
+  .algo-diagram { display: flex; gap: 28px; flex-wrap: wrap; margin: 14px 0; }
+  .algo-diagram figure { margin: 0; flex: 1 1 220px; }
+  .algo-diagram svg { width: 100%; height: auto; }
+  .algo-diagram figcaption { font-size: 12.5px; color: var(--text-muted); margin-top: 8px; text-align: center; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 620px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .chiplist { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .chip {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    padding: 4px 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--text);
+  }
+
+  footer {
+    border-top: 1px solid var(--border);
+    padding-top: 22px;
+    color: var(--text-faint);
+    font-size: 13px;
+  }
+
+  /* mobile: sidebar becomes a top bar */
+  @media (max-width: 860px) {
+    .layout { flex-direction: column; gap: 0; }
+    nav.toc {
+      position: static;
+      flex: none;
+      width: 100%;
+      max-height: none;
+      padding-top: 20px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    nav.toc ol { display: none; }
+    nav.toc.open ol { display: block; }
+    nav.toc .toggle {
+      display: flex; align-items: center; justify-content: space-between;
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 13px;
+      cursor: pointer;
+      margin-bottom: 4px;
+    }
+    main { padding-top: 24px; max-width: 100%; }
+  }
+  @media (min-width: 861px) {
+    nav.toc .toggle { display: none; }
+  }
+  /* Archivo Expanded nao existe como familia separada no Google Fonts v2;
+     usa Archivo com letter-spacing negativo pra aproximar o efeito "expanded" */
+  h1, h2, h3, .eyebrow, nav.toc .brand span { font-stretch: expanded; letter-spacing: -0.005em; }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <nav class="toc" id="tocNav">
+    <div class="brand"><span class="mark"></span><span>dx7fm</span></div>
+    <button class="toggle" id="tocToggle">Índice ▾</button>
+    <ol>
+      <li><a href="#intro">O que é o dx7fm</a></li>
+      <li><a href="#instalacao">Instalação</a></li>
+      <li><a href="#primeira-execucao">Primeira execução</a></li>
+      <li><a href="#tocando">Tocando notas</a></li>
+      <li><a href="#interface">Anatomia da interface</a></li>
+      <li><a href="#conceitos">Conceitos de FM</a></li>
+      <li><a href="#tutorial">Tutorial: seu primeiro patch</a></li>
+      <li><a href="#salvando">Salvando e carregando</a></li>
+      <li><a href="#referencia">Referência rápida</a></li>
+      <li><a href="#problemas">Solução de problemas</a></li>
+      <li><a href="#limites">Limitações conhecidas</a></li>
+    </ol>
+    <button class="themebtn" id="themeBtn">Alternar tema</button>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <p class="eyebrow">Manual do usuário</p>
+      <h1>dx7fm standalone</h1>
+      <p>Synth de síntese FM/PM de 8 operadores, com áudio e MIDI em tempo real via ALSA e uma interface leve que roda sem GPU — pensado pra funcionar numa distro Linux minimal. Este manual cobre o aplicativo standalone: instalar, tocar, entender a interface e montar um patch do zero.</p>
+      <div class="tagrow">
+        <span class="tag">8 operadores</span>
+        <span class="tag">64 vozes / 4 partes</span>
+        <span class="tag">ALSA audio + MIDI</span>
+        <span class="tag">Dear ImGui + SDL2</span>
+        <span class="tag">Linux</span>
+      </div>
+    </header>
+
+    <section id="intro">
+      <h2><span class="num">01</span>O que é o dx7fm</h2>
+      <p class="lede">Um motor de síntese FM inspirado no Yamaha DX7, mas deliberadamente estendido.</p>
+      <p>Cada voz tem <strong>8 operadores</strong> (o DX7 original tinha 6) ligados numa matriz de roteamento livre — não os 32 algoritmos fixos do hardware original, mas conexões que você desenha (ou monta a partir de um preset). Cada operador pode usar uma entre 12 formas de onda, ter seu próprio filtro/distorção, e o motor inteiro toca 64 vozes ao mesmo tempo, divididas em até 4 "partes" com timbres independentes — como ter 4 DX7 tocando juntos, cada um num canal MIDI.</p>
+      <p>O aplicativo standalone que este manual descreve é a parte "tocável": ele abre um dispositivo de áudio de verdade, aceita um teclado MIDI ou o teclado do seu computador, e mostra uma interface gráfica leve o bastante pra rodar sem placa de vídeo dedicada.</p>
+    </section>
+
+    <section id="instalacao">
+      <h2><span class="num">02</span>Instalação</h2>
+      <p class="lede">Duas dependências de sistema, depois um build com CMake.</p>
+
+      <h3>Dependências</h3>
+      <div class="tablewrap">
+        <table>
+          <tr><th>Pacote</th><th>Arch / EndeavourOS</th><th>Debian / Ubuntu</th></tr>
+          <tr><td>SDL2</td><td><code>sdl2-compat</code></td><td><code>libsdl2-dev</code></td></tr>
+          <tr><td>ALSA</td><td><code>alsa-lib</code></td><td><code>libasound2-dev</code></td></tr>
+          <tr><td>Toolchain</td><td><code>cmake gcc</code></td><td><code>cmake g++</code></td></tr>
+        </table>
+      </div>
+      <p>Precisa de um compilador com suporte a C++20 (testado com g++ 16) e CMake 3.16+. O Dear ImGui já vem incluído no repositório — nada pra baixar à parte.</p>
+
+      <h3>Build</h3>
+      <pre><code>cmake -S dx7fm -B dx7fm/build -DCMAKE_BUILD_TYPE=Release
+cmake --build dx7fm/build -j$(nproc)</code></pre>
+      <p>Isso gera dois executáveis em <code>dx7fm/build/</code>: <code>demo</code> (roda a suíte de testes do motor) e <code>dx7fm_standalone</code> (o aplicativo).</p>
+
+      <div class="callout">
+        <strong>Sem SDL2/ALSA instalados?</strong>
+        <p>O CMake ainda builda o motor e os testes normalmente — só avisa e pula o <code>dx7fm_standalone</code>. Você pode desenvolver/testar o motor sem instalar nada de áudio.</p>
+      </div>
+    </section>
+
+    <section id="primeira-execucao">
+      <h2><span class="num">03</span>Primeira execução</h2>
+      <pre><code>./dx7fm/build/dx7fm_standalone</code></pre>
+      <p>Uma janela abre com uma barra de status no topo:</p>
+      <div class="panel">
+        <div class="panel-label">Barra de status</div>
+        <table>
+          <tr><td class="mono" style="width:1%;white-space:nowrap">Audio</td><td>dispositivo, taxa de amostra, tamanho do period, formato (float32 ou s16) e contador de xruns (falhas de buffer)</td></tr>
+          <tr><td class="mono">MIDI</td><td>se a porta ALSA sequencer abriu com sucesso — se não, o app continua funcionando só com o teclado do PC</td></tr>
+          <tr><td class="mono">Voz do teclado</td><td>qual parte (A–D) o teclado do computador está tocando agora, e a oitava base atual</td></tr>
+          <tr><td class="mono">Vozes ativas</td><td>quantas das 64 vozes do pool estão soando</td></tr>
+          <tr><td class="mono">Nível</td><td>dois medidores de pico, esquerdo e direito</td></tr>
+        </table>
+      </div>
+      <p>Abaixo da barra, abas: <strong>Parte A</strong> a <strong>Parte D</strong> (os 4 timbres independentes) e <strong>FX Globais</strong> (chorus/delay/reverb aplicados na mixagem final).</p>
+    </section>
+
+    <section id="tocando">
+      <h2><span class="num">04</span>Tocando notas</h2>
+      <p class="lede">Duas formas de tocar, simultâneas: um controlador MIDI de verdade, ou o teclado do computador.</p>
+
+      <h3>MIDI</h3>
+      <p>O app cria uma porta ALSA sequencer de entrada chamada <span class="kbd">dx7fm:input</span>. Conecte seu controlador com:</p>
+      <pre><code>aconnect -l                 # lista as portas disponíveis
+aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
+      <p>Depois de conectado, cada parte habilitada recebe as notas de acordo com o <strong>canal MIDI</strong> configurado nela (0 = omni, recebe de qualquer canal; 1–16 = só daquele canal). CC1 (mod wheel), CC64 (sustain), CC66 (sostenuto), pitch bend e aftertouch de canal também são traduzidos automaticamente.</p>
+
+      <h3>Teclado do computador</h3>
+      <p>Sem controlador MIDI? O teclado do PC vira um piano — mapeamento por <em>posição física</em> da tecla, então funciona igual em qualquer layout de idioma.</p>
+      <div class="piano-wrap">
+        <div class="piano">
+          <div class="pkey white"><span class="k">A</span><span class="n">C</span></div>
+          <div class="pkey black"><span class="k">W</span><span class="n">C♯</span></div>
+          <div class="pkey white"><span class="k">S</span><span class="n">D</span></div>
+          <div class="pkey black"><span class="k">E</span><span class="n">D♯</span></div>
+          <div class="pkey white"><span class="k">D</span><span class="n">E</span></div>
+          <div class="pkey white"><span class="k">F</span><span class="n">F</span></div>
+          <div class="pkey black"><span class="k">T</span><span class="n">F♯</span></div>
+          <div class="pkey white"><span class="k">G</span><span class="n">G</span></div>
+          <div class="pkey black"><span class="k">Y</span><span class="n">G♯</span></div>
+          <div class="pkey white"><span class="k">H</span><span class="n">A</span></div>
+          <div class="pkey black"><span class="k">U</span><span class="n">A♯</span></div>
+          <div class="pkey white"><span class="k">J</span><span class="n">B</span></div>
+        </div>
+        <div class="piano piano-ext">
+          <div class="pkey white"><span class="k">K</span><span class="n">C</span></div>
+          <div class="pkey black"><span class="k">O</span><span class="n">C♯</span></div>
+          <div class="pkey white"><span class="k">L</span><span class="n">D</span></div>
+          <div class="pkey black"><span class="k">P</span><span class="n">D♯</span></div>
+          <div class="pkey white"><span class="k">;</span><span class="n">E</span></div>
+        </div>
+      </div>
+      <p><span class="kbd">Z</span> desce uma oitava, <span class="kbd">X</span> sobe uma oitava (a barra de status mostra a nota base atual). Só a parte selecionada na aba ativa recebe as notas do teclado.</p>
+      <div class="callout">
+        <strong>Dica</strong>
+        <p>O teclado do PC não envia velocity real — toda nota sai com velocity fixa (100). Pra dinâmica de verdade, use um controlador MIDI.</p>
+      </div>
+    </section>
+
+    <section id="interface">
+      <h2><span class="num">05</span>Anatomia da interface</h2>
+      <p class="lede">Cada aba de parte (A–D) tem a mesma estrutura, de cima pra baixo.</p>
+
+      <div class="panel">
+        <div class="panel-label">Configuração da parte</div>
+        <p>Habilitada, canal MIDI, modo de voz (<strong>Poly</strong> / <strong>Mono</strong> / <strong>Unison</strong>), transpose, nível, pan, faixa de pitch bend, faixa de teclas, vozes reservadas do pool de 64. Em Mono/Unison aparecem também os controles de <em>glide</em> (portamento) e, em Unison, quantidade de vozes e espalhamento/detune entre elas.</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">Patch</div>
+        <p>Campo de caminho de arquivo + botões <strong>Salvar patch</strong> / <strong>Carregar patch</strong> (formato JSON próprio) e <strong>Pânico</strong> (all notes off da parte).</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">Operadores</div>
+        <p>Tabela com as 8 linhas (um operador por linha): forma de onda, ratio ou frequência fixa, nível de saída, feedback, tipo de efeito e seu primeiro parâmetro. Clique numa linha pra abrir o <strong>painel de detalhe</strong> logo abaixo, com tudo que não cabe na tabela — afinação fina/detune, segundo parâmetro do efeito, phase distortion, key/velocity/LFO scaling, profundidade do pitch envelope, e os dois envelopes do operador (amplitude e efeito).</p>
+      </div>
+
+      <div class="panel blue">
+        <div class="panel-label">Algoritmo</div>
+        <p>Um combo com 32 topologias prontas (ver seção 6) + botão <strong>Aplicar algoritmo</strong>, e logo abaixo um <strong>diagrama ao vivo</strong> da matriz de roteamento atual — caixas azuis são portadoras (vão pro som final), cinzas só modulam outro operador, borda laranja indica feedback. O diagrama reflete qualquer edição, seja de um preset ou da grade numérica logo abaixo dele.</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">Matriz 8×8 + output mix</div>
+        <p>A representação numérica da mesma matriz do diagrama: uma célula por par de operadores (quanto <code>j</code> modula <code>i</code>, mais uma caixa pra ligar ring modulation), e 8 sliders de output mix — quanto de cada operador vai pro barramento de saída.</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">Pitch EG, LFO 1, LFO 2, Matriz de modulação</div>
+        <p>O envelope de pitch da voz inteira; dois LFOs independentes (forma de onda, velocidade, delay, profundidade de pitch/amplitude); e 8 rotas de modulação configuráveis (fonte → destino → operador → profundidade) pra ligar, por exemplo, aftertouch no corte do filtro de um operador específico.</p>
+      </div>
+
+      <h3>Aba FX Globais</h3>
+      <p>Chorus, delay e reverb aplicados uma única vez na soma das 4 partes — não por operador. Cada um tem seu próprio liga/desliga e parâmetros (chorus: taxa, profundidade, vozes; delay: tempo esquerdo/direito independentes, feedback, cross-feed; reverb: tamanho de sala, damping, largura estéreo).</p>
+    </section>
+
+    <section id="conceitos">
+      <h2><span class="num">06</span>Conceitos de síntese FM</h2>
+      <p class="lede">O mínimo pra entender o que os controles fazem, se você nunca mexeu num synth FM.</p>
+
+      <p>Um <strong>operador</strong> é um oscilador com envelope próprio. Ele pode fazer duas coisas: tocar direto (aí é uma <strong>portadora</strong>, o que você ouve) ou distorcer a fase de outro operador (aí é um <strong>modulador</strong> — é isso que dá os timbres metálicos/percussivos característicos de FM, bem diferente de somar formas de onda). Um operador pode acumular as duas funções.</p>
+
+      <p>O <strong>algoritmo</strong> é só o desenho de quem modula quem. Dois exemplos, dos 32 disponíveis:</p>
+
+      <div class="algo-diagram">
+        <figure>
+          <svg viewBox="0 0 220 150" role="img" aria-label="Diagrama de cadeia única: op8 modula op7 modula op6 e assim por diante até op1, a portadora">
+            <defs>
+              <marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--text-faint)"></path>
+              </marker>
+            </defs>
+            <line x1="30" y1="130" x2="190" y2="130" stroke="var(--accent-2)" stroke-width="1.5" opacity="0.5"></line>
+            <text x="190" y="145" font-family="IBM Plex Mono" font-size="9" fill="var(--accent-2)" text-anchor="end">saída</text>
+            <g font-family="IBM Plex Mono" font-size="10" text-anchor="middle">
+              <circle cx="30" cy="110" r="16" fill="var(--accent-2)"></circle>
+              <text x="30" y="114" fill="#fff">Op1</text>
+              <line x1="30" y1="110" x2="30" y2="130" stroke="var(--accent-2)" stroke-width="1.5"></line>
+              <circle cx="70" cy="86" r="14" fill="var(--surface-3)" stroke="var(--border)"></circle>
+              <text x="70" y="90" fill="var(--text)">Op2</text>
+              <line x1="62" y1="98" x2="38" y2="118" stroke="var(--text-faint)" stroke-width="1.3" marker-end="url(#arrow1)"></line>
+              <circle cx="106" cy="62" r="14" fill="var(--surface-3)" stroke="var(--border)"></circle>
+              <text x="106" y="66" fill="var(--text)">Op3</text>
+              <line x1="98" y1="72" x2="78" y2="80" stroke="var(--text-faint)" stroke-width="1.3" marker-end="url(#arrow1)"></line>
+              <circle cx="142" cy="42" r="14" fill="var(--surface-3)" stroke="var(--border)"></circle>
+              <text x="142" y="46" fill="var(--text)">…</text>
+              <line x1="134" y1="50" x2="114" y2="56" stroke="var(--text-faint)" stroke-width="1.3" marker-end="url(#arrow1)"></line>
+              <circle cx="178" cy="22" r="14" fill="var(--accent-soft)" stroke="var(--accent)"></circle>
+              <text x="178" y="26" fill="var(--accent)">Op8</text>
+              <circle cx="188" cy="12" r="6" fill="none" stroke="var(--accent)" stroke-width="1.3"></circle>
+              <line x1="170" y1="30" x2="150" y2="36" stroke="var(--text-faint)" stroke-width="1.3" marker-end="url(#arrow1)"></line>
+            </g>
+          </svg>
+          <figcaption>Algoritmo 1 — cadeia única. Sete moduladores empilhados sobre uma portadora: som denso, inarmônico, o "clássico FM agressivo".</figcaption>
+        </figure>
+        <figure>
+          <svg viewBox="0 0 220 150" role="img" aria-label="Diagrama de 8 portadoras em paralelo, todas independentes">
+            <line x1="20" y1="130" x2="200" y2="130" stroke="var(--accent-2)" stroke-width="1.5" opacity="0.5"></line>
+            <text x="200" y="145" font-family="IBM Plex Mono" font-size="9" fill="var(--accent-2)" text-anchor="end">saída</text>
+            <g font-family="IBM Plex Mono" font-size="9" text-anchor="middle">
+              <circle cx="30" cy="95" r="13" fill="var(--accent-2)"></circle><text x="30" y="98" fill="#fff">1</text><line x1="30" y1="108" x2="30" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
+              <circle cx="55" cy="85" r="13" fill="var(--accent-2)"></circle><text x="55" y="88" fill="#fff">2</text><line x1="55" y1="98" x2="55" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
+              <circle cx="80" cy="78" r="13" fill="var(--accent-2)"></circle><text x="80" y="81" fill="#fff">3</text><line x1="80" y1="91" x2="80" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
+              <circle cx="105" cy="72" r="13" fill="var(--accent-2)"></circle><text x="105" y="75" fill="#fff">4</text><line x1="105" y1="85" x2="105" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
+              <circle cx="130" cy="72" r="13" fill="var(--accent-2)"></circle><text x="130" y="75" fill="#fff">5</text><line x1="130" y1="85" x2="130" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
+              <circle cx="155" cy="78" r="13" fill="var(--accent-2)"></circle><text x="155" y="81" fill="#fff">6</text><line x1="155" y1="91" x2="155" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
+              <circle cx="180" cy="85" r="13" fill="var(--accent-2)"></circle><text x="180" y="88" fill="#fff">7</text><line x1="180" y1="98" x2="180" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
+              <circle cx="205" cy="95" r="13" fill="var(--accent-2)"></circle><text x="205" y="98" fill="#fff">8</text><line x1="205" y1="108" x2="200" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
+            </g>
+          </svg>
+          <figcaption>Algoritmo 22 — 8 portadoras em paralelo. Nenhum modula o outro: som aditivo, tipo órgão.</figcaption>
+        </figure>
+      </div>
+
+      <p>O <strong>feedback</strong> é um caso especial: um operador modulando a si mesmo (com o valor da amostra anterior, já que não dá pra usar "o próprio valor de agora"). Em quantidade pequena, dá mais brilho/harmônicos; em quantidade alta, vira ruído caótico. No dx7fm cada operador tem seu próprio feedback (0 a 1) — o DX7 original restringia isso a um único operador por algoritmo.</p>
+    </section>
+
+    <section id="tutorial">
+      <h2><span class="num">07</span>Tutorial: seu primeiro patch</h2>
+      <p class="lede">Um sino FM simples, do zero, em 6 passos.</p>
+      <ol class="steps">
+        <li><strong>Escolha a parte</strong>Clique na aba <span class="kbd">Parte A</span> e confirme que <strong>Habilitada</strong> está marcado.</li>
+        <li><strong>Aplique um algoritmo de 2 portadoras</strong>No combo de algoritmo, escolha algo como <em>"2 cadeias: 4+4"</em> e clique <strong>Aplicar algoritmo</strong>. Isso monta duas cadeias de 4 operadores cada, com feedback no topo de cada uma.</li>
+        <li><strong>Toque uma nota e ouça o cru</strong>Pressione <span class="kbd">A</span> no teclado (nota C). Vai soar denso — é o feedback default (0.3) em todo mundo.</li>
+        <li><strong>Ajuste os moduladores</strong>Na tabela de operadores, baixe o <strong>Feedback</strong> dos operadores de topo pra algo como 0.1, e mude o <strong>Ratio</strong> de um dos moduladores pra um valor não-inteiro (tipo 1.41 ou 3.5) — proporções não-inteiras entre portadora e modulador são o que dá o caráter metálico/de sino em FM.</li>
+        <li><strong>Modele o envelope</strong>Clique na linha do operador portador (o que tem <em>Output mix</em> alto) pra abrir o painel de detalhe, e ajuste o <strong>Amp EG</strong>: ataque rápido (rate alto), decaimento longo (rate baixo no estágio de release) — é o formato clássico de sino, ataque instantâneo e cauda longa.</li>
+        <li><strong>Salve</strong>Dê um nome ao arquivo no campo de patch (ex.: <code>patches/sino.json</code>) e clique <strong>Salvar patch</strong>.</li>
+      </ol>
+      <div class="callout">
+        <strong>Por que a edição funciona com a nota ainda soando</strong>
+        <p>Toda mudança nos controles só "vale" depois que a parte é recompilada — o app faz isso automaticamente a cada quadro em que algo mudou, então o efeito é imediato mesmo com uma nota já tocando. Você pode girar os controles enquanto ouve o resultado ao vivo.</p>
+      </div>
+    </section>
+
+    <section id="salvando">
+      <h2><span class="num">08</span>Salvando e carregando</h2>
+      <p>Cada parte tem seu próprio campo de caminho (padrão: <code>patches/part_a.json</code> a <code>patches/part_d.json</code>). O formato é um JSON legível — dá pra abrir num editor de texto, versionar num repositório git, ou compartilhar. <strong>Salvar patch</strong> grava o timbre completo daquela parte (todos os 8 operadores, matriz, envelopes, LFOs); <strong>Carregar patch</strong> lê de volta e aplica na hora.</p>
+      <div class="callout warn">
+        <strong>Atenção</strong>
+        <p>Carregar um patch <em>substitui</em> tudo na parte atual — não tem confirmação nem desfazer. Se estava editando algo bom, salve antes de carregar outra coisa por cima.</p>
+      </div>
+    </section>
+
+    <section id="referencia">
+      <h2><span class="num">09</span>Referência rápida</h2>
+
+      <h3>Formas de onda (12)</h3>
+      <div class="chiplist">
+        <span class="chip">Sine</span><span class="chip">Triangle</span><span class="chip">Saw</span><span class="chip">Square</span><span class="chip">Noise</span>
+        <span class="chip">HalfSine</span><span class="chip">AbsSine</span><span class="chip">QuarterSine</span><span class="chip">AlternatingSine</span><span class="chip">CamelSine</span><span class="chip">SquaredSine</span><span class="chip">LogSaw</span>
+      </div>
+      <p style="font-size:13.5px;color:var(--text-muted)">As 7 últimas são uma reconstrução própria inspirada nas formas de onda extras do motor AFM da Yamaha SY77/TX81Z — não uma cópia bit-exata da ROM original.</p>
+
+      <h3>Efeitos por operador (9)</h3>
+      <div class="chiplist">
+        <span class="chip">Bypass</span><span class="chip">LowPass</span><span class="chip">BandPass</span><span class="chip">HighPass</span><span class="chip">RingMod</span><span class="chip">Saturate</span><span class="chip">Crush</span><span class="chip">FreqShift</span><span class="chip">Comb</span>
+      </div>
+
+      <h3>32 algoritmos — famílias</h3>
+      <div class="tablewrap">
+        <table>
+          <tr><th>Algoritmos</th><th>Forma</th></tr>
+          <tr><td>1</td><td>Cadeia única de 8 — 1 portadora, som mais denso/inarmônico</td></tr>
+          <tr><td>2–22</td><td>Combinações de cadeias menores (2 a 8 portadoras) — cobrem todas as formas possíveis de dividir 8 operadores em cadeias</td></tr>
+          <tr><td>23–32</td><td>Variações com <em>fork</em> (um modulador alimentando várias portadoras) e <em>merge</em> (uma portadora recebendo de cadeias separadas)</td></tr>
+        </table>
+      </div>
+      <p style="font-size:13.5px;color:var(--text-muted)">Conjunto próprio desenhado pros 8 operadores deste motor — não é a lista oficial do DX7 (6 operadores) nem do Montage/MODX.</p>
+
+      <h3>Teclas de controle</h3>
+      <div class="tablewrap">
+        <table>
+          <tr><th>Tecla</th><th>Ação</th></tr>
+          <tr><td class="mono">Z</td><td>Oitava do teclado do PC uma abaixo</td></tr>
+          <tr><td class="mono">X</td><td>Oitava do teclado do PC uma acima</td></tr>
+          <tr><td class="mono">A W S E D F T G Y H U J</td><td>Uma oitava cromática (C a B)</td></tr>
+          <tr><td class="mono">K O L P ;</td><td>Mais 5 semitons acima (C a E)</td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section id="problemas">
+      <h2><span class="num">10</span>Solução de problemas</h2>
+
+      <h3>Sem áudio</h3>
+      <p>Confira a barra de status: se aparecer "Audio: PARADO" com uma mensagem de erro, o ALSA não conseguiu abrir o dispositivo <code>default</code>. Rode <code>aplay -l</code> num terminal pra ver os dispositivos disponíveis — se o seu não for o default do sistema, isso ainda não é configurável direto na interface nesta versão (ver seção 11).</p>
+
+      <h3>MIDI não conecta</h3>
+      <p>Confirme que a porta apareceu: <code>aconnect -l</code> deve listar um cliente chamado <span class="kbd">dx7fm</span>. Se não aparecer, o ALSA sequencer pode não ter permissão — verifique se seu usuário está no grupo <code>audio</code>.</p>
+
+      <h3>Estalos ou cortes no áudio (xruns)</h3>
+      <p>O contador de <strong>xruns</strong> na barra de status sobe quando o buffer de áudio não é preenchido a tempo. Costuma indicar CPU sobrecarregada — feche outros programas pesados, ou reduza o número de vozes/partes ativas simultaneamente.</p>
+
+      <h3>Nenhum som ao tocar uma nota</h3>
+      <p>Confira: a parte está <strong>Habilitada</strong>? O <strong>output mix</strong> de pelo menos um operador está acima de zero (ele precisa ser uma portadora)? O <strong>nível</strong> da parte não está em zero?</p>
+    </section>
+
+    <section id="limites">
+      <h2><span class="num">11</span>Limitações conhecidas desta versão</h2>
+      <ul>
+        <li>Sem seletor de dispositivo de áudio na interface — usa sempre <code>default</code> do ALSA.</li>
+        <li>Sem seletor de oversampling na interface (o motor suporta 2×/4× anti-aliasing, fixo em 1× no app).</li>
+        <li>Salvar/carregar patch usa um campo de texto pro caminho, não um seletor de arquivos gráfico.</li>
+        <li>As curvas de envelope, escala por tecla e velocidade são aproximações próprias — não as tabelas exatas da ROM do hardware original.</li>
+        <li>Ainda não testado numa distro Linux verdadeiramente minimal — validado até aqui num desktop Arch/EndeavourOS com as bibliotecas já instaladas.</li>
+      </ul>
+      <p style="font-size:13.5px;color:var(--text-muted)">Para detalhes técnicos de implementação, decisões de arquitetura e o roteiro completo de desenvolvimento, veja <code>dx7fm/docs/ARQUITETURA.txt</code> no repositório.</p>
+    </section>
+
+    <footer>
+      dx7fm — motor de síntese FM de 8 operadores e app standalone para Linux. Manual gerado em 2026-09-21.
+    </footer>
+  </main>
+</div>
+
+<script>
+(function() {
+  try {
+    var saved = localStorage.getItem('dx7fm-manual-theme');
+    if (saved === 'light' || saved === 'dark') document.documentElement.setAttribute('data-theme', saved);
+  } catch (e) {}
+
+  var btn = document.getElementById('themeBtn');
+  if (btn) {
+    btn.addEventListener('click', function() {
+      var cur = document.documentElement.getAttribute('data-theme');
+      var next = cur === 'dark' ? 'light' : (cur === 'light' ? null : 'dark');
+      if (next) document.documentElement.setAttribute('data-theme', next);
+      else document.documentElement.removeAttribute('data-theme');
+      try { localStorage.setItem('dx7fm-manual-theme', next || ''); } catch (e) {}
+    });
+  }
+
+  var toggle = document.getElementById('tocToggle');
+  var nav = document.getElementById('tocNav');
+  if (toggle && nav) {
+    toggle.addEventListener('click', function() { nav.classList.toggle('open'); });
+    nav.querySelectorAll('a').forEach(function(a) {
+      a.addEventListener('click', function() { nav.classList.remove('open'); });
+    });
+  }
+})();
+</script>
+</body>
+</html>
