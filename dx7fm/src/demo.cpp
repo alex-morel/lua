@@ -3,6 +3,7 @@
 #include "dx7_engine.h"
 #include "dx7_alloc.h"
 #include "dx7_patch_io.h"
+#include "dx7_algorithms.h"
 #include "wav_writer.h"
 
 #include <algorithm>
@@ -714,6 +715,74 @@ static void testAfmWaveformsAreBoundedAndDistinct() {
     check(allDistinct, "as 8 formas de onda AFM sao mutuamente distintas (nenhum par quase identico)");
 }
 
+static void testAlgorithmPresetsUseEachOperatorExactlyOnce() {
+    // Rede de seguranca contra erro de digitacao nos 32 algoritmos
+    // desenhados a mao em dx7_algorithms.h: pra CADA algoritmo, a uniao de
+    // todos os operadores citados em chains/forks/merges tem que ser
+    // EXATAMENTE {0..7}, sem repeticao e sem omissao.
+    bool allValid = true;
+    for (int n = 1; n <= kNumAlgorithms; ++n) {
+        const auto& t = algorithmTable();
+        const AlgorithmDef& def = t[static_cast<size_t>(n - 1)];
+        int seen[kNumOps] = {};
+        auto mark = [&](int op) { if (op >= 0 && op < kNumOps) seen[op]++; };
+
+        for (auto& chain : def.chains) for (int op : chain) mark(op);
+        for (auto& fork : def.forks) {
+            for (int op : fork.carriers) mark(op);
+            for (int op : fork.modChain) mark(op);
+        }
+        for (auto& merge : def.merges) {
+            mark(merge.carrier);
+            for (auto& chain : merge.modChains) for (int op : chain) mark(op);
+        }
+
+        for (int i = 0; i < kNumOps; ++i) {
+            if (seen[i] != 1) {
+                std::printf("  (algoritmo %d \"%s\": operador %d visto %d vez(es), esperado 1)\n",
+                            n, def.name, i, seen[i]);
+                allValid = false;
+            }
+        }
+    }
+    check(allValid, "os 32 algoritmos preset usam cada operador (0-7) exatamente 1 vez, sem repeticao/omissao");
+}
+
+static void testAlgorithmPresetsRenderAudibly() {
+    // Aplica CADA um dos 32 algoritmos num patch simples e confirma que
+    // renderiza um sinal finito e audivel -- pega problemas estruturais
+    // (ex.: nenhuma portadora setada, ciclo sem saida) que o teste anterior
+    // (contagem de operadores) nao pegaria sozinho.
+    bool allOk = true;
+    for (int n = 1; n <= kNumAlgorithms; ++n) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v;
+        applyAlgorithm(v, n);
+        for (int i = 0; i < kNumOps; ++i) v.op[i].outputLevel = 70; // nivel moderado, todo operador contribui se for portadora
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, 60, 100);
+
+        std::vector<float> mono;
+        mono.reserve(4800);
+        bool finite = true;
+        for (int i = 0; i < 4800; ++i) {
+            float l, r;
+            synth.renderStereo(l, r);
+            if (!std::isfinite(l) || !std::isfinite(r)) finite = false;
+            mono.push_back((l + r) * 0.5f);
+        }
+        float rms = computeRms(mono, 0, mono.size());
+        if (!finite || rms <= 0.001f) {
+            std::printf("  (algoritmo %d \"%s\": finite=%d RMS=%.5f)\n",
+                        n, algorithmName(n), finite, rms);
+            allOk = false;
+        }
+    }
+    check(allOk, "os 32 algoritmos preset renderizam sinal finito e audivel (RMS > 0.001)");
+}
+
 static void testMultitimbral4Parts() {
     Synth synth;
     synth.init(48000.0, 64);
@@ -767,6 +836,8 @@ int main() {
     testDelayProducesEchoAtExpectedTime();
     testReverbAddsDecayTail();
     testAfmWaveformsAreBoundedAndDistinct();
+    testAlgorithmPresetsUseEachOperatorExactlyOnce();
+    testAlgorithmPresetsRenderAudibly();
     testMultitimbral4Parts();
     testPolyphonyCap();
 

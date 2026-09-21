@@ -7,6 +7,7 @@
 #include "dx7_alloc.h"
 #include "dx7_globalfx.h"
 #include "dx7_patch_io.h"
+#include "dx7_algorithms.h"
 
 #include "alsa_audio.h"
 #include "alsa_midi.h"
@@ -20,11 +21,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 using namespace dx7fm;
 using namespace dx7fm_app;
@@ -59,6 +62,7 @@ struct AppState {
     std::unordered_map<SDL_Scancode, int> heldPcNotes;
     int currentPart = 0;
     int selectedOp = 0;
+    int selectedAlgo = 0; // indice (0-based) no combo de presets de algoritmo
     char patchPath[kNumParts][256];
 };
 
@@ -335,6 +339,77 @@ bool DrawOperatorDetail(OperatorParams& op) {
     return changed;
 }
 
+// [ADICIONADO em 2026-09-21] Desenha a topologia de roteamento como um
+// grafo de caixas+setas, generico o bastante pra visualizar QUALQUER
+// AlgorithmMatrix (preset ou editada a mao na grade 8x8 acima) -- nao
+// depende de layout topologico dinamico (que teria que lidar com ciclos
+// de feedback arbitrarios): as 8 caixas ficam em posicoes FIXAS (grade
+// 4x2), so as setas entre elas mudam. Ver ARQUITETURA.txt secao 13/14.
+void DrawAlgorithmDiagram(const VoiceParams& v) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float boxW = 70.0f, boxH = 40.0f, gapX = 40.0f, gapY = 55.0f;
+    const int cols = 4;
+
+    ImVec2 boxPos[kNumOps];
+    for (int i = 0; i < kNumOps; ++i) {
+        int col = i % cols, row = i / cols;
+        boxPos[i] = ImVec2(origin.x + 20.0f + col * (boxW + gapX), origin.y + 20.0f + row * (boxH + gapY));
+    }
+    float canvasW = cols * (boxW + gapX) + 20.0f;
+    float canvasH = 2.0f * (boxH + gapY) + 40.0f;
+    float outputY = origin.y + canvasH - 15.0f;
+
+    ImGui::Dummy(ImVec2(canvasW, canvasH));
+
+    dl->AddLine(ImVec2(origin.x, outputY), ImVec2(origin.x + canvasW, outputY), IM_COL32(90, 160, 230, 160), 2.0f);
+    dl->AddText(ImVec2(origin.x + canvasW - 55.0f, outputY + 4.0f), IM_COL32(140, 190, 240, 255), "saida");
+
+    // arestas (setas) primeiro, pra ficarem atras das caixas
+    for (int i = 0; i < kNumOps; ++i) {
+        for (int j = 0; j < kNumOps; ++j) {
+            if (i == j) continue;
+            bool hasMod = v.matrix.mod[i][j] != 0.0f;
+            bool hasRing = v.matrix.ring[i][j];
+            if (!hasMod && !hasRing) continue;
+            ImVec2 from(boxPos[j].x + boxW * 0.5f, boxPos[j].y + boxH * 0.5f);
+            ImVec2 to(boxPos[i].x + boxW * 0.5f, boxPos[i].y + boxH * 0.5f);
+            ImU32 color = hasRing ? IM_COL32(255, 170, 70, 210) : IM_COL32(190, 190, 200, 170);
+            dl->AddLine(from, to, color, hasRing ? 2.5f : 1.5f);
+            float dx = to.x - from.x, dy = to.y - from.y;
+            float len = std::sqrt(dx * dx + dy * dy);
+            if (len > 1.0f) {
+                dx /= len; dy /= len;
+                ImVec2 tip(to.x - dx * boxH * 0.7f, to.y - dy * boxH * 0.7f);
+                ImVec2 p1(tip.x - dx * 8.0f + (-dy) * 5.0f, tip.y - dy * 8.0f + dx * 5.0f);
+                ImVec2 p2(tip.x - dx * 8.0f - (-dy) * 5.0f, tip.y - dy * 8.0f - dx * 5.0f);
+                dl->AddTriangleFilled(tip, p1, p2, color);
+            }
+        }
+    }
+
+    for (int i = 0; i < kNumOps; ++i) {
+        bool isCarrier = v.matrix.outputMix[i] > 0.0f;
+        bool hasFeedback = (v.matrix.mod[i][i] != 0.0f) || (v.op[i].feedback > 0.0f);
+        ImVec2 p0 = boxPos[i];
+        ImVec2 p1(p0.x + boxW, p0.y + boxH);
+        ImU32 fill = isCarrier ? IM_COL32(55, 95, 155, 255) : IM_COL32(65, 65, 75, 255);
+        ImU32 border = hasFeedback ? IM_COL32(255, 150, 70, 255) : IM_COL32(170, 170, 180, 255);
+        dl->AddRectFilled(p0, p1, fill, 4.0f);
+        dl->AddRect(p0, p1, border, 4.0f, 0, hasFeedback ? 2.5f : 1.0f);
+
+        char label[8];
+        std::snprintf(label, sizeof(label), "Op%d", i + 1);
+        ImVec2 ts = ImGui::CalcTextSize(label);
+        dl->AddText(ImVec2(p0.x + (boxW - ts.x) * 0.5f, p0.y + (boxH - ts.y) * 0.5f), IM_COL32(255, 255, 255, 255), label);
+
+        if (isCarrier) dl->AddLine(ImVec2(p0.x + boxW * 0.5f, p1.y), ImVec2(p0.x + boxW * 0.5f, outputY),
+                                    IM_COL32(90, 160, 230, 150), 1.5f);
+        if (hasFeedback) dl->AddCircle(ImVec2(p1.x, p0.y), 8.0f, IM_COL32(255, 150, 70, 255), 12, 1.5f);
+    }
+    ImGui::TextDisabled("Azul = vai pro output (portadora) | Cinza = so modula | Laranja = tem feedback | Linha laranja = ring mod");
+}
+
 bool DrawMatrix(AlgorithmMatrix& m) {
     bool changed = false;
     ImGui::SeparatorText("Matriz de algoritmo (mod[i][j]: quanto op j modula op i; diagonal = feedback)");
@@ -521,6 +596,30 @@ void DrawPartPanel(AppState& app, int partIndex) {
     ImGui::SeparatorText("Operadores");
     changed |= DrawOperatorTable(pp.voice, app.selectedOp);
     changed |= DrawOperatorDetail(pp.voice.op[app.selectedOp]);
+
+    ImGui::SeparatorText("Algoritmo (preset de roteamento)");
+    {
+        static std::vector<std::string> names;
+        static std::vector<const char*> namePtrs;
+        if (names.empty()) {
+            for (int n = 1; n <= kNumAlgorithms; ++n) {
+                names.push_back(std::to_string(n) + ": " + algorithmName(n));
+            }
+            for (auto& s : names) namePtrs.push_back(s.c_str());
+        }
+        ImGui::SetNextItemWidth(500);
+        ImGui::Combo("##algo", &app.selectedAlgo, namePtrs.data(), static_cast<int>(namePtrs.size()));
+        ImGui::SameLine();
+        if (ImGui::Button("Aplicar algoritmo")) {
+            applyAlgorithm(pp.voice, app.selectedAlgo + 1);
+            changed = true;
+        }
+        ImGui::TextDisabled("Design proprio de 32 algoritmos p/ 8 operadores (nao e a lista oficial do DX7 "
+                             "nem do Montage) -- ver ARQUITETURA.txt secao 14. Aplicar sobrescreve a matriz "
+                             "e o feedback de todos os operadores.");
+    }
+    DrawAlgorithmDiagram(pp.voice);
+
     changed |= DrawMatrix(pp.voice.matrix);
     changed |= DrawPeg(pp.voice.peg);
     changed |= DrawLfo("LFO 1", pp.voice.lfo1);

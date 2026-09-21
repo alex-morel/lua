@@ -85,7 +85,14 @@ dx7fm/
                       Freeverb simplificado). Blocos genericos como
                       dx7_dsp.h, mas operam em pares de amostra ESTEREO
                       (a soma das 4 partes), nao por operador. Ver secao 7D.
-    demo.cpp        - 35 checagens de sanidade em 21 funcoes de teste (nao
+    dx7_algorithms.h- [ADICIONADO em 2026-09-21] 32 algoritmos preset
+                      (topologias de AlgorithmMatrix prontas) DESENHADOS
+                      PARA OS 8 OPERADORES deste motor -- NAO e a lista
+                      oficial de 32 algoritmos do DX7 (6 operadores) nem
+                      do FM-X do Yamaha Montage/MODX (8 operadores, mas
+                      lista proprietaria da Yamaha que eu nao tenho
+                      memorizada com confianca bit-exata). Ver secao 14.
+    demo.cpp        - 37 checagens de sanidade em 23 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -152,8 +159,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     g++ -std=c++20 -O2 -Wall -Wextra -pthread -o demo src/demo.cpp
     ./demo
 
-Isso deve imprimir 35 linhas "[PASS] ..." e no final:
-    == Resultado: 35 passaram, 0 falharam ==
+Isso deve imprimir 37 linhas "[PASS] ..." e no final:
+    == Resultado: 37 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -1361,6 +1368,24 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               media amostra-a-amostra >= 0.02 -- nenhuma
                               forma "colapsa" acidentalmente em outra ja
                               existente).
+  testAlgorithmPresetsUseEachOperatorExactlyOnce() - [ADICIONADO em
+                              2026-09-21] inspeciona os DADOS BRUTOS
+                              (chains/forks/merges) dos 32 algoritmos de
+                              dx7_algorithms.h, confirma que a uniao de
+                              operadores citados em CADA algoritmo e
+                              EXATAMENTE {0..7} (sem repeticao, sem
+                              omissao) -- e a rede de seguranca contra
+                              erro de digitacao no desenho manual dos 32
+                              algoritmos; pegou (e ajudou a corrigir antes
+                              de commitar) um par de entradas mal-formadas
+                              durante o desenvolvimento.
+  testAlgorithmPresetsRenderAudibly() - [ADICIONADO em 2026-09-21] aplica
+                              CADA um dos 32 algoritmos preset num patch
+                              simples e confirma que renderiza sinal
+                              finito e audivel (RMS > 0.001) -- pega
+                              problemas estruturais (ex.: nenhuma
+                              portadora setada) que a contagem de
+                              operadores sozinha nao pegaria.
   testMultitimbral4Parts()   - dispara uma nota em CADA uma das 4
                               partes simultaneamente, confirma
                               activeVoiceCount() == 4 (todas tocando do
@@ -1370,7 +1395,7 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 35 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 37 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
@@ -1684,6 +1709,115 @@ documentado na secao 7 pra quem usa a API C++ direto.
     testado".
   - Sem instalador/pacote (.deb/.AppImage/PKGBUILD) -- roda so a partir
     da arvore de build (./build/dx7fm_standalone).
+
+
+--------------------------------------------------------------------------------
+14. ALGORITMOS PRESET (dx7_algorithms.h) E DIAGRAMA DE ROTEAMENTO
+--------------------------------------------------------------------------------
+
+[ADICIONADO em 2026-09-21] Pedido do usuario: "pode adicionar algoritmos?
+como presets da matriz com ilustracoes de cada algoritmo". Pedi pra
+verificar a carta oficial de algoritmos do DX7 num navegador antes de
+implementar (pra nao errar a topologia de memoria); o usuario interrompeu
+essa busca e redirecionou: "use os do Montage com as devidas alteracoes e
+um synth de 8 operadores afinal".
+
+14.1 A DECISAO SOBRE FIDELIDADE (leia isso antes de esperar uma lista
+     "oficial" de algum produto Yamaha)
+
+Nem o DX7 (6 operadores) nem o Montage/MODX FM-X (8 operadores, mas uma
+lista de algoritmos proprietaria da Yamaha que eu NAO tenho memorizada
+com confianca suficiente pra reproduzir sem erro, e que so seria
+verificavel pesquisando numa fonte -- exatamente a busca que foi
+interrompida) foram reproduzidos literalmente. Por instrucao explicita
+do usuario ("com as devidas alteracoes"), dx7_algorithms.h contem um
+CONJUNTO PROPRIO de 32 algoritmos, desenhado especificamente pros 8
+operadores deste motor, na mesma TRADICAO organizacional da Yamaha (do
+mais complexo/1-portadora ao mais simples/8-portadoras-paralelas) mas
+SEM pretender ser a lista oficial de nenhum produto especifico. Se
+compatibilidade exata com patches reais de DX7 ou Montage/MODX for
+necessaria no futuro, isso e trabalho ainda nao feito (ver secao 11,
+que ja lista "compatibilidade com sysex do DX7" como pendente -- o
+mesmo vale, com ainda mais incerteza de minha parte, pro FM-X).
+
+14.2 COMO OS 32 SAO ORGANIZADOS
+
+Os 8 operadores sao distribuidos em "cadeias" (chain: sequencia de
+operadores em serie, ops[0]=portadora ate ops.back()=topo, que recebe
+feedback default 0.3) e, pra variedade, alguns tambem usam "forks" (um
+UNICO modulador alimentando 2+ portadoras direto) e "merges" (uma UNICA
+portadora recebendo de 2+ cadeias de modulador SEPARADAS -- o oposto do
+fork). Os primeiros 22 algoritmos cobrem as 22 particoes inteiras
+possiveis de 8 (p(8)=22, de "8" ate "1+1+1+1+1+1+1+1"), do algoritmo 1
+(cadeia unica de 8, mais inarmonico/complexo possivel) ao 22 (8
+portadoras paralelas, aditivo puro). Os 10 finais (23-32) sao variantes
+fork/merge pra dar formas de roteamento que uma particao pura em cadeias
+nao cobre (um modulador afetando varias portadoras ao mesmo tempo, ou
+uma portadora recebendo de fontes independentes).
+
+  struct AlgorithmDef { name, chains, forks, merges }
+      A definicao "crua" de cada algoritmo (indices 0-7). Publica via
+      algorithmTable() -- e o que testAlgorithmPresetsUseEachOperatorExactlyOnce()
+      inspeciona diretamente (nao via a AlgorithmMatrix resultante) pra
+      validar que cada operador aparece exatamente 1 vez por algoritmo.
+
+  applyAlgorithm(VoiceParams& v, int number)
+      1..32. RESETA v.matrix pra AlgorithmMatrix{} e v.op[*].feedback pra
+      0, depois monta as conexoes (chains: mod[ops[i]][ops[i+1]]=1.0;
+      forks: mod[carrier][sharedMod]=1.0 pra cada carrier + cadeia acima
+      do sharedMod; merges: mod[carrier][cadeia[0]]=1.0 pra cada cadeia +
+      empilhamento acima), seta outputMix[portadoras]=1.0 e
+      op[topoDeCadaCadeia].feedback=0.3 (default editavel depois pelo
+      usuario, como qualquer parametro). NAO mexe em waveform/outputLevel/
+      ampEG/fxType/etc dos operadores -- so a TOPOLOGIA.
+
+  algorithmName(number) -> const char*
+      Nome descritivo (ex.: "3 cadeias: 4+3+1", "Fork: 2 portadoras
+      (0,1)<-2<-3(fb); + cadeia 4<-5<-6<-7(fb)").
+
+14.3 DIAGRAMA DE ROTEAMENTO (app/main.cpp, DrawAlgorithmDiagram)
+
+Em vez de desenhar 32 ilustracoes ESTATICAS (uma imagem fixa por preset),
+implementei um renderizador GENERICO que le a AlgorithmMatrix + os
+op[*].feedback AO VIVO e desenha o grafo correspondente -- funciona tanto
+pros 32 presets quanto pra QUALQUER matriz editada a mao na grade 8x8
+numerica (secao 13.5), atualizando a cada frame. Decisao de design
+importante: as 8 caixas ficam em posicoes FIXAS (grade 4x2, sempre
+Op1..Op8 nessa ordem), NAO um layout topologico dinamico -- um layout
+dinamico teria que lidar com grafos CICLICOS (feedback, moduladores
+mutuos) de forma robusta, o que e bem mais complexo e arriscado de
+acertar; posicoes fixas + setas que vao de qualquer caixa pra qualquer
+caixa e uma solucao mais simples e mais dificil de quebrar.
+
+Convencoes visuais: caixa AZUL = portadora (outputMix>0, tambem ganha uma
+linha ate a barra "saida" embaixo); caixa CINZA = so modula, nao vai pro
+output; borda LARANJA + circulo no canto = tem feedback (matrix.mod[i][i]
+!= 0 OU op[i].feedback > 0); linha CINZA fina = modulacao de fase normal;
+linha LARANJA grossa = ring modulation (matrix.ring[i][j]). Usa
+ImGui::GetWindowDrawList() + AddLine/AddRectFilled/AddRect/AddText/
+AddTriangleFilled/AddCircle diretamente (API padrao do ImDrawList, sem
+biblioteca de grafo externa).
+
+Selecionar um algoritmo no combo (32 opcoes, "N: nome") + clicar
+"Aplicar algoritmo" chama applyAlgorithm() na copia de STAGING da parte e
+marca `changed=true` -- assim como qualquer outra edicao na UI, so tem
+efeito apos o recompile() automatico daquele frame (ver secao 13.5).
+
+14.4 O QUE NAO FOI VALIDADO VISUALMENTE
+
+O app compila limpo (sem warnings) e roda sem crashar com essas mudancas
+(confirmado rodando de verdade), e os DADOS dos 32 algoritmos foram
+validados por teste automatizado (secao 8). MAS eu nao consegui tirar um
+screenshot do diagrama especificamente renderizado na tela -- as
+ferramentas de screenshot/automacao de janela disponiveis nesta sessao
+(xdotool, wmctrl ausente) nao conseguiram rolar ou focar a janela do app
+pra capturar a secao do diagrama (que fica abaixo da dobra na janela
+default de 1280x800.. a UI tem bastante coisa por parte). O codigo do
+diagrama usa chamadas padrao e bem documentadas do ImDrawList (as mesmas
+usadas em qualquer app ImGui com desenho customizado), e foi revisado
+com cuidado, mas isso NAO substitui ver renderizado de verdade -- vale
+o usuario conferir visualmente antes de considerar essa parte
+"terminada".
 
 
 ================================================================================
