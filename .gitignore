@@ -1,3 +1,8 @@
 dx7fm/demo
+dx7fm/demo_tsan
+dx7fm/dx7fm_standalone
 dx7fm/output/
+dx7fm/build/
+dx7fm/patches/
+dx7fm/imgui.ini
 main

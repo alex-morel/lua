@@ -92,12 +92,49 @@ dx7fm/
     wav_writer.h    - Escritor de WAV PCM16 estereo/mono, so para os
                       demos (nao faz parte do motor).
   output/           - WAVs gerados pelo demo.cpp (nao versionar; e saida).
+  patches/          - [ADICIONADO em 2026-09-21] Onde o app standalone salva/
+                      carrega patches por padrao (nao versionar; e saida do
+                      usuario, gerada em runtime).
   docs/
     ARQUITETURA.txt - Este arquivo.
+  app/              - [ADICIONADO em 2026-09-21] O APP STANDALONE (audio
+                      real-time + UI). Ver secao 13.
+    main.cpp        - ponto de entrada: init de SDL2/ImGui/ALSA, loop
+                      principal, todos os widgets de UI.
+    alsa_audio.h    - AlsaAudioOut: abre um PCM ALSA em modo playback,
+                      thread dedicada que chama uma callback de render.
+    alsa_midi.h     - AlsaMidiIn: porta ALSA sequencer de entrada, thread
+                      dedicada com poll() (nao leitura bloqueante, pra
+                      poder parar limpo).
+    event_queue.h   - EventQueue + AppEvent: fila thread-safe (mutex) de
+                      eventos de nota/controlador. Ver secao 13 pro porque
+                      disso ser necessario (nem tudo em PartRuntime tem a
+                      garantia de thread-safety que dx7_alloc.h da pro
+                      timbre -- ver secao 7C).
+    keyboard_piano.h- KeyboardPiano: mapeia SDL_Scancode (posicao fisica
+                      da tecla, nao o caractere) pra nota MIDI, tipo
+                      "teclado do PC como piano".
+  third_party/
+    imgui/          - [ADICIONADO em 2026-09-21] Dear ImGui v1.92.9b
+                      VENDORIZADO (arquivos de codigo-fonte commitados no
+                      repo, sem o .git interno do clone original) --
+                      escolhido porque nao existe pacote oficial na
+                      maioria das distros minimais. So os backends SDL2 +
+                      SDLRenderer2 foram mantidos (os outros ~15 backends
+                      -- OpenGL, Vulkan, DX9-12, Metal, GLFW, etc. --
+                      foram removidos pra nao inflar o repo a toa).
+  CMakeLists.txt    - [ADICIONADO em 2026-09-21] Builda os DOIS targets:
+                      `demo` (motor + testes, so precisa de -pthread, sem
+                      dependencia externa) e `dx7fm_standalone` (precisa de
+                      SDL2 e ALSA via pkg-config; se algum dos dois faltar,
+                      o CMake pula esse target com um aviso em vez de falhar
+                      a configuracao inteira -- `demo` sempre builda).
 
-Dependencias: apenas a biblioteca padrao C++ (STL). Nenhuma lib externa
-(inclusive a persistencia de patch usa um JSON escrito a mao, ver
-dx7_patch_io.h, em vez de puxar nlohmann/json ou similar).
+Dependencias do MOTOR (dx7fm/src/): apenas a biblioteca padrao C++ (STL).
+Nenhuma lib externa (inclusive a persistencia de patch usa um JSON escrito
+a mao, ver dx7_patch_io.h, em vez de puxar nlohmann/json ou similar).
+Dependencias do APP STANDALONE (dx7fm/app/): SDL2, ALSA (alsa-lib) e Dear
+ImGui (vendorizado, ver acima) -- ver secao 13.
 Testado com g++ 16.2 (Arch Linux), padrao C++20.
 
 
@@ -125,6 +162,21 @@ ausencia de data race formalmente):
     g++ -std=c++20 -O1 -g -fsanitize=thread -pthread -o demo_tsan src/demo.cpp
     ./demo_tsan
     # deve rodar limpo, sem nenhum "WARNING: ThreadSanitizer: data race"
+
+[ADICIONADO em 2026-09-21] Pra compilar o APP STANDALONE tambem (precisa de
+SDL2 e ALSA -- em distros Arch/derivadas: `pacman -S sdl2-compat alsa-lib`,
+em Debian/Ubuntu: `apt install libsdl2-dev libasound2-dev`), use o CMake
+(builda os dois targets, `demo` e `dx7fm_standalone`, numa tacada so):
+
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build -j$(nproc)
+    ./build/demo               # roda os 33 testes, igual ao g++ direto
+    ./build/dx7fm_standalone   # abre a janela do synth
+
+Se SDL2 e/ou ALSA nao forem encontrados via pkg-config, o CMake AVISA e
+pula so o target dx7fm_standalone -- `demo` continua buildando normalmente
+(nao trava o desenvolvimento do motor em quem nao tem/nao quer as libs de
+audio/UI instaladas).
 
 E cria a pasta output/ com:
     01_simple_fm.wav          - FM de 2 operadores (op1 modula op0), mono
@@ -1371,10 +1423,21 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
      8-a-8 (ou 16-a-16 com AVX512) via instrucoes vetoriais. Isso e uma
      REESCRITA significativa do dx7_engine.h, nao um ajuste incremental.
   2. Integracao com um host de plugin: JUCE (C++) ou nih-plug (Rust,
-     precisaria reescrever) pra VST3/CLAP/AU, incluindo UI.
-  3. UI de edicao (pelo menos uma matriz visual 8x8 + envelopes
-     desenhados) — hoje so existe a API C++, sem nenhuma interface
-     grafica.
+     precisaria reescrever) pra VST3/CLAP/AU. DIFERENTE do app standalone
+     (secao 13) -- um plugin roda DENTRO de uma DAW (Ableton, Reaper,
+     etc.), o standalone e um executavel independente com seu proprio
+     audio/MIDI. Continuam sendo coisas separadas; nao ha planos de
+     compartilhar codigo de UI entre os dois ainda (JUCE/nih-plug tem
+     seus proprios frameworks de UI, nao usariam o Dear ImGui do app/).
+  3. [PARCIALMENTE FEITO em 2026-09-21] UI de edicao: o app standalone
+     (secao 13) ja tem uma UI grafica real (Dear ImGui) com tabelas pros
+     8 operadores, matriz de algoritmo, EGs, LFOs, matriz de modulacao --
+     mas ainda como widgets numericos (sliders/drag floats), NAO como "a
+     matriz visual 8x8 desenhada + envelopes desenhados" que este item
+     original tinha em mente (um diagrama de roteamento gráfico tipo o
+     editor de algoritmos do DX7 real, e curvas de envelope arrastaveis
+     com o mouse). Ver secao 13.6 pra lista completa do que falta nessa
+     frente.
   4. Glissando (portamento em semitons discretos) como alternativa ao
      glide continuo — mencionado como faltante na checklist de
      fidelidade ao DX7 classico.
@@ -1417,9 +1480,148 @@ FALTANDO (nao implementado):
   - Glissando (stepped, discreto — diferente do glide continuo que
     ja existe)
   - Breath controller, foot controller
-  - Armazenamento de patch/sysex, bancos de 32 vozes
+  - [PARCIAL desde 2026-09-21] Armazenamento de patch: JSON proprio existe
+    (dx7_patch_io.h, secao 6B) e o app standalone usa (secao 13). Sysex
+    real do DX7 e bancos de 32 vozes (pra importar patches classicos)
+    continuam nao implementados.
   - Velocity correta no reataque legato do modo Mono (hoje fixa em
     100, ver limitacao 7C/nota em monoGroupNoteOnInternal)
+
+
+--------------------------------------------------------------------------------
+13. O APP STANDALONE (dx7fm/app/)
+--------------------------------------------------------------------------------
+
+[ADICIONADO em 2026-09-21] Aplicativo real-time completo (nao mais so
+demos offline gerando WAV): audio de verdade via ALSA, entrada de notas
+via MIDI (ALSA sequencer) e/ou teclado do computador, e uma UI leve com
+Dear ImGui + SDL2/SDLRenderer2 -- escolhida especificamente por NAO exigir
+GPU/driver OpenGL (SDLRenderer2 cai pra rasterizacao por software se nao
+houver aceleracao), rodando sobre X11 ou XWayland, visando distros Linux
+minimais (ver a pergunta original do usuario que motivou isso).
+
+13.1 ARQUITETURA DE THREADS (por que existe app/event_queue.h)
+
+Tres threads mexem com o Synth ao mesmo tempo:
+  - UI thread (main): desenha a UI, edita synth.part(idx) (a copia de
+    STAGING do timbre) e chama recompile() -- ja e seguro por construcao,
+    ver secao 7 ("THREAD SAFETY").
+  - Audio thread (dentro de AlsaAudioOut): chama synth.renderStereo() um
+    period (256 frames) de cada vez.
+  - MIDI thread (dentro de AlsaMidiIn): recebe eventos ALSA sequencer.
+
+O PROBLEMA: Synth::noteOn/noteOff/pitchBend/modWheel/etc mexem em
+PartRuntime::heldStack/activeSlots/noteToSlot e nos caches de
+bend/modWheel/channelAT -- NENHUM disso e coberto pelo triple-buffer do
+timbre (ver secao 7C, itens (a) e (b) do que ficou de fora). Se a UI
+thread (teclado do PC) E a MIDI thread chamassem synth.noteOn() direto,
+seria uma data race de verdade.
+
+A SOLUCAO (event_queue.h): UI thread e MIDI thread NUNCA chamam
+synth.noteOn/noteOff/etc diretamente -- so EMPILHAM um AppEvent numa
+EventQueue (fila protegida por mutex; a disputa e rara e breve, um dreno
+por period de audio a cada ~5ms, entao nao chega a causar glitch audivel
+na pratica). A AUDIO THREAD, e SO ELA, drena a fila e aplica os eventos
+(applyAppEvent()) LOGO ANTES de renderizar cada period. Isso torna
+Synth::noteOn/noteOff/etc "de fato" single-threaded de novo, sem
+precisar estender o triple-buffer pra cobrir heldStack/activeSlots/etc.
+
+Roteamento por canal MIDI: como PartParams::enabled/midiChannel/
+bendRangeSemis TAMBEM nao sao cobertos pelo triple-buffer, a audio thread
+NAO le synth.part(p).enabled/midiChannel direto (a UI pode estar editando
+ao mesmo tempo) -- em vez disso, le uma copia atomica (PartRoutingCache
+em app/main.cpp: std::atomic<bool>/<int>/<float> por parte), sincronizada
+pela UI thread toda vez que ela muda um desses campos (syncRoutingCache(),
+chamado dentro de DrawPartPanel() quando `changed` e true).
+
+13.2 BACKEND DE AUDIO (app/alsa_audio.h -- AlsaAudioOut)
+
+Abre um PCM ALSA ("default" por padrao, mas o dispositivo e uma string
+configuravel) em SND_PCM_ACCESS_RW_INTERLEAVED, tenta
+SND_PCM_FORMAT_FLOAT_LE primeiro (o motor ja produz float, evita
+converter) e cai pra SND_PCM_FORMAT_S16_LE se o hardware/plugin nao
+suportar float. Period de 256 frames (~5.3ms a 48kHz), buffer de 4
+periods. Uma thread dedicada chama a renderFn (audioRenderCallback) em
+loop, escreve com snd_pcm_writei(), e se der underrun chama
+snd_pcm_recover() (contabilizado em underruns(), mostrado na UI).
+
+13.3 BACKEND DE MIDI (app/alsa_midi.h -- AlsaMidiIn)
+
+Cria uma porta ALSA sequencer de ENTRADA ("dx7fm":"input") que aparece
+pra outros apps/hardware se conectarem (via `aconnect`, `qjackctl`,
+`aconnectgui`, ou automaticamente em hosts que fazem isso). Usa poll()
+com timeout de 200ms em vez de snd_seq_event_input() bloqueante -- e
+assim que a thread consegue notar `running_=false` e sair limpa quando o
+app fecha (ler-e-fechar um fd bloqueado de outra thread nao e
+confiavelmente seguro no ALSA). Traduz NOTEON/NOTEOFF/CONTROLLER(CC1=mod
+wheel, CC64=sustain, CC66=sostenuto, CC123=all notes off)/PITCHBEND/
+CHANPRESS em MidiEvent, repassados por callback (que so empilha na
+EventQueue, ver 13.1).
+
+13.4 TECLADO DO COMPUTADOR COMO PIANO (app/keyboard_piano.h)
+
+Mapeamento classico por SDL_Scancode (posicao FISICA da tecla, nao o
+caractere -- funciona igual em qualquer layout de idioma):
+  A W S E D F T G Y H U J = uma oitava cromatica a partir da nota base
+  K O L P ;               = mais 5 semitons acima
+  Z / X                   = desce/sobe a oitava base
+So a PARTE selecionada na aba da UI (currentPart) recebe notas do
+teclado do PC. Ignora eventos SDL_KEYDOWN com `repeat != 0` (key-repeat
+do SO nao deve re-disparar a nota) e so processa teclado quando
+`!ImGui::GetIO().WantCaptureKeyboard` (senao roubaria teclas de campos de
+texto da UI, tipo o campo de caminho do arquivo de patch).
+
+13.5 UI (app/main.cpp)
+
+Uma janela ImGui unica (sem docking -- vendorizamos a variante nao-
+docking do Dear ImGui) cobrindo a janela SDL inteira, com uma aba por
+parte (A-D) mais uma aba "FX Globais". Por parte: campos de PartParams
+(enabled, canal MIDI, modo de voz, transpose, nivel, pan, bend range, key
+range, unison/glide se aplicavel, vozes reservadas), campo de caminho +
+botoes Salvar/Carregar patch (usa savePartFile/loadPartFile de
+dx7_patch_io.h direto) e botao de panico (all notes off), uma TABELA com
+os 8 operadores (onda, ratio/Hz, fixo, nivel, feedback, tipo de FX,
+FX1), um painel de DETALHE do operador selecionado (todos os campos que
+nao cabem na tabela: fine/detune, FX2, phase distortion, ring mod
+source, rate/velocity/LFO sens, PEG depth, fxEGReleaseWithAmp, key level
+scaling, e os EGs de amplitude e FX), a matriz de algoritmo 8x8 (drag
+float + checkbox de ring por celula) e output mix, o Pitch EG, os 2 LFOs,
+e a matriz de modulacao (8 rotas). QUALQUER edicao nesses widgets marca
+`changed=true`; ao fim do frame, se `changed`, chama synth.recompile()
+UMA vez (nao por widget) e sincroniza o PartRoutingCache.
+
+Depois de CADA edicao (nao so ao trocar a matriz) e necessario esperar o
+proximo recompile() pra ouvir o efeito -- isso e automatico aqui (a UI
+chama recompile() a cada frame com mudanca), mas e o mesmo comportamento
+documentado na secao 7 pra quem usa a API C++ direto.
+
+13.6 LIMITACOES CONHECIDAS DESSA PRIMEIRA VERSAO
+
+  - Sem file dialog nativo: salvar/carregar patch usa um campo de texto
+    pro caminho, nao um seletor de arquivos grafico. Simples de trocar
+    por uma lib de file dialog (ex.: nativefiledialog-extended) depois,
+    mas adicionaria mais uma dependencia externa.
+  - Oversample fixo em 1 (sem anti-aliasing extra) no app standalone --
+    o motor suporta 2x/4x (secao 6, Voice::setOversample), so nao esta
+    exposto na UI ainda. Trocar isso enquanto toca teria a mesma ressalva
+    de "hot-swap de topologia" da secao 6 (nao e sobre o timbre, e sobre
+    a taxa de processamento interna da Voice).
+  - Matriz de algoritmo e mostrada como uma grade de numeros (drag float
+    + checkbox), nao como um diagrama visual de roteamento tipo o editor
+    grafico de algoritmos do DX7 original -- funcional, mas nao e o que
+    a secao 11 (item "UI de edicao") tinha em mente como versao final.
+  - Envelopes (ampEG/fxEG/PEG) sao sliders numericos de rate/level, nao
+    uma curva desenhada interativa (arrastar pontos). Mesma ressalva.
+  - So um dispositivo ALSA fixo ("default") -- sem um seletor de
+    dispositivo de audio na UI ainda (o campo existe no codigo via
+    AlsaAudioOut::start(deviceName, ...), so falta expor).
+  - Nao testado ainda em uma distro minimal de verdade (foi validado
+    rodando localmente com SDL2/ALSA instalados via pacman no
+    EndeavourOS/Arch) -- deveria funcionar em qualquer distro com esses
+    dois pacotes e um servidor X11/XWayland, mas "deveria" nao e "foi
+    testado".
+  - Sem instalador/pacote (.deb/.AppImage/PKGBUILD) -- roda so a partir
+    da arvore de build (./build/dx7fm_standalone).
 
 
 ================================================================================
