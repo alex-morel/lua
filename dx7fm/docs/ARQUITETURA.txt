@@ -80,7 +80,7 @@ dx7fm/
                       voiceParamsToJson/FromJson, partParamsToJson/FromJson
                       e os helpers de arquivo savePatchFile/loadPatchFile,
                       savePartFile/loadPartFile. Ver secao 6B.
-    demo.cpp        - 25 checagens de sanidade em 15 funcoes de teste (nao
+    demo.cpp        - 27 checagens de sanidade em 17 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -104,13 +104,22 @@ Os headers sao "header-only" (tudo dentro de dx7fm namespace, funcoes
 `inline` ou definidas dentro da classe). Nao ha .cpp de implementacao
 separado alem do demo.
 
-Compilar e rodar os testes/demos:
+Compilar e rodar os testes/demos ([ATUALIZADO em 2026-09-21] -pthread agora
+e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
 
-    g++ -std=c++20 -O2 -Wall -Wextra -o demo src/demo.cpp
+    g++ -std=c++20 -O2 -Wall -Wextra -pthread -o demo src/demo.cpp
     ./demo
 
-Isso deve imprimir 25 linhas "[PASS] ..." e no final:
-    == Resultado: 25 passaram, 0 falharam ==
+Isso deve imprimir 27 linhas "[PASS] ..." e no final:
+    == Resultado: 27 passaram, 0 falharam ==
+
+Opcional, pra validar o mecanismo de troca atomica de patch com uma
+ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
+ausencia de data race formalmente):
+
+    g++ -std=c++20 -O1 -g -fsanitize=thread -pthread -o demo_tsan src/demo.cpp
+    ./demo_tsan
+    # deve rodar limpo, sem nenhum "WARNING: ThreadSanitizer: data race"
 
 E cria a pasta output/ com:
     01_simple_fm.wav          - FM de 2 operadores (op1 modula op0), mono
@@ -130,22 +139,27 @@ Para usar o motor em outro programa, basta:
     #include "dx7_engine.h"
     #include "dx7_alloc.h"
 
-    dx7::Synth synth;
+    dx7fm::Synth synth;
     synth.init(48000.0f, 64);           // sample rate, tamanho do pool
-    synth.part(0).voice = meuPatch;     // preenche o patch da parte A
-    synth.recompile(0);                 // OBRIGATORIO apos mudar a matriz!
+    synth.part(0).voice = meuPatch;     // escreve na copia de STAGING da parte A
+    synth.recompile(0);                 // OBRIGATORIO -- publica como patch AO VIVO
     synth.noteOn(0, 60, 100);           // parte, nota MIDI, velocity
     float l, r;
     synth.renderStereo(l, r);           // uma amostra estereo por chamada
     synth.noteOff(0, 60);
 
-IMPORTANTE: `recompile(idx)` precisa ser chamado sempre que
-`part(idx).voice.matrix` for alterada (adicionar/remover conexoes entre
-operadores). Ele recalcula a ordem de avaliacao dos operadores (ver secao
-5, `compileAlgorithm`). Isso e uma operacao O(8!) = 40320, rapida (da ordem
-de microssegundos) mas NAO deve ser chamada a cada amostra — so ao trocar
-de patch/algoritmo. Alterar outros parametros (EG, nivel, ratio, FX) NAO
-precisa de recompile, so a topologia da matriz.
+IMPORTANTE: [ATUALIZADO em 2026-09-21] `recompile(idx)` precisa ser chamado
+sempre que QUALQUER campo de `part(idx).voice` for alterado -- nao so a
+matriz. Isso mudou porque `part(idx)` agora devolve uma copia de STAGING
+(nao a copia que o audio le), como parte do mecanismo de troca atomica de
+patch pra thread safety (ver secao 7). recompile() recalcula a ordem de
+avaliacao dos operadores (ver secao 5, `compileAlgorithm`) e publica o
+patch inteiro (matriz + todo o resto) atomicamente. compileAlgorithm em si
+e O(8!) = 40320, rapida (da ordem de microssegundos), mas chamar
+recompile() tem tambem o custo de copiar um VoiceParams inteiro pro
+snapshot -- ainda assim seguro de chamar em taxa de UI (dezenas de vezes
+por segundo, ex. arrastando um slider), so nao no caminho de audio por
+amostra.
 
 
 --------------------------------------------------------------------------------
@@ -525,6 +539,14 @@ ou um leitor de arquivo preencheria.
       setGlide(enabled, timeSec), setLegatoEnvReuse(reuse) - configuracao
           chamada pelo alocador antes de cada noteOn.
 
+      rebind(patch, compiled) - [ADICIONADO em 2026-09-21] atualiza so os
+          ponteiros patch_/compiled_, SEM chamar noteOn() (nao reseta EG/
+          fase/LFO). Chamada pelo Synth::renderStereo() 1x por amostra
+          pra CADA voz ativa, com o snapshot AO VIVO mais recente daquela
+          parte (ver PartRuntime::live() na secao 7) -- e o que faz uma
+          voz JA soando acompanhar uma edicao de timbre publicada por
+          recompile() enquanto ainda esta tocando. Custo desprezivel.
+
       isActive() -> active_ && tem pelo menos 1 ampEG != idle
       isReleasing() -> bool (setado em noteOff, NUNCA resetado
           explicitamente para false — permanece true ate a voz virar
@@ -688,16 +710,55 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
       de roubar).
 
   struct PartRuntime
-      params (PartParams — o patch e config da parte), compiled
-      (CompiledAlgorithm cacheado, recalculado por recompile()),
-      heldStack (pilha de notas fisicamente pressionadas, em ordem de
-      chegada — usada pro modo Mono/Unison saber pra qual nota "voltar"
-      quando a nota atual solta), activeSlots (quais slots do pool
-      pertencem ao grupo mono/unison atual), noteToSlot (mapa nota->slot,
-      SO usado no modo Poly), sostenutoCaptured (quais notas foram
-      capturadas quando o pedal de sostenuto foi pressionado), bend/
-      modWheel/channelAT (cache do ultimo valor recebido, aplicado a
+      params (PartParams — o patch/config de STAGING; ver abaixo sobre
+      thread safety), heldStack (pilha de notas fisicamente pressionadas,
+      em ordem de chegada — usada pro modo Mono/Unison saber pra qual
+      nota "voltar" quando a nota atual solta), activeSlots (quais slots
+      do pool pertencem ao grupo mono/unison atual), noteToSlot (mapa
+      nota->slot, SO usado no modo Poly), sostenutoCaptured (quais notas
+      foram capturadas quando o pedal de sostenuto foi pressionado),
+      bend/modWheel/channelAT (cache do ultimo valor recebido, aplicado a
       QUALQUER voz nova que essa parte alocar dali em diante).
+
+      [ADICIONADO em 2026-09-21] THREAD SAFETY — troca atomica de patch:
+      snapshots_ (std::array<PatchSnapshot, 3>, ver secao 6B), liveIndex_
+      (std::atomic<int>, qual dos 3 slots o audio thread deve ler AGORA),
+      stagingIndex_ (int comum, so a thread que chama recompile() mexe
+      nele). live() retorna &snapshots_[liveIndex_.load(acquire)].
+
+      O MECANISMO: params.voice e a copia de EDICAO (staging) — e nela que
+      `Synth::part(idx).voice = novoPatch` escreve. O audio thread NUNCA
+      le params.voice diretamente pra tocar; ele so le atraves de live(),
+      que aponta pra um dos 3 snapshots_ publicados. `Synth::recompile(idx)`
+      e o unico jeito de "publicar": copia params.voice + o
+      CompiledAlgorithm recem-calculado (par CASADO, ver PatchSnapshot na
+      secao 6B) pro slot de staging_index_ (que o audio thread garantidamente
+      NAO esta lendo), e SO DEPOIS troca liveIndex_ atomicamente (release).
+      3 slots (nao 2) pra nunca reescrever o slot que ACABOU de deixar de
+      ser live — ele pode ainda estar em leitura numa renderStereo() em
+      andamento noutra thread nesse instante exato.
+
+      Efeito pratico: e seguro chamar `synth.part(idx).voice = X;
+      synth.recompile(idx);` de uma thread de UI/edicao ENQUANTO
+      `synth.renderStereo()` roda continuamente noutra thread (o cenario
+      classico de um plugin de audio) — sem data race. E, como bonus, isso
+      preserva a filosofia de "edicao ao vivo" (secao 10): uma voz JA
+      soando REFLETE a edicao no proximo renderStereo() (via
+      Voice::rebind(), chamado 1x por amostra pra vozes ativas — secao 6),
+      nao so notas novas. Validado por testConcurrentPatchEditNoCrash()
+      (stress test real com std::thread) e, opcionalmente, rodando o build
+      com -fsanitize=thread (ver secao 3) — ambos limpos.
+
+      O QUE NAO ficou coberto por essa mudanca (fora de escopo, ver secao
+      7C): os OUTROS campos de PartParams (transpose, loKey/hiKey,
+      voiceMode, reservedVoices etc.) continuam single-buffer, e os
+      metodos de controlador ao vivo (pitchBend, modWheel, channelAftertouch,
+      polyAftertouch, sustainPedal, sostenutoPedal) continuam escrevendo
+      direto em VoiceControllers de cada voz ativa, sem buffer duplo —
+      essa parte do estado ja era escrita tipicamente pela MESMA thread
+      que despacha eventos MIDI (frequentemente a propria audio thread, ou
+      uma fila ja sincronizada pelo host), entao nao era o alvo do item
+      "editar o TIMBRE a partir da UI" do roteiro (secao 11).
 
   class Synth — API publica:
 
@@ -709,15 +770,23 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           anti-aliasing por oversampling (ver secao 6, Voice::process()).
 
       part(idx) -> PartParams&
-          Acesso de LEITURA/ESCRITA direta ao patch da parte idx (0..3).
-          Editar isso NAO tem efeito imediato em vozes ja tocando (elas
-          guardam ponteiro pro VoiceParams inteiro, entao mudancas de
-          PARAMETRO refletem ao vivo; mas se voce mexer na MATRIZ, e
-          preciso chamar recompile() — ver acima).
+          [COMPORTAMENTO MUDOU em 2026-09-21] Acesso de LEITURA/ESCRITA a
+          copia de STAGING do patch da parte idx (0..3) — NAO e mais a
+          copia que o audio le diretamente (ver PartRuntime, secao 7,
+          "THREAD SAFETY"). Editar part(idx).voice.QUALQUER_CAMPO (nao so
+          a matriz — isso mudou) NAO tem efeito ate `recompile(idx)` ser
+          chamado; a partir dai, SIM, propaga imediatamente pra qualquer
+          voz ja soando (edicao "ao vivo" preservada, secao 10), alem de
+          notas novas.
 
       recompile(idx)
-          Recalcula compiled a partir de part(idx).voice.matrix. Chamar
-          sempre apos editar a matriz.
+          [COMPORTAMENTO MUDOU em 2026-09-21] Recalcula o CompiledAlgorithm
+          a partir de part(idx).voice.matrix E publica o par
+          (voice, compiled) atomicamente como o novo patch AO VIVO daquela
+          parte (ver secao 7, "THREAD SAFETY"). Chamar SEMPRE apos QUALQUER
+          edicao de part(idx).voice, nao so a matriz -- e o unico ponto de
+          publicacao agora. Seguro de chamar de uma thread diferente da
+          que roda renderStereo().
 
       noteOn(part, note, velocity) / noteOff(part, note)
           Filtra por enabled/loKey-hiKey/loVel-hiVel (noteOn apenas).
@@ -931,14 +1000,32 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
     ja resolve a maior parte do problema audivel com custo de implementação
     bem menor.
 
-  - Sem thread safety nenhuma: trocar parametros de PartParams::voice
-    enquanto o audio esta rodando em outra thread e uma DATA RACE em
-    C++ (comportamento indefinido), mesmo que "pareça funcionar" na
-    pratica em single-thread como o demo.cpp. Pra um plugin de
-    verdade, isso precisa de um mecanismo de troca atomica de patch
-    (ex.: double-buffering com ponteiro atomico, ou uma fila
-    lock-free de "patch novo" processada no inicio de cada bloco de
-    audio) — AINDA NAO EXISTE.
+  - [RESOLVIDO em 2026-09-21, escopo: o TIMBRE] Trocar PartParams::voice
+    (o timbre/patch) a partir de outra thread enquanto o audio roda agora
+    E seguro: PartRuntime::snapshots_ (triple buffer) + liveIndex_
+    (std::atomic<int>) publicam o patch atomicamente via
+    Synth::recompile(idx) -- ver secao 7 ("THREAD SAFETY") e secao 6B
+    (PatchSnapshot). Validado com testConcurrentPatchEditNoCrash() (stress
+    test com std::thread) e, opcionalmente, com -fsanitize=thread (ver
+    secao 3) -- ambos limpos, sem race detectada.
+    O QUE FICOU DE FORA (ainda sem garantia formal / ainda nao feito):
+      (a) os OUTROS campos de PartParams (transpose, loKey/hiKey,
+          voiceMode, reservedVoices etc.) continuam SEM buffer duplo --
+          editar esses de outra thread enquanto noteOn()/noteOff() roda
+          na audio thread ainda e uma data race em tese (na pratica,
+          eventos de nota tipicamente ja chegam pela mesma thread/fila
+          sincronizada do host, entao o risco pratico e menor, mas nao
+          esta formalmente coberto);
+      (b) os controladores ao vivo (pitchBend, modWheel, channelAftertouch,
+          polyAftertouch, sustainPedal, sostenutoPedal) continuam
+          escrevendo floats direto em VoiceControllers sem std::atomic --
+          na pratica funciona (escrita/leitura de float alinhado e atomica
+          de fato na esmagadora maioria das plataformas), mas nao e uma
+          garantia do padrao C++;
+      (c) nenhuma fila lock-free de eventos MIDI foi adicionada -- o
+          design assume que noteOn/noteOff/etc. sao chamados pela MESMA
+          thread que chama renderStereo() (tipico em audio, MIDI processado
+          no inicio de cada bloco), nao por uma terceira thread separada.
 
   - CombFilter aloca um buffer de 50ms POR OPERADOR POR VOZ mesmo que
     o operador nunca use FxType::Comb (ver nota em OperatorState na
@@ -1061,6 +1148,27 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
                               carrega de volta com loadPartFile() num
                               PartParams novo, confirma que todos os
                               campos testados sao identicos ao original.
+  testLivePatchEditPropagatesToSoundingVoice() - [ADICIONADO em 2026-09-21]
+                              dispara uma nota, mede RMS, edita
+                              part(0).voice (baixa o outputLevel do op0)
+                              SEM soltar a nota, chama recompile(), mede
+                              RMS de novo -- confirma que a voz ja soando
+                              reflete a edicao NA HORA (RMS cai bem abaixo
+                              do original), provando que o mecanismo de
+                              troca atomica de patch preserva a edicao
+                              "ao vivo" (nao virou um modelo de "so notas
+                              novas veem o patch novo").
+  testConcurrentPatchEditNoCrash() - [ADICIONADO em 2026-09-21] stress
+                              test de verdade com std::thread: uma thread
+                              fica chamando part(0).voice=X; recompile(0);
+                              em loop apertado enquanto a thread principal
+                              renderiza 2s de audio continuamente. Confirma
+                              que nenhuma amostra saiu NaN/Inf. NAO prova
+                              ausencia de data race no sentido formal (pra
+                              isso, ver a build com -fsanitize=thread na
+                              secao 3), mas e evidencia real de estabilidade
+                              sob concorrencia pesada -- e requer -pthread
+                              pra linkar.
   testMultitimbral4Parts()   - dispara uma nota em CADA uma das 4
                               partes simultaneamente, confirma
                               activeVoiceCount() == 4 (todas tocando do
@@ -1070,7 +1178,7 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 25 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 27 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
@@ -1142,19 +1250,26 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
 
   JA FEITO (2026-09-21): aplicar ModDest::OperatorFeedback, decidir/
   implementar noteOff() do fxEG (via campo OperatorParams::fxEGReleaseWithAmp),
-  oversampling anti-aliasing e persistencia de patch em JSON — eram os
-  itens 1, 2, 3 e 4 originais desta lista, ver secao 7C ("RESOLVIDO"/
-  "MITIGADO"), secao 6B (dx7_patch_io.h) e secao 8 (testOperatorFeedback-
+  oversampling anti-aliasing, persistencia de patch em JSON e thread safety
+  pro timbre — eram os itens 1, 2, 3, 4 e 5 originais desta lista, ver
+  secao 7C ("RESOLVIDO"/"MITIGADO"), secao 6B (dx7_patch_io.h), secao 7
+  ("THREAD SAFETY" em PartRuntime) e secao 8 (testOperatorFeedback-
   Modulation, testFxEGReleaseFollowsAmp, testOversamplingReducesAliasing,
-  testPatchJsonRoundTrip, testPatchFileSaveLoad). NOTAS: (1) o
-  oversampling superamostra a VOZ INTEIRA, nao so os operadores com
-  nao-linearidade forte como a ideia original sugeria — mais simples de
-  implementar corretamente, ao custo de mais CPU do que uma versao
-  seletiva teria; (2) a persistencia usa JSON escrito a mao (sem lib
-  externa) em vez de formato binario ou sysex DX7 — o "compilador" de
-  32 algoritmos DX7 -> AlgorithmMatrix pra importar patches classicos
-  continua nao implementado, se for necessario no futuro. Lista
-  renumerada abaixo.
+  testPatchJsonRoundTrip, testPatchFileSaveLoad,
+  testLivePatchEditPropagatesToSoundingVoice, testConcurrentPatchEditNoCrash).
+  NOTAS: (1) o oversampling superamostra a VOZ INTEIRA, nao so os
+  operadores com nao-linearidade forte como a ideia original sugeria —
+  mais simples de implementar corretamente, ao custo de mais CPU do que
+  uma versao seletiva teria; (2) a persistencia usa JSON escrito a mao
+  (sem lib externa) em vez de formato binario ou sysex DX7 — o
+  "compilador" de 32 algoritmos DX7 -> AlgorithmMatrix pra importar
+  patches classicos continua nao implementado; (3) o thread safety cobre
+  especificamente o TIMBRE (PartParams::voice, via triple buffer +
+  std::atomic<int>, validado com um stress test de verdade e
+  opcionalmente com -fsanitize=thread) — os demais campos de PartParams e
+  os controladores ao vivo (bend/mod wheel/aftertouch/pedais) continuam
+  fora do escopo dessa garantia, ver secao 7C pros detalhes exatos do que
+  ficou de fora. Lista renumerada abaixo.
 
   1. Vetorizacao SIMD (AVX2 ou std::simd) com layout SoA (Structure of
      Arrays): hoje o codigo e AoS (Array of Structs, um Voice inteiro
@@ -1163,24 +1278,21 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
      freq[64], etc. como arrays contiguos por operador, processados
      8-a-8 (ou 16-a-16 com AVX512) via instrucoes vetoriais. Isso e uma
      REESCRITA significativa do dx7_engine.h, nao um ajuste incremental.
-  2. Thread safety: mecanismo de troca atomica de patch (double buffer
-     ou fila lock-free) pra permitir editar o timbre a partir da thread
-     de UI enquanto o audio toca em outra thread, sem data race.
-  3. Integracao com um host de plugin: JUCE (C++) ou nih-plug (Rust,
+  2. Integracao com um host de plugin: JUCE (C++) ou nih-plug (Rust,
      precisaria reescrever) pra VST3/CLAP/AU, incluindo UI.
-  4. UI de edicao (pelo menos uma matriz visual 8x8 + envelopes
+  3. UI de edicao (pelo menos uma matriz visual 8x8 + envelopes
      desenhados) — hoje so existe a API C++, sem nenhuma interface
      grafica.
-  5. Efeitos globais (pos-mix): chorus/ensemble, delay, reverb — a
+  4. Efeitos globais (pos-mix): chorus/ensemble, delay, reverb — a
      conversa original ja mapeou quais combinam melhor com FM (chorus
      pra sinos/eletric piano, reverb de placa, etc.) mas nada disso
      foi implementado ainda, so o FX POR OPERADOR (dentro da voz).
-  6. Glissando (portamento em semitons discretos) como alternativa ao
+  5. Glissando (portamento em semitons discretos) como alternativa ao
      glide continuo — mencionado como faltante na checklist de
      fidelidade ao DX7 classico.
-  7. Breath controller / foot controller como fontes adicionais de
+  6. Breath controller / foot controller como fontes adicionais de
      ModSource, se for importante pra fidelidade historica.
-  8. Trocar egRateToSpeed()/egLevelToAmplitude() pelas tabelas reais do
+  7. Trocar egRateToSpeed()/egLevelToAmplitude() pelas tabelas reais do
      ROM do DX7 (documentadas em projetos como Dexed/msfa), se
      fidelidade sonora exata ao hardware original for prioridade sobre
      a aproximacao atual.

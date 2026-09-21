@@ -2,6 +2,8 @@
 #include "dx7_params.h"
 #include "dx7_engine.h"
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
@@ -22,8 +24,31 @@ struct VoiceSlot {
 };
 
 struct PartRuntime {
+    // params.voice e a copia de STAGING: Synth::part(idx) devolve referencia
+    // pra ela, entao editar synth.part(idx).voice.X so afeta o audio depois
+    // que Synth::recompile(idx) publicar um PatchSnapshot novo (ver abaixo).
+    // Os demais campos de PartParams (transpose, loKey/hiKey, voiceMode etc.)
+    // continuam single-buffer, sem essa indirecao -- nao sao "o timbre" que
+    // o item de thread-safety do roteiro (secao 11) pedia pra proteger.
     PartParams params;
-    CompiledAlgorithm compiled;
+
+    // [ADICIONADO em 2026-09-21] Triple buffer + indice atomico: mecanismo
+    // de troca atomica de patch (o item "thread safety" do roteiro). O
+    // audio thread SO le snapshots_[liveIndex_] (via live()), nunca o slot
+    // de staging, entao editar params.voice de outra thread nao e uma data
+    // race com o audio -- desde que quem edita va SEMPRE por
+    // Synth::part(idx) + Synth::recompile(idx), nunca escrevendo direto
+    // num snapshot. 3 slots (nao 2) pra nunca reescrever o slot que ACABOU
+    // de ser live (poderia ainda estar em leitura numa renderStereo() em
+    // andamento na outra thread).
+    std::array<PatchSnapshot, 3> snapshots_{};
+    std::atomic<int> liveIndex_{0};
+    int stagingIndex_ = 1;
+
+    const PatchSnapshot* live() const {
+        return &snapshots_[static_cast<size_t>(liveIndex_.load(std::memory_order_acquire))];
+    }
+
     std::vector<int> heldStack;             // notas fisicas pressionadas, ordem de chegada
     std::vector<int> activeSlots;           // slots do grupo mono/unison atual
     std::unordered_map<int, int> noteToSlot;// so usado no modo Poly
@@ -49,10 +74,26 @@ public:
         for (int p = 0; p < kNumParts; ++p) recompile(p);
     }
 
+    // Referencia de STAGING: editar campos aqui (inclusive .voice, o timbre)
+    // so afeta a reproducao apos o proximo recompile(idx). Seguro de chamar
+    // de uma thread de UI/edicao diferente da que roda renderStereo(), desde
+    // que a UNICA forma de "publicar" a edicao seja via recompile(idx).
     PartParams& part(int idx) { return parts_[idx].params; }
 
+    // Publica params.voice (staging) como o novo patch AO VIVO: recompila o
+    // algoritmo, escreve o par (voice, compiled) casado num slot de buffer
+    // que o audio thread NAO esta lendo, e so entao troca o indice atomico
+    // -- ver PartRuntime acima. OBRIGATORIO apos qualquer edicao de
+    // part(idx).voice (matriz OU qualquer outro parametro do timbre), nao
+    // so mudancas de topologia. Vozes JA soando veem o novo patch no proximo
+    // renderStereo() (Synth::rebind ao vivo), preservando a edicao "ao vivo"
+    // (ver ARQUITETURA.txt secao 10) sem data race.
     void recompile(int idx) {
-        parts_[idx].compiled = compileAlgorithm(parts_[idx].params.voice.matrix);
+        auto& pr = parts_[idx];
+        int newIdx = pr.stagingIndex_;
+        pr.snapshots_[static_cast<size_t>(newIdx)] = makeSnapshot(pr.params.voice);
+        int oldLive = pr.liveIndex_.exchange(newIdx, std::memory_order_acq_rel);
+        pr.stagingIndex_ = 3 - newIdx - oldLive; // o terceiro indice (0+1+2=3)
     }
 
     void noteOn(int part, int note, int velocity) {
@@ -147,9 +188,17 @@ public:
     void renderStereo(float& outL, float& outR) {
         outL = 0.0f;
         outR = 0.0f;
+
+        // 1 load atomico (acquire) por parte, nao por voz -- barato mesmo
+        // com muitas vozes ativas da mesma parte.
+        const PatchSnapshot* live[kNumParts];
+        for (int p = 0; p < kNumParts; ++p) live[p] = parts_[p].live();
+
         for (auto& s : slots_) {
             if (s.ownerPart < 0 || !s.voice.isActive()) continue;
             auto& pr = parts_[s.ownerPart];
+            const PatchSnapshot* snap = live[s.ownerPart];
+            s.voice.rebind(&snap->voice, &snap->compiled); // "ao vivo": pega qualquer recompile() publicado ate agora
             float sample = s.voice.process();
             float pan = std::clamp(pr.params.pan + s.subPan, -1.0f, 1.0f);
             float gL = 1.0f - std::max(0.0f, pan);
@@ -226,7 +275,8 @@ private:
         s.physicallyHeld = true;
         s.sustainHeld = false;
         s.triggerCounter = ++triggerCounter_;
-        s.voice.noteOn(&pr.params.voice, &pr.compiled, soundingNote, velocity, extraDetuneCents, legato);
+        const PatchSnapshot* snap = pr.live(); // notas NOVAS sempre pegam o patch AO VIVO mais recente
+        s.voice.noteOn(&snap->voice, &snap->compiled, soundingNote, velocity, extraDetuneCents, legato);
         s.voice.controllers().pitchBendSemis = pr.bend;
         s.voice.controllers().modWheel01 = pr.modWheel;
         s.voice.controllers().channelAT01 = pr.channelAT;

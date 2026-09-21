@@ -6,9 +6,12 @@
 #include "wav_writer.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <random>
+#include <thread>
 #include <vector>
 
 using namespace dx7fm;
@@ -466,6 +469,80 @@ static void testPatchFileSaveLoad() {
           "loadPartFile le de volta exatamente o que foi salvo");
 }
 
+static void testLivePatchEditPropagatesToSoundingVoice() {
+    Synth synth;
+    synth.init(48000.0, 4);
+    synth.part(0).voice = makeSimpleFmPatch();
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100);
+
+    std::vector<float> before;
+    for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); before.push_back((l + r) * 0.5f); }
+    float rmsBefore = computeRms(before, 0, before.size());
+
+    // edita o timbre AO VIVO, com a voz ja soando, sem noteOff/noteOn novo --
+    // exatamente o cenario que o mecanismo de troca atomica de patch precisa
+    // preservar (ver PartRuntime::live()/Synth::recompile() em dx7_alloc.h).
+    VoiceParams edited = synth.part(0).voice;
+    edited.op[0].outputLevel = 20;
+    synth.part(0).voice = edited;
+    synth.recompile(0);
+
+    std::vector<float> after;
+    for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); after.push_back((l + r) * 0.5f); }
+    float rmsAfter = computeRms(after, 0, after.size());
+
+    std::printf("  (RMS antes da edicao ao vivo=%.5f, depois=%.5f)\n", rmsBefore, rmsAfter);
+    check(rmsAfter < rmsBefore * 0.5f,
+          "editar part(idx).voice + recompile() com a voz ja soando muda o timbre na hora (edicao ao vivo preservada)");
+}
+
+static void testConcurrentPatchEditNoCrash() {
+    // Stress test real de concorrencia: uma thread "UI" fica editando o
+    // patch (part().voice = X; recompile();) sem parar, enquanto a thread
+    // principal renderiza audio continuamente, como um host faria com
+    // audio numa thread e edicao de parametro noutra. Nao prova ausencia
+    // de data race no sentido formal (pra isso, rodar com -fsanitize=thread),
+    // mas confirma que 2s de audio sob edicao concorrente pesada nao produz
+    // NaN/Inf nem crasha.
+    Synth synth;
+    synth.init(48000.0, 8);
+    synth.part(0).voice = makeSimpleFmPatch();
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100);
+
+    std::atomic<bool> stop{false};
+    std::atomic<bool> anyNonFinite{false};
+    std::atomic<long> editCount{0};
+
+    std::thread writer([&]() {
+        std::mt19937 rng(12345);
+        std::uniform_int_distribution<int> distLevel(0, 99);
+        std::uniform_real_distribution<float> distRatio(0.5f, 8.0f);
+        while (!stop.load(std::memory_order_relaxed)) {
+            VoiceParams v = synth.part(0).voice; // parte da ultima staging escrita por esta mesma thread
+            v.op[0].outputLevel = static_cast<uint8_t>(distLevel(rng));
+            v.op[1].coarseRatio = distRatio(rng);
+            v.matrix.mod[0][1] = distRatio(rng) / 8.0f;
+            synth.part(0).voice = v;
+            synth.recompile(0);
+            editCount.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    for (int i = 0; i < 48000 * 2; ++i) {
+        float l, r;
+        synth.renderStereo(l, r);
+        if (!std::isfinite(l) || !std::isfinite(r)) anyNonFinite.store(true, std::memory_order_relaxed);
+    }
+    stop.store(true, std::memory_order_relaxed);
+    writer.join();
+
+    std::printf("  (%ld edicoes de patch concorrentes durante 2s de audio)\n", editCount.load());
+    check(!anyNonFinite.load(),
+          "2s de audio com outra thread editando o patch sem parar: sem NaN/Inf (nenhuma corrupcao observada)");
+}
+
 static void testMultitimbral4Parts() {
     Synth synth;
     synth.init(48000.0, 64);
@@ -513,6 +590,8 @@ int main() {
     testOversamplingReducesAliasing();
     testPatchJsonRoundTrip();
     testPatchFileSaveLoad();
+    testLivePatchEditPropagatesToSoundingVoice();
+    testConcurrentPatchEditNoCrash();
     testMultitimbral4Parts();
     testPolyphonyCap();
 

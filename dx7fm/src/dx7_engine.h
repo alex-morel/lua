@@ -59,6 +59,19 @@ inline CompiledAlgorithm compileAlgorithm(const AlgorithmMatrix& m) {
     return result;
 }
 
+// [ADICIONADO em 2026-09-21] Par casado (VoiceParams, CompiledAlgorithm):
+// o compilado SEMPRE deve corresponder a matrix do voice que o acompanha
+// (compileAlgorithm deriva um do outro). Publicar os dois juntos, de uma
+// vez, e a base do mecanismo de troca atomica de patch em dx7_alloc.h
+// (thread safety) -- ver PartRuntime::live()/recompile().
+struct PatchSnapshot {
+    VoiceParams voice;
+    CompiledAlgorithm compiled;
+};
+inline PatchSnapshot makeSnapshot(const VoiceParams& v) {
+    return PatchSnapshot{v, compileAlgorithm(v.matrix)};
+}
+
 struct OperatorState {
     double phase = 0.0;
     SegmentEG ampEG;
@@ -162,6 +175,16 @@ public:
     float debugCurrentHz() const { return currentHz_; }
     bool debugFxEGIdle(int opIndex) const { return ops_[opIndex].fxEG.isIdle(); }
     VoiceControllers& controllers() { return controllers_; }
+
+    // [ADICIONADO em 2026-09-21] Atualiza os ponteiros de patch/compiled
+    // SEM disparar noteOn() (nao reseta EGs/fase/LFOs). Chamado pelo Synth
+    // a CADA amostra, pra vozes ja soando acompanharem "ao vivo" edicoes
+    // de timbre publicadas via recompile() -- ver PartRuntime::live() em
+    // dx7_alloc.h. Custo desprezivel (2 escritas de ponteiro).
+    void rebind(const VoiceParams* patch, const CompiledAlgorithm* compiled) {
+        patch_ = patch;
+        compiled_ = compiled;
+    }
 
     // Uma amostra na taxa BASE (nao superamostrada). Se oversampleFactor_>1,
     // roda processOneSample() internamente a taxa superamostrada e decima
