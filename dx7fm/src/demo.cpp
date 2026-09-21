@@ -652,6 +652,68 @@ static void testReverbAddsDecayTail() {
     check(tailWet > tailDry + 0.01f, "com reverb ligado, sobra uma cauda de decaimento mensuravel na mesma janela");
 }
 
+static void testAfmWaveformsAreBoundedAndDistinct() {
+    // As 8 formas de onda do motor AFM (Sine + as 7 novas). Renderiza cada
+    // uma isoladamente (op0, sem modulacao) e confirma: fica dentro de
+    // -1..1 (nenhum overshoot de retificacao/dobra de fase) e produz um
+    // sinal MENSURAVELMENTE diferente das outras (nao e so um alias
+    // silencioso de outra forma de onda ja existente).
+    static const Waveform kWaves[] = {
+        Waveform::Sine, Waveform::HalfSine, Waveform::AbsSine, Waveform::QuarterSine,
+        Waveform::AlternatingSine, Waveform::CamelSine, Waveform::SquaredSine, Waveform::LogSaw,
+    };
+    static const char* kNames[] = {
+        "Sine", "HalfSine", "AbsSine", "QuarterSine",
+        "AlternatingSine", "CamelSine", "SquaredSine", "LogSaw",
+    };
+    constexpr int kCount = 8;
+
+    std::vector<std::vector<float>> renders(kCount);
+    bool allBounded = true;
+
+    for (int w = 0; w < kCount; ++w) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v;
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f;
+        v.op[0].waveform = kWaves[w];
+        v.op[0].outputLevel = 99;
+        for (int i = 1; i < kNumOps; ++i) {
+            v.op[i].ampEG.level[0] = 0; v.op[i].ampEG.level[1] = 0;
+            v.op[i].ampEG.level[2] = 0; v.op[i].ampEG.level[3] = 0;
+        }
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, 60, 100);
+
+        auto& buf = renders[w];
+        buf.reserve(2400);
+        for (int i = 0; i < 2400; ++i) {
+            float l, r;
+            synth.renderStereo(l, r);
+            float m = (l + r) * 0.5f;
+            if (m < -1.0001f || m > 1.0001f) allBounded = false;
+            buf.push_back(m);
+        }
+    }
+    check(allBounded, "todas as 8 formas de onda AFM ficam dentro de -1..1 (sem overshoot)");
+
+    bool allDistinct = true;
+    for (int a = 0; a < kCount && allDistinct; ++a) {
+        for (int b = a + 1; b < kCount; ++b) {
+            double diff = 0.0;
+            for (size_t i = 0; i < renders[a].size(); ++i) diff += std::abs(renders[a][i] - renders[b][i]);
+            diff /= static_cast<double>(renders[a].size());
+            if (diff < 0.02) {
+                std::printf("  (%s vs %s: diferenca media = %.5f -- parecidas demais)\n", kNames[a], kNames[b], diff);
+                allDistinct = false;
+            }
+        }
+    }
+    check(allDistinct, "as 8 formas de onda AFM sao mutuamente distintas (nenhum par quase identico)");
+}
+
 static void testMultitimbral4Parts() {
     Synth synth;
     synth.init(48000.0, 64);
@@ -704,6 +766,7 @@ int main() {
     testChorusChangesStereoImage();
     testDelayProducesEchoAtExpectedTime();
     testReverbAddsDecayTail();
+    testAfmWaveformsAreBoundedAndDistinct();
     testMultitimbral4Parts();
     testPolyphonyCap();
 

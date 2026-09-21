@@ -18,7 +18,18 @@ struct PEGParams {
     float rangeOctaves = 4.0f;
 };
 
-enum class Waveform : uint8_t { Sine, Triangle, Saw, Square, Noise };
+// Sine..Noise: formas de onda "classicas" ja existentes. HalfSine..LogSaw:
+// [ADICIONADO em 2026-09-21] reconstrucao propria das 8 formas de onda do
+// motor AFM da Yamaha SY77/TX81Z (Sine e a primeira das 8; as outras 7 sao
+// as extras aqui) -- ver ARQUITETURA.txt secao 5 pro disclaimer completo:
+// NAO sao extraidas da ROM real, sao uma aproximacao matematica baseada
+// nas descricoes publicamente conhecidas dessas formas (seno cortado,
+// retificado, etc.), no mesmo espirito de egRateToSpeed()/
+// egLevelToAmplitude() (aproximacao propria, nao a tabela exata do hardware).
+enum class Waveform : uint8_t {
+    Sine, Triangle, Saw, Square, Noise,
+    HalfSine, AbsSine, QuarterSine, AlternatingSine, CamelSine, SquaredSine, LogSaw
+};
 
 enum class FxType : uint8_t {
     Bypass, LowPass, BandPass, HighPass, RingMod, Saturate, Crush, FreqShift, Comb

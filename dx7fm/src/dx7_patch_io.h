@@ -211,19 +211,33 @@ private:
 
 inline const char* waveformName(Waveform w) {
     switch (w) {
-        case Waveform::Sine:     return "Sine";
-        case Waveform::Triangle: return "Triangle";
-        case Waveform::Saw:      return "Saw";
-        case Waveform::Square:   return "Square";
-        case Waveform::Noise:    return "Noise";
+        case Waveform::Sine:            return "Sine";
+        case Waveform::Triangle:        return "Triangle";
+        case Waveform::Saw:             return "Saw";
+        case Waveform::Square:          return "Square";
+        case Waveform::Noise:           return "Noise";
+        case Waveform::HalfSine:        return "HalfSine";
+        case Waveform::AbsSine:         return "AbsSine";
+        case Waveform::QuarterSine:     return "QuarterSine";
+        case Waveform::AlternatingSine: return "AlternatingSine";
+        case Waveform::CamelSine:       return "CamelSine";
+        case Waveform::SquaredSine:     return "SquaredSine";
+        case Waveform::LogSaw:          return "LogSaw";
     }
     return "Sine";
 }
 inline Waveform waveformFromName(const std::string& s) {
-    if (s == "Triangle") return Waveform::Triangle;
-    if (s == "Saw")      return Waveform::Saw;
-    if (s == "Square")   return Waveform::Square;
-    if (s == "Noise")    return Waveform::Noise;
+    if (s == "Triangle")        return Waveform::Triangle;
+    if (s == "Saw")             return Waveform::Saw;
+    if (s == "Square")          return Waveform::Square;
+    if (s == "Noise")           return Waveform::Noise;
+    if (s == "HalfSine")        return Waveform::HalfSine;
+    if (s == "AbsSine")         return Waveform::AbsSine;
+    if (s == "QuarterSine")     return Waveform::QuarterSine;
+    if (s == "AlternatingSine") return Waveform::AlternatingSine;
+    if (s == "CamelSine")       return Waveform::CamelSine;
+    if (s == "SquaredSine")     return Waveform::SquaredSine;
+    if (s == "LogSaw")          return Waveform::LogSaw;
     return Waveform::Sine;
 }
 

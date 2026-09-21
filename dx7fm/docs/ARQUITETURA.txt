@@ -85,7 +85,7 @@ dx7fm/
                       Freeverb simplificado). Blocos genericos como
                       dx7_dsp.h, mas operam em pares de amostra ESTEREO
                       (a soma das 4 partes), nao por operador. Ver secao 7D.
-    demo.cpp        - 33 checagens de sanidade em 20 funcoes de teste (nao
+    demo.cpp        - 35 checagens de sanidade em 21 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -152,8 +152,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     g++ -std=c++20 -O2 -Wall -Wextra -pthread -o demo src/demo.cpp
     ./demo
 
-Isso deve imprimir 33 linhas "[PASS] ..." e no final:
-    == Resultado: 33 passaram, 0 falharam ==
+Isso deve imprimir 35 linhas "[PASS] ..." e no final:
+    == Resultado: 35 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -245,8 +245,33 @@ ou um leitor de arquivo preencheria.
       centro (sem desvio), 0 = -rangeOctaves oitavas, 99 = quase
       +rangeOctaves oitavas. rangeOctaves default = 4.0.
 
-  enum Waveform { Sine, Triangle, Saw, Square, Noise }
+  enum Waveform { Sine, Triangle, Saw, Square, Noise,
+                  HalfSine, AbsSine, QuarterSine, AlternatingSine,
+                  CamelSine, SquaredSine, LogSaw }
       Forma de onda do oscilador de cada operador (DX7 original: so Sine).
+      [ADICIONADO em 2026-09-21] As ultimas 7 (HalfSine..LogSaw) sao uma
+      reconstrucao PROPRIA das 8 formas de onda do motor AFM da Yamaha
+      SY77/TX81Z (Sine conta como a 1a das 8; pedido explicito do
+      usuario). IMPORTANTE: nao sao extraidas da ROM real do hardware --
+      sao aproximacoes matematicas baseadas nas descricoes publicamente
+      conhecidas desses formatos (seno cortado ao meio, retificado,
+      dobrado em fase, etc.), no MESMO espirito de aproximacao proprio de
+      egRateToSpeed()/egLevelToAmplitude() (secao 5). Se fidelidade
+      bit-exata ao hardware real for importante, isso precisaria ser
+      verificado/ajustado contra uma referencia de verdade (datasheet do
+      chip OPZ/YM2414, uma ROM dump, ou um emulador de referencia como o
+      usado no MAME) -- nao foi feito aqui. Formulas exatas em
+      dx7_dsp.h (afmHalfSine(), afmAbsSine(), etc.), resumo:
+        HalfSine        - so a metade positiva do seno; silencio na outra metade
+        AbsSine         - |seno| (retificacao de onda completa, 2 "corcovas" positivas por ciclo)
+        QuarterSine     - 2 corcovas RAPIDAS (taxa dobrada) na 1a metade, silencio na 2a
+        AlternatingSine - seno em taxa dobrada (alterna +,-,+,- dentro de 1 ciclo do operador)
+        CamelSine       - 2 corcovas positivas SEPARADAS por silencio (nao se tocam como no AbsSine)
+        SquaredSine     - s*|s|: mantem os picos, "espreme" a regiao central pro zero (mais ressonante/pontudo)
+        LogSaw          - dente-de-serra com curvatura exponencial em vez de rampa linear
+      Testado em testAfmWaveformsAreBoundedAndDistinct() (demo.cpp secao 8):
+      confirma que todas ficam dentro de -1..1 e sao mutuamente distintas
+      (nenhum par produz sinais quase identicos).
 
   enum FxType { Bypass, LowPass, BandPass, HighPass, RingMod, Saturate,
                 Crush, FreqShift, Comb }
@@ -437,9 +462,29 @@ ou um leitor de arquivo preencheria.
   oscWave(phase01, Waveform, rng, dist) -> -1..1
       Osciladores NAO SAO BAND-LIMITED (sem anti-aliasing proprio) — Saw
       e Square vao gerar aliasing em frequencias altas se tocados sem
-      oversampling. Isso e uma decisao consciente: o oversampling fica
-      para depois (ver secao 8), e o motor atual roda na taxa de amostra
-      nativa.
+      oversampling (mitigado, nao eliminado, pelo oversampling opcional
+      2x/4x da secao 11/Voice::setOversample -- ver secao 7C). As 7 formas
+      de onda AFM (HalfSine..LogSaw, ver secao 4) tambem nao sao
+      band-limited -- pelo contrario, algumas (QuarterSine, AlternatingSine)
+      tem MAIS conteudo harmonico de alta frequencia que um seno puro
+      (taxa de fase dobrada internamente), entao aliasing nelas e tao ou
+      mais provavel que no Saw/Square em notas agudas; o mesmo
+      oversampling 2x/4x ajuda igualmente aqui.
+
+  afmHalfSine/afmAbsSine/afmQuarterSine/afmAlternatingSine/afmCamelSine/
+  afmSquaredSine/afmLogSaw(phase01) -> -1..1
+      [ADICIONADAS em 2026-09-21] As 7 formas de onda extras do motor AFM
+      (SY77/TX81Z), chamadas de dentro de oscWave(). Formulas (p = phase01
+      em 0..1, s = sin(2*pi*p)):
+        afmHalfSine        = s se p<0.5, senao 0
+        afmAbsSine         = |s|
+        afmQuarterSine     = |sin(2*(2*pi*p))| se p<0.5, senao 0
+        afmAlternatingSine = sin(2*(2*pi*p))
+        afmCamelSine       = |sin(2*(2*pi*p))| se p<0.25 OU (0.5<=p<0.75), senao 0
+        afmSquaredSine     = s * |s|
+        afmLogSaw          = rampa exponencial (k=4) normalizada pra -1..1
+      Ver secao 4 (enum Waveform) pro disclaimer completo sobre isso ser
+      uma aproximacao propria, nao extraida da ROM real da SY77/TX81Z.
 
   phaseDistort(phase01, amount) -> phase01 deformado
       Implementacao simples estilo Casio CZ: acelera/desacelera a
@@ -1306,6 +1351,16 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               reverb -- confirma que sem reverb o sinal ja
                               morreu (RMS~0), e com reverb sobra uma cauda
                               de decaimento mensuravel na mesma janela.
+  testAfmWaveformsAreBoundedAndDistinct() - [ADICIONADO em 2026-09-21]
+                              renderiza cada uma das 8 formas de onda AFM
+                              (Sine + as 7 novas) isoladamente (op0 puro,
+                              sem modulacao), confirma que TODAS ficam
+                              dentro de -1..1 (sem overshoot de
+                              retificacao/dobra de fase) e que TODOS os
+                              pares sao mutuamente distintos (diferenca
+                              media amostra-a-amostra >= 0.02 -- nenhuma
+                              forma "colapsa" acidentalmente em outra ja
+                              existente).
   testMultitimbral4Parts()   - dispara uma nota em CADA uma das 4
                               partes simultaneamente, confirma
                               activeVoiceCount() == 4 (todas tocando do
@@ -1315,7 +1370,7 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 33 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 35 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
@@ -1473,6 +1528,11 @@ ALEM DO DX7 CLASSICO (extensoes deliberadas):
   - 2 LFOs por VOZ (DX7 real: 1 LFO GLOBAL compartilhado por todas as
     vozes, nao por-voz)
   - Sostenuto (DX7 nao tem)
+  - [ADICIONADO em 2026-09-21] 7 formas de onda extras por operador
+    (HalfSine, AbsSine, QuarterSine, AlternatingSine, CamelSine,
+    SquaredSine, LogSaw), inspiradas no motor AFM da SY77/TX81Z, que ja
+    era ele mesmo uma extensao Yamaha POSTERIOR ao DX7 original (DX7:
+    so Sine). Ver secao 4.
 
 FALTANDO (nao implementado):
   - Feedback restrito a 1 operador por algoritmo (aqui e livre em
@@ -1580,8 +1640,10 @@ parte (A-D) mais uma aba "FX Globais". Por parte: campos de PartParams
 range, unison/glide se aplicavel, vozes reservadas), campo de caminho +
 botoes Salvar/Carregar patch (usa savePartFile/loadPartFile de
 dx7_patch_io.h direto) e botao de panico (all notes off), uma TABELA com
-os 8 operadores (onda, ratio/Hz, fixo, nivel, feedback, tipo de FX,
-FX1), um painel de DETALHE do operador selecionado (todos os campos que
+os 8 operadores (onda -- combo com as 12 opcoes de Waveform, incluindo as
+7 formas AFM da SY77/TX81Z adicionadas em 2026-09-21, ver secao 4 --,
+ratio/Hz, fixo, nivel, feedback, tipo de FX, FX1), um painel de DETALHE
+do operador selecionado (todos os campos que
 nao cabem na tabela: fine/detune, FX2, phase distortion, ring mod
 source, rate/velocity/LFO sens, PEG depth, fxEGReleaseWithAmp, key level
 scaling, e os EGs de amplitude e FX), a matriz de algoritmo 8x8 (drag

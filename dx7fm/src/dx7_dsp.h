@@ -128,14 +128,61 @@ private:
 
 // Osciladores NAO sao band-limited: Saw/Square geram aliasing em frequencias
 // altas sem oversampling (decisao consciente, ver ARQUITETURA.txt secao 8).
+// [ADICIONADO em 2026-09-21] Reconstrucao propria das 7 formas de onda
+// extras do motor AFM da Yamaha SY77/TX81Z (a 8a, Sine, ja existia). Todas
+// derivadas de sin(2*pi*phase) por retificacao/corte/dobra de fase -- a
+// MESMA familia de tecnicas que o hardware real usa (manipular o indice de
+// fase e/ou o sinal antes de ler a tabela de seno), mas os cortes exatos
+// abaixo sao uma aproximacao PROPRIA, nao extraida da ROM real (nao tenho
+// as tabelas bit-exatas da SY77/TX81Z) -- mesmo espirito de
+// egRateToSpeed()/egLevelToAmplitude(). Ver ARQUITETURA.txt secao 5.
+inline float afmHalfSine(float p) {
+    return p < 0.5f ? std::sin(p * kTwoPi) : 0.0f;
+}
+inline float afmAbsSine(float p) {
+    return std::fabs(std::sin(p * kTwoPi));
+}
+inline float afmQuarterSine(float p) {
+    // 2 "bicos" rapidos (taxa dobrada) comprimidos na primeira metade, silencio na segunda
+    return p < 0.5f ? std::fabs(std::sin(p * 2.0f * kTwoPi)) : 0.0f;
+}
+inline float afmAlternatingSine(float p) {
+    // seno em taxa dobrada: alterna +,-,+,- dentro de UM ciclo do operador
+    return std::sin(p * 2.0f * kTwoPi);
+}
+inline float afmCamelSine(float p) {
+    // 2 corcovas positivas separadas por silencio (em vez de se tocarem
+    // suavemente como no AbsSine) -- daí o nome "camelo"
+    bool inHump = (p < 0.25f) || (p >= 0.5f && p < 0.75f);
+    return inHump ? std::fabs(std::sin(p * 2.0f * kTwoPi)) : 0.0f;
+}
+inline float afmSquaredSine(float p) {
+    // s*|s|: "espreme" a regiao central pro zero mantendo os picos, dando
+    // um carater mais "ressonante/pontudo" que o seno puro
+    float s = std::sin(p * kTwoPi);
+    return s * std::fabs(s);
+}
+inline float afmLogSaw(float p) {
+    // dente-de-serra com curvatura exponencial em vez de rampa linear
+    constexpr float k = 4.0f;
+    return 2.0f * (std::exp(k * p) - 1.0f) / (std::exp(k) - 1.0f) - 1.0f;
+}
+
 inline float oscWave(float phase01, Waveform wf, std::mt19937& rng,
                       std::uniform_real_distribution<float>& dist) {
     switch (wf) {
-        case Waveform::Sine:     return std::sin(phase01 * kTwoPi);
-        case Waveform::Triangle: return phase01 < 0.5f ? (4.0f * phase01 - 1.0f) : (3.0f - 4.0f * phase01);
-        case Waveform::Saw:      return 2.0f * phase01 - 1.0f;
-        case Waveform::Square:   return phase01 < 0.5f ? 1.0f : -1.0f;
-        case Waveform::Noise:    return dist(rng);
+        case Waveform::Sine:            return std::sin(phase01 * kTwoPi);
+        case Waveform::Triangle:        return phase01 < 0.5f ? (4.0f * phase01 - 1.0f) : (3.0f - 4.0f * phase01);
+        case Waveform::Saw:             return 2.0f * phase01 - 1.0f;
+        case Waveform::Square:          return phase01 < 0.5f ? 1.0f : -1.0f;
+        case Waveform::Noise:           return dist(rng);
+        case Waveform::HalfSine:        return afmHalfSine(phase01);
+        case Waveform::AbsSine:         return afmAbsSine(phase01);
+        case Waveform::QuarterSine:     return afmQuarterSine(phase01);
+        case Waveform::AlternatingSine: return afmAlternatingSine(phase01);
+        case Waveform::CamelSine:       return afmCamelSine(phase01);
+        case Waveform::SquaredSine:     return afmSquaredSine(phase01);
+        case Waveform::LogSaw:          return afmLogSaw(phase01);
     }
     return 0.0f;
 }

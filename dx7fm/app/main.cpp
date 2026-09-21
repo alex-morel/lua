@@ -200,7 +200,11 @@ bool DrawEG(const char* label, EGParams& eg, const char* levelDomain) {
 }
 
 bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
-    static const char* kWave[] = {"Sine", "Triangle", "Saw", "Square", "Noise"};
+    // As ultimas 7 sao a reconstrucao propria das formas de onda AFM da
+    // SY77/TX81Z (ver dx7_dsp.h e ARQUITETURA.txt secao 5).
+    static const char* kWave[] = {"Sine", "Triangle", "Saw", "Square", "Noise",
+                                   "HalfSine", "AbsSine", "QuarterSine", "AlternatingSine",
+                                   "CamelSine", "SquaredSine", "LogSaw"};
     static const char* kFx[] = {"Bypass", "LowPass", "BandPass", "HighPass", "RingMod",
                                  "Saturate", "Crush", "FreqShift", "Comb"};
     bool changed = false;
@@ -228,8 +232,8 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
 
             ImGui::TableSetColumnIndex(1);
             int wave = static_cast<int>(op.waveform);
-            ImGui::SetNextItemWidth(90);
-            if (ImGui::Combo("##wave", &wave, kWave, 5)) { op.waveform = static_cast<Waveform>(wave); changed = true; }
+            ImGui::SetNextItemWidth(140);
+            if (ImGui::Combo("##wave", &wave, kWave, 12)) { op.waveform = static_cast<Waveform>(wave); changed = true; }
 
             ImGui::TableSetColumnIndex(2);
             ImGui::SetNextItemWidth(80);
