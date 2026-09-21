@@ -133,4 +133,40 @@ struct GlobalParams {
     int oversample = 1; // placeholder, ainda nao usado
 };
 
+// [ADICIONADO em 2026-09-21] Efeitos globais POS-MIX: aplicados uma vez na
+// soma das 4 partes (Synth::renderStereo), nao por operador/voz como os FX
+// de dx7_params.h::OperatorParams. Ver dx7_globalfx.h pro DSP.
+
+struct ChorusParams {
+    bool enabled = false;
+    float rateHz = 0.5f;      // velocidade do LFO de modulacao
+    float depthMs = 3.0f;     // profundidade da modulacao do delay
+    float baseDelayMs = 15.0f;
+    float mix = 0.35f;        // 0..1, seco/molhado
+    int voices = 3;           // 1..4 linhas de delay moduladas
+};
+
+struct DelayParams {
+    bool enabled = false;
+    float timeLeftSec = 0.3f;
+    float timeRightSec = 0.45f; // diferente do esquerdo por padrao (delay "duplo" com largura estereo)
+    float feedback = 0.35f;     // 0..0.95
+    float crossFeed = 0.0f;     // 0..1 (1 = ping-pong total entre os canais)
+    float mix = 0.25f;
+};
+
+struct ReverbParams {
+    bool enabled = false;
+    float roomSize = 0.5f;  // 0..1
+    float damping = 0.3f;   // 0..1, mais alto = cauda mais curta/escura
+    float mix = 0.25f;
+    float width = 1.0f;     // 0..1, separacao estereo da cauda
+};
+
+struct GlobalFxParams {
+    ChorusParams chorus;
+    DelayParams delay;
+    ReverbParams reverb;
+};
+
 } // namespace dx7fm

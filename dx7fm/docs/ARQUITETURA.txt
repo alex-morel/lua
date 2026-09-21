@@ -80,7 +80,12 @@ dx7fm/
                       voiceParamsToJson/FromJson, partParamsToJson/FromJson
                       e os helpers de arquivo savePatchFile/loadPatchFile,
                       savePartFile/loadPartFile. Ver secao 6B.
-    demo.cpp        - 27 checagens de sanidade em 17 funcoes de teste (nao
+    dx7_globalfx.h  - [ADICIONADO em 2026-09-21] Efeitos globais POS-MIX:
+                      StereoChorus, StereoDelay, SimpleReverb (Schroeder/
+                      Freeverb simplificado). Blocos genericos como
+                      dx7_dsp.h, mas operam em pares de amostra ESTEREO
+                      (a soma das 4 partes), nao por operador. Ver secao 7D.
+    demo.cpp        - 33 checagens de sanidade em 20 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -110,8 +115,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     g++ -std=c++20 -O2 -Wall -Wextra -pthread -o demo src/demo.cpp
     ./demo
 
-Isso deve imprimir 27 linhas "[PASS] ..." e no final:
-    == Resultado: 27 passaram, 0 falharam ==
+Isso deve imprimir 33 linhas "[PASS] ..." e no final:
+    == Resultado: 33 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -834,7 +839,17 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           s.subPan, clampado -1..1), usando um pan LINEAR simples (nao
           e constant-power/equal-power — se precisar de um pan mais
           "correto" psicoacusticamente, trocar por curva seno/cosseno,
-          ver secao 8).
+          ver secao 8). [ATUALIZADO em 2026-09-21] Depois de somar as 4
+          partes, passa o par (outL, outR) pela cadeia de efeitos globais
+          pos-mix: chorus_ -> delay_ -> reverb_ (ver globalFx() abaixo e
+          secao 7D).
+
+      globalFx() -> GlobalFxParams& - [ADICIONADO em 2026-09-21] acesso
+          direto (NAO passa pelo triple-buffer do timbre) aos parametros
+          de chorus/delay/reverb globais. Editar isso enquanto
+          renderStereo() roda noutra thread tem a MESMA ressalva que os
+          campos de PartParams fora do timbre (ver secao 7C) — nao esta
+          coberto pela garantia de thread safety.
 
       activeVoiceCount() / activeVoiceCount(part) - contagem de vozes
           ativas (uteis pra depuracao/telemetria)
@@ -1054,6 +1069,54 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
 
 
 --------------------------------------------------------------------------------
+7D. dx7_globalfx.h — EFEITOS GLOBAIS POS-MIX
+--------------------------------------------------------------------------------
+
+[ADICIONADO em 2026-09-21] Item "Efeitos globais" original do roteiro
+(secao 11). Aplicados UMA VEZ na soma estereo das 4 partes, dentro de
+Synth::renderStereo(), depois de todo o mix de vozes -- nao sao FX por
+operador (isso ja existia, ver OperatorParams::fxType na secao 4). Cadeia
+fixa: chorus -> delay -> reverb; cada estagio e transparente (so copia
+xL/xR pra outL/outR) se o Params dele tiver enabled=false.
+
+  class StereoChorus
+      N (1..4) linhas de delay curto (buffer de 50ms) moduladas por LFOs
+      senoidais com FASE DESLOCADA por voz (v/voices de ciclo) E entre os
+      canais L/R (mais 90 graus/0.25 de ciclo no R) -- e esse deslocamento
+      L/R que da largura estereo: uma fonte MONO na entrada sai
+      DESCORRELACIONADA (L != R) na saida. process(ChorusParams, xL, xR,
+      outL&, outR&).
+
+  class StereoDelay
+      Delay estereo classico: buffers independentes por canal (ate 2s),
+      tempos timeLeftSec/timeRightSec independentes (delay "duplo" por
+      padrao: 0.3s/0.45s, da um efeito de eco assimetrico entre os
+      canais), feedback (0..0.95) e crossFeed (0=delays independentes,
+      1=ping-pong total, mistura o que realimenta cada canal com o
+      outro). process(DelayParams, xL, xR, outL&, outR&).
+
+  class SimpleReverb
+      Reverb algoritmico estilo Schroeder/Freeverb SIMPLIFICADO (a
+      topologia classica documentada publicamente, reimplementada do
+      zero aqui -- nao e codigo copiado de nenhum projeto): 4 combs
+      paralelos com feedback AMORTECIDO (um lowpass de 1 polo dentro do
+      loop de feedback de cada comb, controlado por `damping`) somados,
+      seguidos de 2 allpass em serie (dao a difusao/"borrão" caracteristico
+      de reverb sem colorir o espectro). Tunings dos delays de cada comb/
+      allpass em L sao os classicos do Freeverb (25.31/26.94/28.96/30.75ms
+      pros combs, 12.61/9.68ms pros allpass); os de R sao os MESMOS +23
+      amostras, pra decorrelacionar os canais sem duplicar a logica.
+      roomSize (0..1) mapeia pro feedback dos combs (0.70..0.98 -- mais
+      perto de 1.0 = cauda mais longa). width (0..1) controla a mistura
+      final L/R da cauda processada (matriz M/S simplificada).
+      process(ReverbParams, xL, xR, outL&, outR&).
+
+  Todos os 3 tem setSampleRate(sr), chamado por Synth::init(). Nenhum
+  conhece VoiceParams/PartParams/Synth -- so os *Params de dx7_params.h
+  e pares de float L/R, seguindo a mesma filosofia de dx7_dsp.h.
+
+
+--------------------------------------------------------------------------------
 8. demo.cpp — O QUE CADA TESTE VALIDA
 --------------------------------------------------------------------------------
 
@@ -1169,6 +1232,28 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
                               secao 3), mas e evidencia real de estabilidade
                               sob concorrencia pesada -- e requer -pthread
                               pra linkar.
+  testChorusChangesStereoImage() - [ADICIONADO em 2026-09-21] toca uma
+                              nota com patch MONO (sem pan), confirma que
+                              SEM chorus L==R amostra a amostra (baseline)
+                              e que COM chorus ligado a diferenca L/R
+                              acumulada e grande (>1.0 vs <1e-6) -- prova
+                              que os LFOs defasados L/R realmente
+                              descorrelacionam os canais.
+  testDelayProducesEchoAtExpectedTime() - [ADICIONADO em 2026-09-21] toca
+                              uma rajada curta (10ms) com release RAPIDO
+                              (o "seco" morre em poucos ms), delay de
+                              0.2s/feedback=0 ligado. Calcula matematicamente
+                              (nao chuta) a janela exata onde o eco daquela
+                              rajada deve aparecer na saida
+                              (delaySamples-noteOnSamples ate delaySamples)
+                              e confirma: silencio ANTES dessa janela,
+                              energia MENSURAVEL dentro dela.
+  testReverbAddsDecayTail() - [ADICIONADO em 2026-09-21] mesma rajada
+                              curta + release rapido, compara a RMS numa
+                              janela ~0.2-0.4s depois do release COM e SEM
+                              reverb -- confirma que sem reverb o sinal ja
+                              morreu (RMS~0), e com reverb sobra uma cauda
+                              de decaimento mensuravel na mesma janela.
   testMultitimbral4Parts()   - dispara uma nota em CADA uma das 4
                               partes simultaneamente, confirma
                               activeVoiceCount() == 4 (todas tocando do
@@ -1178,7 +1263,7 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 27 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 33 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
@@ -1250,26 +1335,33 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
 
   JA FEITO (2026-09-21): aplicar ModDest::OperatorFeedback, decidir/
   implementar noteOff() do fxEG (via campo OperatorParams::fxEGReleaseWithAmp),
-  oversampling anti-aliasing, persistencia de patch em JSON e thread safety
-  pro timbre — eram os itens 1, 2, 3, 4 e 5 originais desta lista, ver
-  secao 7C ("RESOLVIDO"/"MITIGADO"), secao 6B (dx7_patch_io.h), secao 7
-  ("THREAD SAFETY" em PartRuntime) e secao 8 (testOperatorFeedback-
-  Modulation, testFxEGReleaseFollowsAmp, testOversamplingReducesAliasing,
+  oversampling anti-aliasing, persistencia de patch em JSON, thread safety
+  pro timbre e efeitos globais pos-mix (chorus/delay/reverb) — eram os
+  itens 1 a 6 originais desta lista, ver secao 7C ("RESOLVIDO"/"MITIGADO"),
+  secao 6B (dx7_patch_io.h), secao 7 ("THREAD SAFETY" em PartRuntime),
+  secao 7D (dx7_globalfx.h) e secao 8 (testOperatorFeedbackModulation,
+  testFxEGReleaseFollowsAmp, testOversamplingReducesAliasing,
   testPatchJsonRoundTrip, testPatchFileSaveLoad,
-  testLivePatchEditPropagatesToSoundingVoice, testConcurrentPatchEditNoCrash).
-  NOTAS: (1) o oversampling superamostra a VOZ INTEIRA, nao so os
-  operadores com nao-linearidade forte como a ideia original sugeria —
-  mais simples de implementar corretamente, ao custo de mais CPU do que
-  uma versao seletiva teria; (2) a persistencia usa JSON escrito a mao
-  (sem lib externa) em vez de formato binario ou sysex DX7 — o
-  "compilador" de 32 algoritmos DX7 -> AlgorithmMatrix pra importar
-  patches classicos continua nao implementado; (3) o thread safety cobre
-  especificamente o TIMBRE (PartParams::voice, via triple buffer +
-  std::atomic<int>, validado com um stress test de verdade e
+  testLivePatchEditPropagatesToSoundingVoice, testConcurrentPatchEditNoCrash,
+  testChorusChangesStereoImage, testDelayProducesEchoAtExpectedTime,
+  testReverbAddsDecayTail). NOTAS: (1) o oversampling superamostra a VOZ
+  INTEIRA, nao so os operadores com nao-linearidade forte como a ideia
+  original sugeria — mais simples de implementar corretamente, ao custo
+  de mais CPU do que uma versao seletiva teria; (2) a persistencia usa
+  JSON escrito a mao (sem lib externa) em vez de formato binario ou sysex
+  DX7 — o "compilador" de 32 algoritmos DX7 -> AlgorithmMatrix pra
+  importar patches classicos continua nao implementado; (3) o thread
+  safety cobre especificamente o TIMBRE (PartParams::voice, via triple
+  buffer + std::atomic<int>, validado com um stress test de verdade e
   opcionalmente com -fsanitize=thread) — os demais campos de PartParams e
   os controladores ao vivo (bend/mod wheel/aftertouch/pedais) continuam
   fora do escopo dessa garantia, ver secao 7C pros detalhes exatos do que
-  ficou de fora. Lista renumerada abaixo.
+  ficou de fora; (4) o reverb e um Schroeder/Freeverb simplificado
+  (4 combs + 2 allpass por canal, reimplementado do zero a partir da
+  topologia classica publicamente documentada), nao uma convolucao com
+  IR real nem um algoritmo de "placa" propriamente dito — suficiente pra
+  uma cauda convincente, mas nao e o estado da arte em reverb algoritmico.
+  Lista renumerada abaixo.
 
   1. Vetorizacao SIMD (AVX2 ou std::simd) com layout SoA (Structure of
      Arrays): hoje o codigo e AoS (Array of Structs, um Voice inteiro
@@ -1283,16 +1375,12 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
   3. UI de edicao (pelo menos uma matriz visual 8x8 + envelopes
      desenhados) — hoje so existe a API C++, sem nenhuma interface
      grafica.
-  4. Efeitos globais (pos-mix): chorus/ensemble, delay, reverb — a
-     conversa original ja mapeou quais combinam melhor com FM (chorus
-     pra sinos/eletric piano, reverb de placa, etc.) mas nada disso
-     foi implementado ainda, so o FX POR OPERADOR (dentro da voz).
-  5. Glissando (portamento em semitons discretos) como alternativa ao
+  4. Glissando (portamento em semitons discretos) como alternativa ao
      glide continuo — mencionado como faltante na checklist de
      fidelidade ao DX7 classico.
-  6. Breath controller / foot controller como fontes adicionais de
+  5. Breath controller / foot controller como fontes adicionais de
      ModSource, se for importante pra fidelidade historica.
-  7. Trocar egRateToSpeed()/egLevelToAmplitude() pelas tabelas reais do
+  6. Trocar egRateToSpeed()/egLevelToAmplitude() pelas tabelas reais do
      ROM do DX7 (documentadas em projetos como Dexed/msfa), se
      fidelidade sonora exata ao hardware original for prioridade sobre
      a aproximacao atual.

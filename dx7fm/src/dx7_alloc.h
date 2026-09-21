@@ -1,6 +1,7 @@
 #pragma once
 #include "dx7_params.h"
 #include "dx7_engine.h"
+#include "dx7_globalfx.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -72,6 +73,9 @@ public:
             s.voice.setSampleRate(sampleRate);
         }
         for (int p = 0; p < kNumParts; ++p) recompile(p);
+        chorus_.setSampleRate(sampleRate);
+        delay_.setSampleRate(sampleRate);
+        reverb_.setSampleRate(sampleRate);
     }
 
     // Referencia de STAGING: editar campos aqui (inclusive .voice, o timbre)
@@ -79,6 +83,16 @@ public:
     // de uma thread de UI/edicao diferente da que roda renderStereo(), desde
     // que a UNICA forma de "publicar" a edicao seja via recompile(idx).
     PartParams& part(int idx) { return parts_[idx].params; }
+
+    // [ADICIONADO em 2026-09-21] Efeitos globais POS-MIX (chorus, delay,
+    // reverb -- ver dx7_globalfx.h e dx7_params.h::GlobalFxParams).
+    // Aplicados uma vez na SOMA das 4 partes, dentro de renderStereo().
+    // Acesso direto (nao passa pelo triple-buffer do timbre, ver secao 7C
+    // do ARQUITETURA.txt sobre o que NAO esta coberto pela garantia de
+    // thread safety) -- editar globalFx() enquanto renderStereo() roda
+    // noutra thread tem a mesma ressalva que os demais campos "fora do
+    // timbre" de PartParams.
+    GlobalFxParams& globalFx() { return globalFx_; }
 
     // Publica params.voice (staging) como o novo patch AO VIVO: recompila o
     // algoritmo, escreve o par (voice, compiled) casado num slot de buffer
@@ -207,6 +221,13 @@ public:
             outL += lvl * gL;
             outR += lvl * gR;
         }
+
+        // Efeitos globais pos-mix, na soma das 4 partes: chorus -> delay ->
+        // reverb (cadeia fixa; cada estagio e transparente se !enabled).
+        float chL, chR, dlL, dlR;
+        chorus_.process(globalFx_.chorus, outL, outR, chL, chR);
+        delay_.process(globalFx_.delay, chL, chR, dlL, dlR);
+        reverb_.process(globalFx_.reverb, dlL, dlR, outL, outR);
     }
 
     int activeVoiceCount() const {
@@ -365,6 +386,11 @@ private:
     std::vector<VoiceSlot> slots_;
     PartRuntime parts_[kNumParts];
     uint64_t triggerCounter_ = 0;
+
+    GlobalFxParams globalFx_;
+    StereoChorus chorus_;
+    StereoDelay delay_;
+    SimpleReverb reverb_;
 };
 
 } // namespace dx7fm

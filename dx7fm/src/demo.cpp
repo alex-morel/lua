@@ -543,6 +543,115 @@ static void testConcurrentPatchEditNoCrash() {
           "2s de audio com outra thread editando o patch sem parar: sem NaN/Inf (nenhuma corrupcao observada)");
 }
 
+static void testChorusChangesStereoImage() {
+    auto render = [](bool chorusOn) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        synth.part(0).voice = makeSimpleFmPatch();
+        synth.recompile(0);
+        synth.globalFx().chorus.enabled = chorusOn;
+        synth.globalFx().chorus.mix = 0.5f;
+        synth.globalFx().chorus.depthMs = 4.0f;
+        synth.globalFx().chorus.rateHz = 1.2f;
+        synth.noteOn(0, 60, 100);
+
+        std::vector<float> left, right;
+        for (int i = 0; i < 9600; ++i) {
+            float l, r;
+            synth.renderStereo(l, r);
+            left.push_back(l);
+            right.push_back(r);
+        }
+        return std::make_pair(left, right);
+    };
+
+    auto [dryL, dryR] = render(false);
+    auto [wetL, wetR] = render(true);
+
+    // Sem chorus, a fonte e mono (mesmo patch, sem pan): L e R ficam
+    // identicos amostra a amostra. Com chorus, os LFOs L/R defasados 90
+    // graus devem descorrelacionar os canais.
+    double diffDry = 0.0, diffWet = 0.0;
+    for (size_t i = 0; i < dryL.size(); ++i) {
+        diffDry += std::abs(static_cast<double>(dryL[i]) - dryR[i]);
+        diffWet += std::abs(static_cast<double>(wetL[i]) - wetR[i]);
+    }
+    std::printf("  (diferenca L/R acumulada: sem chorus=%.5f, com chorus=%.5f)\n", diffDry, diffWet);
+    check(diffDry < 1e-6, "sem chorus, fonte mono produz L==R (confirma a baseline do teste)");
+    check(diffWet > diffDry + 1.0, "chorus liga descorrelaciona L/R (largura estereo mensuravel)");
+}
+
+static void testDelayProducesEchoAtExpectedTime() {
+    Synth synth;
+    synth.init(48000.0, 4);
+    VoiceParams v = makeSimpleFmPatch();
+    for (int i = 0; i < kNumOps; ++i) v.op[i].ampEG.rate[3] = 99; // release RAPIDO: o "seco" morre logo
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.globalFx().delay.enabled = true;
+    const float delaySec = 0.2f;
+    synth.globalFx().delay.timeLeftSec = delaySec;
+    synth.globalFx().delay.timeRightSec = delaySec;
+    synth.globalFx().delay.feedback = 0.0f; // 1 eco so, sem repeticoes -- mais facil de medir
+    synth.globalFx().delay.mix = 0.9f;
+
+    const int noteOnSamples = 480; // ~10ms de nota bem curta (o "impulso" que vai ecoar)
+    synth.noteOn(0, 60, 100);
+    for (int i = 0; i < noteOnSamples; ++i) { float l, r; synth.renderStereo(l, r); }
+    synth.noteOff(0, 60);
+
+    // A partir daqui, mono[0] == a amostra do instante do noteOff. O eco da
+    // rajada de 10ms original (que ocorreu ANTES do noteOff) aparece na
+    // saida do delay exatamente na janela [delaySamples-noteOnSamples,
+    // delaySamples) relativa a este ponto -- matematica exata, nao um
+    // numero redondo chutado.
+    const int delaySamples = static_cast<int>(delaySec * 48000.0f);
+    const int echoStart = delaySamples - noteOnSamples;
+    const int total = delaySamples + 4800;
+    std::vector<float> mono;
+    mono.reserve(static_cast<size_t>(total));
+    for (int i = 0; i < total; ++i) { float l, r; synth.renderStereo(l, r); mono.push_back((l + r) * 0.5f); }
+
+    float rmsBeforeEcho = computeRms(mono, 1000, static_cast<size_t>(echoStart - 2000)); // bem antes do eco
+    float rmsAtEcho = computeRms(mono, static_cast<size_t>(echoStart), static_cast<size_t>(noteOnSamples));
+
+    std::printf("  (RMS antes do eco=%.5f, RMS na janela exata do eco=%.5f)\n", rmsBeforeEcho, rmsAtEcho);
+    check(rmsBeforeEcho < 0.01f, "seco decai a quase silencio antes do tempo do delay (release rapido)");
+    check(rmsAtEcho > rmsBeforeEcho * 3.0f, "energia reaparece exatamente na janela do tempo de delay configurado (eco real)");
+}
+
+static void testReverbAddsDecayTail() {
+    auto renderTailRms = [](bool reverbOn) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v = makeSimpleFmPatch();
+        for (int i = 0; i < kNumOps; ++i) v.op[i].ampEG.rate[3] = 99; // release RAPIDO
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.globalFx().reverb.enabled = reverbOn;
+        synth.globalFx().reverb.mix = 0.6f;
+        synth.globalFx().reverb.roomSize = 0.8f;
+        synth.globalFx().reverb.damping = 0.2f;
+
+        synth.noteOn(0, 60, 100);
+        for (int i = 0; i < 480; ++i) { float l, r; synth.renderStereo(l, r); } // ~10ms de nota
+        synth.noteOff(0, 60);
+
+        std::vector<float> mono;
+        int total = 24000; // 0.5s
+        mono.reserve(static_cast<size_t>(total));
+        for (int i = 0; i < total; ++i) { float l, r; synth.renderStereo(l, r); mono.push_back((l + r) * 0.5f); }
+        return computeRms(mono, 9600, 9600); // janela ~0.2s..0.4s, bem depois do release rapido do seco
+    };
+
+    float tailDry = renderTailRms(false);
+    float tailWet = renderTailRms(true);
+
+    std::printf("  (RMS da cauda: sem reverb=%.5f, com reverb=%.5f)\n", tailDry, tailWet);
+    check(tailDry < 0.005f, "sem reverb, o sinal decai a quase silencio logo apos o release rapido");
+    check(tailWet > tailDry + 0.01f, "com reverb ligado, sobra uma cauda de decaimento mensuravel na mesma janela");
+}
+
 static void testMultitimbral4Parts() {
     Synth synth;
     synth.init(48000.0, 64);
@@ -592,6 +701,9 @@ int main() {
     testPatchFileSaveLoad();
     testLivePatchEditPropagatesToSoundingVoice();
     testConcurrentPatchEditNoCrash();
+    testChorusChangesStereoImage();
+    testDelayProducesEchoAtExpectedTime();
+    testReverbAddsDecayTail();
     testMultitimbral4Parts();
     testPolyphonyCap();
 
