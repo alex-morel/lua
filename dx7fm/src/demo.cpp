@@ -98,6 +98,217 @@ static void testPegCentered() {
     check(std::abs(v - 50.0f) < 0.5f, "PEG default (todos levels=50) fica parado no centro");
 }
 
+// --- [ADICIONADO em 2026-09-21] bateria mais rigorosa de envelopes -------
+
+static void testEgRateToSpeedMatchesDocumentedTiming() {
+    // ARQUITETURA.txt/dx7_dsp.h documentam: rate=99 cruza as 99 unidades em
+    // ~4ms; rate=0 cruza em ~20s. Confirma que a formula bate com isso.
+    float speed99 = egRateToSpeed(99.0f);
+    float time99Ms = (99.0f / speed99) * 1000.0f;
+    float speed0 = egRateToSpeed(0.0f);
+    float time0Sec = 99.0f / speed0;
+
+    std::printf("  (rate=99 cruza 99 unidades em %.2fms; rate=0 em %.2fs)\n", time99Ms, time0Sec);
+    check(time99Ms > 2.0f && time99Ms < 8.0f, "egRateToSpeed(99) cruza 99 unidades em ~4ms, como documentado");
+    check(time0Sec > 15.0f && time0Sec < 25.0f, "egRateToSpeed(0) cruza 99 unidades em ~20s, como documentado");
+}
+
+static void testEgLevelToAmplitudeBoundaries() {
+    check(egLevelToAmplitude(0.0f) == 0.0f, "egLevelToAmplitude(0) e silencio EXATO (nao so muito baixo)");
+    check(std::abs(egLevelToAmplitude(99.0f) - 1.0f) < 0.001f, "egLevelToAmplitude(99) e ~1.0 (0dB, unidade)");
+    float a50 = egLevelToAmplitude(50.0f);
+    float a90 = egLevelToAmplitude(90.0f);
+    check(a50 > 0.0f && a50 < a90 && a90 < 1.0f, "egLevelToAmplitude e monotonica crescente entre os extremos");
+}
+
+static void testEnvelopeStageProgression() {
+    // ataque com OVERSHOOT (sobe ate 80), decay com UNDERSHOOT (desce ate
+    // 40), sustain fica em 60 -- forma deliberada pra confirmar que o EG
+    // realmente VISITA os 2 primeiros estagios antes de assentar no 3o,
+    // nao so "chega perto do valor final" por sorte.
+    SegmentEG eg;
+    uint8_t rate[4]  = {99, 99, 99, 99};
+    uint8_t level[4] = {80, 40, 60, 0};
+    eg.configure(rate, level);
+    eg.noteOn(0.0f);
+
+    double sr = 48000.0;
+    float maxSeen = 0.0f, minAfterPeak = 200.0f;
+    bool passedPeak = false;
+    float v = 0.0f;
+    for (int i = 0; i < 3000; ++i) {
+        v = eg.process(sr);
+        maxSeen = std::max(maxSeen, v);
+        if (v >= 79.0f) passedPeak = true;
+        if (passedPeak) minAfterPeak = std::min(minAfterPeak, v);
+    }
+    check(maxSeen > 79.0f, "EG visita o nivel do estagio 0 (overshoot ate ~80) antes de assentar");
+    check(minAfterPeak < 41.0f, "EG visita o nivel do estagio 1 (undershoot ate ~40) depois do overshoot");
+
+    for (int i = 0; i < 5000; ++i) v = eg.process(sr);
+    check(std::abs(v - 60.0f) < 0.5f, "EG assenta EXATAMENTE no nivel do estagio 2 (sustain)");
+}
+
+static void testEnvelopeSustainNeverDecaysWithoutNoteOff() {
+    SegmentEG eg;
+    uint8_t rate[4]  = {50, 50, 50, 50};
+    uint8_t level[4] = {99, 99, 70, 0};
+    eg.configure(rate, level);
+    eg.noteOn(0.0f);
+    double sr = 48000.0;
+
+    float v = 0.0f;
+    for (int i = 0; i < 48000; ++i) v = eg.process(sr); // 1s: da tempo de sobra de assentar no sustain
+    check(std::abs(v - 70.0f) < 0.5f, "EG assentou no sustain (70) apos 1s simulado");
+
+    // 30s simulados SEM noteOff -- sustain tem que segurar o tempo TODO
+    for (int i = 0; i < 48000 * 30; ++i) v = eg.process(sr);
+    check(std::abs(v - 70.0f) < 0.5f, "sustain ainda EXATO apos 30s simulados sem noteOff");
+    check(!eg.isIdle(), "EG nunca fica idle sozinho -- so depois de um noteOff() explicito");
+}
+
+static void testEnvelopeNoteOffPreservesCurrentLevel() {
+    // ataque deliberadamente LENTO (rate=10) pra conseguir "pegar" o EG no
+    // meio do caminho, longe tanto de 0 quanto do alvo.
+    SegmentEG eg;
+    uint8_t rate[4]  = {10, 99, 99, 40};
+    uint8_t level[4] = {99, 99, 99, 0};
+    eg.configure(rate, level);
+    eg.noteOn(0.0f);
+    double sr = 48000.0;
+
+    float v = 0.0f;
+    for (int i = 0; i < 4800; ++i) v = eg.process(sr); // 0.1s do ataque lento
+    check(v > 1.0f && v < 90.0f, "capturado no MEIO do ataque (nem perto de 0, nem do alvo)");
+    float levelAtNoteOff = v;
+
+    eg.noteOff();
+    float justAfter = eg.process(sr);
+    check(std::abs(justAfter - levelAtNoteOff) < 5.0f,
+          "noteOff() nao pula pro nivel de release -- o release comeca DE ONDE o EG estava");
+
+    for (int i = 0; i < 48000 * 2; ++i) v = eg.process(sr);
+    check(v == 0.0f && eg.isIdle(), "release termina exatamente em 0 e fica idle");
+}
+
+static void testEnvelopeRateScalingSpeedsUpHighNotes() {
+    auto samplesUntilLoud = [](int note) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v = makeSimpleFmPatch();
+        v.op[0].rateScaling = 7;     // maximo: bastante aceleracao em notas agudas
+        v.op[0].ampEG.rate[0] = 20;  // ataque moderado, pra a diferenca ficar visivel
+        v.op[0].ampEG.level[0] = 99;
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, note, 100);
+
+        float runningMax = 0.0f;
+        for (int i = 0; i < 48000 * 2; ++i) {
+            float l, r;
+            synth.renderStereo(l, r);
+            runningMax = std::max(runningMax, std::abs((l + r) * 0.5f));
+            if (runningMax > 0.3f) return i;
+        }
+        return 48000 * 2;
+    };
+
+    int samplesLowNote = samplesUntilLoud(36);  // rateScaling so afeta notas ACIMA de 60 (rateScaleAdd=0 aqui)
+    int samplesHighNote = samplesUntilLoud(96); // bem acima de 60: rateScaleAdd grande
+
+    std::printf("  (amostras ate ficar alto: nota grave=%d, nota aguda=%d)\n", samplesLowNote, samplesHighNote);
+    check(samplesHighNote < samplesLowNote,
+          "rate scaling: nota aguda atinge o limiar de amplitude mais rapido (EG acelerado pela tecla)");
+}
+
+static float estimateFrequencyByZeroCrossings(const std::vector<float>& buf, double sampleRate) {
+    int crossings = 0;
+    for (size_t i = 1; i < buf.size(); ++i) {
+        bool up = buf[i - 1] < 0.0f && buf[i] >= 0.0f;
+        bool down = buf[i - 1] >= 0.0f && buf[i] < 0.0f;
+        if (up || down) ++crossings;
+    }
+    double durationSec = static_cast<double>(buf.size()) / sampleRate;
+    return static_cast<float>((crossings / 2.0) / durationSec);
+}
+
+static void testPegPushesPitchUpAndDown() {
+    auto renderAtPegLevel = [](uint8_t pegLevel) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v;
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f;
+        v.op[0].waveform = Waveform::Sine;
+        v.op[0].outputLevel = 99;
+        v.op[0].pegDepth = 1.0f;
+        for (int i = 1; i < kNumOps; ++i) {
+            v.op[i].ampEG.level[0] = 0; v.op[i].ampEG.level[1] = 0;
+            v.op[i].ampEG.level[2] = 0; v.op[i].ampEG.level[3] = 0;
+        }
+        v.peg.rangeOctaves = 1.0f;
+        for (int i = 0; i < 4; ++i) { v.peg.rate[i] = 99; v.peg.level[i] = pegLevel; }
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, 60, 100);
+
+        for (int i = 0; i < 500; ++i) { float l, r; synth.renderStereo(l, r); } // pula o transiente breve do PEG
+        std::vector<float> mono;
+        mono.reserve(4800);
+        for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); mono.push_back((l + r) * 0.5f); }
+        return estimateFrequencyByZeroCrossings(mono, 48000.0);
+    };
+
+    float freqDown = renderAtPegLevel(0);    // -1 oitava (rangeOctaves=1.0)
+    float freqCenter = renderAtPegLevel(50); // sem desvio
+    float freqUp = renderAtPegLevel(99);     // quase +1 oitava
+
+    std::printf("  (freq estimada por zero-crossing: PEG=0 -> %.1fHz, PEG=50 -> %.1fHz, PEG=99 -> %.1fHz)\n",
+                freqDown, freqCenter, freqUp);
+    check(std::abs(freqCenter - 261.6f) < 10.0f, "PEG level=50 fica no centro (~261.6Hz, nota 60 sem desvio)");
+    check(freqDown < freqCenter * 0.6f, "PEG level=0 baixa a frequencia (~-1 oitava, rangeOctaves=1.0)");
+    check(freqUp > freqCenter * 1.5f, "PEG level=99 sobe a frequencia (~+1 oitava, rangeOctaves=1.0)");
+}
+
+static void testEnvelopeLegatoReuseAffectsRetrigger() {
+    auto peakRightAfterLegato = [](bool reuse) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v = makeSimpleFmPatch();
+        // rate[0]=40 e deliberadamente MODERADO (nao rapido): rapido demais
+        // faz o caso "reset" recuperar quase toda a amplitude DENTRO da
+        // propria janela de 400 amostras usada pra medir o pico logo apos o
+        // legato, escondendo a diferenca entre reuse=true/false. Com 40, o
+        // pre-legato (40000 amostras = 0.83s) tem tempo de sobra pra assentar
+        // no sustain, mas o pos-legato (so 400 amostras) nao.
+        v.op[0].ampEG.rate[0] = 40;
+        synth.part(0).voice = v;
+        synth.part(0).voiceMode = VoiceMode::Mono;
+        synth.part(0).monoLegatoEnvReuse = reuse;
+        synth.recompile(0);
+
+        synth.noteOn(0, 60, 100);
+        for (int i = 0; i < 40000; ++i) { float l, r; synth.renderStereo(l, r); } // deixa assentar no sustain
+
+        synth.noteOn(0, 64, 100); // legato: nova nota sem soltar a primeira
+
+        float peak = 0.0f;
+        for (int i = 0; i < 400; ++i) { // >1 ciclo completo da nota, pra nao perder o pico por fase
+            float l, r;
+            synth.renderStereo(l, r);
+            peak = std::max(peak, std::abs((l + r) * 0.5f));
+        }
+        return peak;
+    };
+
+    float peakReuse = peakRightAfterLegato(true);
+    float peakReset = peakRightAfterLegato(false);
+
+    std::printf("  (pico logo apos legato: reuse=true -> %.4f, reuse=false -> %.4f)\n", peakReuse, peakReset);
+    check(peakReuse > 0.2f, "monoLegatoEnvReuse=true: envelope NAO reseta no legato (som continua alto na hora)");
+    check(peakReset < peakReuse * 0.5f, "monoLegatoEnvReuse=false: envelope RESETA no legato (comeca baixo de novo)");
+}
+
 static void testSimpleFmRender() {
     Synth synth;
     synth.init(48000.0, 8);
@@ -819,6 +1030,14 @@ int main() {
 
     testEnvelopeShape();
     testPegCentered();
+    testEgRateToSpeedMatchesDocumentedTiming();
+    testEgLevelToAmplitudeBoundaries();
+    testEnvelopeStageProgression();
+    testEnvelopeSustainNeverDecaysWithoutNoteOff();
+    testEnvelopeNoteOffPreservesCurrentLevel();
+    testEnvelopeRateScalingSpeedsUpHighNotes();
+    testPegPushesPitchUpAndDown();
+    testEnvelopeLegatoReuseAffectsRetrigger();
     testSimpleFmRender();
     testFilteredModulatorFx();
     testMonoGlide();

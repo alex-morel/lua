@@ -92,7 +92,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 37 checagens de sanidade em 23 funcoes de teste (nao
+    demo.cpp        - 57 checagens de sanidade em 31 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -159,8 +159,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     g++ -std=c++20 -O2 -Wall -Wextra -pthread -o demo src/demo.cpp
     ./demo
 
-Isso deve imprimir 37 linhas "[PASS] ..." e no final:
-    == Resultado: 37 passaram, 0 falharam ==
+Isso deve imprimir 57 linhas "[PASS] ..." e no final:
+    == Resultado: 57 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -1228,6 +1228,61 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               a ~0 apos noteOff+release completo.
   testPegCentered()        - um PEG "default" (todos os levels=50) fica
                               parado no centro (sem desvio de pitch).
+
+  --- [ADICIONADO em 2026-09-21] bateria mais rigorosa de envelopes,
+  pedida explicitamente pelo usuario ("faca uma bateria de testes, a
+  comecar com os envelopes"). Testa tanto SegmentEG isolado (rapido,
+  sem precisar renderizar audio) quanto atraves do motor completo
+  (Voice/Synth) pra comportamentos que so aparecem no pipeline inteiro. ---
+
+  testEgRateToSpeedMatchesDocumentedTiming() - confirma numericamente as
+                              proprias afirmacoes do doc/codigo sobre
+                              egRateToSpeed(): rate=99 cruza 99 unidades
+                              em ~4ms, rate=0 em ~20s.
+  testEgLevelToAmplitudeBoundaries() - egLevelToAmplitude(0) e silencio
+                              EXATO (nao so muito baixo), (99) e ~1.0
+                              (0dB), e a curva e monotonica crescente
+                              entre os extremos.
+  testEnvelopeStageProgression() - EG com ataque OVERSHOOT (sobe ate 80)
+                              e decay UNDERSHOOT (desce ate 40) antes de
+                              assentar no sustain (60) -- confirma que o
+                              EG realmente VISITA os 2 primeiros estagios
+                              (nao so "converge pro valor final por
+                              coincidencia").
+  testEnvelopeSustainNeverDecaysWithoutNoteOff() - 30s SIMULADOS
+                              (rapido de rodar, e so matematica de
+                              SegmentEG, nao renderizacao de audio) sem
+                              noteOff(): o sustain tem que segurar o
+                              tempo TODO, sem decair sozinho.
+  testEnvelopeNoteOffPreservesCurrentLevel() - captura o EG no MEIO de
+                              um ataque lento (rate=10), chama noteOff(),
+                              confirma que o release comeca DE ONDE o EG
+                              estava, nao pula pro nivel do estagio
+                              anterior nem reseta.
+  testEnvelopeRateScalingSpeedsUpHighNotes() - dispara a MESMA patch
+                              (rateScaling=7) numa nota grave (36, sem
+                              aceleracao — formula so afeta notas > 60) e
+                              numa aguda (96, aceleracao grande), mede
+                              quantas amostras ate a saida ficar alta,
+                              confirma que a aguda chega la mais rapido.
+  testPegPushesPitchUpAndDown() - PEG travado (rate=99) em 3 niveis
+                              (0/50/99, rangeOctaves=1.0) numa portadora
+                              senoidal pura, estima a frequencia
+                              resultante por contagem de zero-crossings
+                              (sem precisar de FFT): confirma PEG=50 fica
+                              no centro (~261.6Hz), PEG=0 desce ~1 oitava,
+                              PEG=99 sobe ~1 oitava.
+  testEnvelopeLegatoReuseAffectsRetrigger() - modo Mono, ataque MODERADO
+                              (rate=40 -- rapido demais esconderia a
+                              diferenca dentro da janela de medicao curta
+                              pos-legato, ja documentado como pegadinha
+                              encontrada durante o desenvolvimento deste
+                              teste), mede o pico de amplitude logo apos
+                              um retrigger legato: com
+                              monoLegatoEnvReuse=true o som continua alto
+                              na hora (envelope nao reseta); com false,
+                              volta perto de zero (envelope reseta).
+
   testSimpleFmRender()     - patch de 2 operadores gera sinal audivel
                               (RMS > 0.01) e fica idle apos o release.
                               Grava output/01_simple_fm.wav.
@@ -1395,7 +1450,7 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 37 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 57 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
