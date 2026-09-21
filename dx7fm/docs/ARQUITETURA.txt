@@ -92,7 +92,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 57 checagens de sanidade em 31 funcoes de teste (nao
+    demo.cpp        - 80 checagens de sanidade em 41 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -159,8 +159,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     g++ -std=c++20 -O2 -Wall -Wextra -pthread -o demo src/demo.cpp
     ./demo
 
-Isso deve imprimir 57 linhas "[PASS] ..." e no final:
-    == Resultado: 57 passaram, 0 falharam ==
+Isso deve imprimir 80 linhas "[PASS] ..." e no final:
+    == Resultado: 80 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -1423,6 +1423,73 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               media amostra-a-amostra >= 0.02 -- nenhuma
                               forma "colapsa" acidentalmente em outra ja
                               existente).
+
+  --- [ADICIONADO em 2026-09-21] bateria de operadores/oscilador, segunda
+  rodada da bateria de testes pedida pelo usuario ("continue" apos a
+  bateria de envelopes). Usa renderCarrierFrequency() (helper novo: op0
+  Sine isolado + estimateFrequencyByZeroCrossings() ja existente da
+  bateria de envelopes) pros testes de frequencia, e chama oscWave()
+  DIRETO (sem renderizar audio) pros testes de forma de onda. ---
+
+  testNoteToHzStandardTuning() - nota MIDI 69 (A4) produz ~440Hz, nota 60
+                              (C4) produz ~261.63Hz, nota 81 (uma oitava
+                              acima de A4) produz ~880Hz -- confirma a
+                              afinacao padrao (temperamento igual, A4=440).
+  testCoarseRatioScalesFrequencyLinearly() - coarseRatio=2.0 dobra a
+                              frequencia, coarseRatio=0.5 divide por 2,
+                              em relacao a ratio=1.0.
+  testFixedFreqIgnoresNote() - com fixedFreq=true, tocar a nota 48 ou a
+                              84 produz a MESMA frequencia (fixedHz) --
+                              confirma que o modo fixo realmente ignora
+                              a tecla.
+  testFineAndDetuneCentsShiftPitch() - fineCents=1200 (exatamente 1
+                              oitava em cents) dobra a frequencia;
+                              detuneCents=1200 tambem (mesma formula de
+                              conversao cents->multiplicador de freq).
+  testClassicWaveformShapesMatchMath() - chama oscWave() em pontos de
+                              fase conhecidos: Sine em phase=0.25/0.75 e
+                              exatamente +1/-1; Square e +1/-1 constante
+                              em cada metade; Saw rampa linear de -1 a
+                              +1; Triangle vai de -1 (inicio) a +1
+                              (metade do ciclo).
+  testAfmWaveformStructuralProperties() - AbsSine nunca fica negativo
+                              (retificacao completa); HalfSine e
+                              silencio EXATO na segunda metade do ciclo;
+                              CamelSine tem um gap de silencio EXATO
+                              entre as 2 corcovas (checado em phase=0.35).
+  testPhaseModulationZeroMeansUnmodifiedCarrier() - com matrix.mod=0.0 (mas
+                              o operador modulador ainda tocando, nivel
+                              alto), a saida e IDENTICA (diferenca max <
+                              0.0001) a nem ter esse operador no
+                              roteamento -- confirma que peso zero e
+                              tratado como ausencia real de conexao, nao
+                              "efeito pequeno". Com mod=1.0, a saida muda
+                              audivelmente.
+  testKeyLevelScalingAffectsOutputBySide() - com leftDepth=-12 e
+                              rightDepth=+12 (breakpoint=60), uma nota
+                              abaixo do breakpoint fica mais quieta que
+                              no breakpoint, e uma acima fica mais alta.
+  testVelocitySensitivityAffectsLevel() - com velocitySens=7, velocity
+                              127 soa bem mais forte que velocity 1; com
+                              velocitySens=0, a diferenca e desprezivel.
+  testOutputLevelCurveMatchesFormula() - compara a razao de RMS entre
+                              outputLevel=99 e =93 contra
+                              dbToLinear((93-99)*0.75) calculado
+                              diretamente -- confirma que outputLevel
+                              segue a MESMA formula documentada, sem o
+                              floor de silencio exato que egLevelToAmplitude
+                              tem (outputLevel=0 fica so muito quieto,
+                              nao silencioso de verdade).
+
+  NOTA sobre a estimativa de frequencia por zero-crossing: quantiza em
+  passos de 1/(2*duracao da janela) Hz, entao o mesmo erro absoluto pesa
+  mais em frequencias baixas que altas. Os 3 primeiros testes desta
+  bateria falharam na primeira tentativa por causa disso (tolerancia em
+  Hz absolutos, calibrada pra ~260Hz, apertada demais ao comparar contra
+  ~520Hz) -- nao era bug do motor, corrigido trocando pra tolerancia
+  RELATIVA (nearlyEqualRel(), 3% por padrao) e aumentando a janela de
+  medicao de 0.1s pra 0.2s.
+
   testAlgorithmPresetsUseEachOperatorExactlyOnce() - [ADICIONADO em
                               2026-09-21] inspeciona os DADOS BRUTOS
                               (chains/forks/merges) dos 32 algoritmos de
@@ -1450,7 +1517,7 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 57 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 80 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).

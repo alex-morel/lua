@@ -232,6 +232,15 @@ static float estimateFrequencyByZeroCrossings(const std::vector<float>& buf, dou
     return static_cast<float>((crossings / 2.0) / durationSec);
 }
 
+// Tolerancia RELATIVA (nao Hz absoluto): a estimativa por zero-crossing
+// quantiza em passos de 1/(2*duracao_da_janela) Hz, entao o mesmo erro
+// absoluto pesa mais em frequencias baixas que altas -- comparacoes entre
+// frequencias de magnitudes diferentes (ex.: 260Hz vs 520Hz) precisam de
+// tolerancia relativa pra nao falhar por pura quantizacao da medicao.
+static bool nearlyEqualRel(float a, float b, float relTol = 0.03f) {
+    return std::abs(a - b) < std::abs(b) * relTol;
+}
+
 static void testPegPushesPitchUpAndDown() {
     auto renderAtPegLevel = [](uint8_t pegLevel) {
         Synth synth;
@@ -926,6 +935,261 @@ static void testAfmWaveformsAreBoundedAndDistinct() {
     check(allDistinct, "as 8 formas de onda AFM sao mutuamente distintas (nenhum par quase identico)");
 }
 
+// --- [ADICIONADO em 2026-09-21] bateria de operadores/oscilador ----------
+
+// Renderiza uma nota isolada (op0 sozinho, Sine por padrao -- confiavel
+// pra estimativa de frequencia por zero-crossing) e devolve a frequencia
+// medida. Reusa estimateFrequencyByZeroCrossings() da bateria de envelopes.
+static float renderCarrierFrequency(int note, float coarseRatio = 1.0f, float fineCents = 0.0f,
+                                     float detuneCents = 0.0f, bool fixedFreq = false, float fixedHz = 440.0f) {
+    Synth synth;
+    synth.init(48000.0, 4);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.op[0].waveform = Waveform::Sine;
+    v.op[0].outputLevel = 99;
+    v.op[0].fixedFreq = fixedFreq;
+    v.op[0].fixedHz = fixedHz;
+    v.op[0].coarseRatio = coarseRatio;
+    v.op[0].fineCents = fineCents;
+    v.op[0].detuneCents = detuneCents;
+    for (int i = 1; i < kNumOps; ++i) {
+        v.op[i].ampEG.level[0] = 0; v.op[i].ampEG.level[1] = 0;
+        v.op[i].ampEG.level[2] = 0; v.op[i].ampEG.level[3] = 0;
+    }
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.noteOn(0, note, 100);
+
+    for (int i = 0; i < 500; ++i) { float l, r; synth.renderStereo(l, r); } // pula o transiente do ataque
+    // janela de 0.2s (9600 amostras): zero-crossing quantiza a estimativa em
+    // passos de 1/(2*duracao) Hz -- janela maior = passos menores = mais
+    // precisao, importante pra comparacoes de frequencia com tolerancia apertada.
+    std::vector<float> mono;
+    mono.reserve(9600);
+    for (int i = 0; i < 9600; ++i) { float l, r; synth.renderStereo(l, r); mono.push_back((l + r) * 0.5f); }
+    return estimateFrequencyByZeroCrossings(mono, 48000.0);
+}
+
+static void testNoteToHzStandardTuning() {
+    float freqA4 = renderCarrierFrequency(69); // A4 = 440Hz por convencao (afinacao padrao)
+    float freqC4 = renderCarrierFrequency(60); // C4 = ~261.63Hz
+    float freqA5 = renderCarrierFrequency(81); // uma oitava acima de A4 = 880Hz
+
+    std::printf("  (nota 69=%.2fHz, nota 60=%.2fHz, nota 81=%.2fHz)\n", freqA4, freqC4, freqA5);
+    check(std::abs(freqA4 - 440.0f) < 3.0f, "nota MIDI 69 (A4) produz ~440Hz (afinacao padrao)");
+    check(std::abs(freqC4 - 261.63f) < 3.0f, "nota MIDI 60 (C4) produz ~261.63Hz");
+    check(std::abs(freqA5 - 880.0f) < 6.0f, "nota MIDI 81 (uma oitava acima de A4) produz ~880Hz (dobro exato)");
+}
+
+static void testCoarseRatioScalesFrequencyLinearly() {
+    float freqRatio1 = renderCarrierFrequency(60, 1.0f);
+    float freqRatio2 = renderCarrierFrequency(60, 2.0f);
+    float freqRatioHalf = renderCarrierFrequency(60, 0.5f);
+
+    std::printf("  (ratio=0.5 -> %.2fHz, ratio=1.0 -> %.2fHz, ratio=2.0 -> %.2fHz)\n",
+                freqRatioHalf, freqRatio1, freqRatio2);
+    check(nearlyEqualRel(freqRatio2, freqRatio1 * 2.0f),
+          "coarseRatio=2.0 produz exatamente o dobro da frequencia de ratio=1.0");
+    check(nearlyEqualRel(freqRatioHalf, freqRatio1 * 0.5f),
+          "coarseRatio=0.5 produz exatamente metade da frequencia de ratio=1.0");
+}
+
+static void testFixedFreqIgnoresNote() {
+    float freqLowNote = renderCarrierFrequency(48, 1.0f, 0.0f, 0.0f, true, 440.0f);
+    float freqHighNote = renderCarrierFrequency(84, 1.0f, 0.0f, 0.0f, true, 440.0f);
+
+    std::printf("  (fixedHz=440, nota 48 -> %.2fHz, nota 84 -> %.2fHz)\n", freqLowNote, freqHighNote);
+    check(std::abs(freqLowNote - 440.0f) < 3.0f && std::abs(freqHighNote - 440.0f) < 3.0f,
+          "fixedFreq=true ignora a nota tocada -- mesma frequencia (440Hz) em notas bem diferentes");
+}
+
+static void testFineAndDetuneCentsShiftPitch() {
+    float freqBase = renderCarrierFrequency(60, 1.0f, 0.0f, 0.0f);
+    float freqFineOctave = renderCarrierFrequency(60, 1.0f, 1200.0f, 0.0f);   // 1200 cents = 1 oitava
+    float freqDetuneOctave = renderCarrierFrequency(60, 1.0f, 0.0f, 1200.0f);
+
+    std::printf("  (base=%.2fHz, fine=+1200c -> %.2fHz, detune=+1200c -> %.2fHz)\n",
+                freqBase, freqFineOctave, freqDetuneOctave);
+    check(nearlyEqualRel(freqFineOctave, freqBase * 2.0f), "fineCents=1200 (1 oitava) dobra a frequencia");
+    check(nearlyEqualRel(freqDetuneOctave, freqBase * 2.0f), "detuneCents=1200 (1 oitava) tambem dobra a frequencia");
+}
+
+static void testClassicWaveformShapesMatchMath() {
+    std::mt19937 rng(1);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+    check(std::abs(oscWave(0.25f, Waveform::Sine, rng, dist) - 1.0f) < 0.001f,
+          "Sine em phase=0.25 (quarto de ciclo) vale exatamente +1");
+    check(std::abs(oscWave(0.75f, Waveform::Sine, rng, dist) - (-1.0f)) < 0.001f,
+          "Sine em phase=0.75 vale exatamente -1");
+    check(oscWave(0.1f, Waveform::Square, rng, dist) == 1.0f && oscWave(0.9f, Waveform::Square, rng, dist) == -1.0f,
+          "Square e exatamente +1 na primeira metade do ciclo e -1 na segunda");
+    check(std::abs(oscWave(0.0f, Waveform::Saw, rng, dist) - (-1.0f)) < 0.001f &&
+          std::abs(oscWave(0.999f, Waveform::Saw, rng, dist) - 1.0f) < 0.01f,
+          "Saw rampa linearmente de -1 (inicio do ciclo) a +1 (fim do ciclo)");
+    check(std::abs(oscWave(0.0f, Waveform::Triangle, rng, dist) - (-1.0f)) < 0.001f &&
+          std::abs(oscWave(0.5f, Waveform::Triangle, rng, dist) - 1.0f) < 0.001f,
+          "Triangle vai de -1 (inicio) a +1 (metade do ciclo)");
+}
+
+static void testAfmWaveformStructuralProperties() {
+    std::mt19937 rng(1);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+    bool absSineAlwaysNonNegative = true;
+    bool halfSineZeroInSecondHalf = true;
+    for (int i = 0; i <= 100; ++i) {
+        float p = i / 100.0f;
+        if (oscWave(p, Waveform::AbsSine, rng, dist) < -0.0001f) absSineAlwaysNonNegative = false;
+        if (p >= 0.5f && std::abs(oscWave(p, Waveform::HalfSine, rng, dist)) > 0.0001f) halfSineZeroInSecondHalf = false;
+    }
+    check(absSineAlwaysNonNegative, "AbsSine nunca fica negativo (retificacao de onda completa)");
+    check(halfSineZeroInSecondHalf, "HalfSine fica em silencio EXATO na segunda metade do ciclo");
+    check(std::abs(oscWave(0.35f, Waveform::CamelSine, rng, dist)) < 0.0001f,
+          "CamelSine tem silencio EXATO no vao entre as 2 corcovas (ex.: phase=0.35)");
+}
+
+static void testPhaseModulationZeroMeansUnmodifiedCarrier() {
+    auto renderWithMod = [](float modAmount) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v;
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f;
+        v.matrix.mod[0][1] = modAmount;
+        v.op[0].outputLevel = 99;
+        v.op[1].outputLevel = 99; // modulador com nivel audivel -- garante que mod=0 zera por CONTA da matriz, nao por o modulador estar quieto
+        for (int i = 2; i < kNumOps; ++i) {
+            v.op[i].ampEG.level[0] = 0; v.op[i].ampEG.level[1] = 0;
+            v.op[i].ampEG.level[2] = 0; v.op[i].ampEG.level[3] = 0;
+        }
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, 60, 100);
+        std::vector<float> mono;
+        mono.reserve(1000);
+        for (int i = 0; i < 1000; ++i) { float l, r; synth.renderStereo(l, r); mono.push_back((l + r) * 0.5f); }
+        return mono;
+    };
+
+    auto unmodulated = renderWithMod(0.0f);
+
+    Synth refSynth;
+    refSynth.init(48000.0, 4);
+    VoiceParams refV;
+    refV.matrix = AlgorithmMatrix{};
+    refV.matrix.outputMix[0] = 1.0f;
+    refV.op[0].outputLevel = 99;
+    for (int i = 1; i < kNumOps; ++i) {
+        refV.op[i].ampEG.level[0] = 0; refV.op[i].ampEG.level[1] = 0;
+        refV.op[i].ampEG.level[2] = 0; refV.op[i].ampEG.level[3] = 0;
+    }
+    refSynth.part(0).voice = refV;
+    refSynth.recompile(0);
+    refSynth.noteOn(0, 60, 100);
+    std::vector<float> reference;
+    reference.reserve(1000);
+    for (int i = 0; i < 1000; ++i) { float l, r; refSynth.renderStereo(l, r); reference.push_back((l + r) * 0.5f); }
+
+    double maxDiff = 0.0;
+    for (size_t i = 0; i < unmodulated.size(); ++i)
+        maxDiff = std::max(maxDiff, static_cast<double>(std::abs(unmodulated[i] - reference[i])));
+    check(maxDiff < 0.0001, "matrix.mod=0.0 produz saida IDENTICA a nem ter o modulador no roteamento");
+
+    auto modulated = renderWithMod(1.0f);
+    double diffFromUnmodulated = 0.0;
+    for (size_t i = 0; i < modulated.size(); ++i)
+        diffFromUnmodulated = std::max(diffFromUnmodulated, static_cast<double>(std::abs(modulated[i] - unmodulated[i])));
+    check(diffFromUnmodulated > 0.01, "matrix.mod=1.0 muda audivelmente a saida (a modulacao de fase tem efeito real)");
+}
+
+static void testKeyLevelScalingAffectsOutputBySide() {
+    auto renderRms = [](int note) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v = makeSimpleFmPatch();
+        v.op[0].levelScaling.breakpoint = 60;
+        v.op[0].levelScaling.leftDepth = -12; // mais QUIETO abaixo do breakpoint
+        v.op[0].levelScaling.rightDepth = 12; // mais ALTO acima do breakpoint
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, note, 100);
+        std::vector<float> mono;
+        mono.reserve(4800);
+        for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); mono.push_back((l + r) * 0.5f); }
+        return computeRms(mono, 0, mono.size());
+    };
+
+    float rmsBelow = renderRms(36); // bem abaixo do breakpoint (60)
+    float rmsAt = renderRms(60);    // no breakpoint
+    float rmsAbove = renderRms(84); // bem acima do breakpoint
+
+    std::printf("  (RMS: nota 36=%.5f, nota 60=%.5f, nota 84=%.5f)\n", rmsBelow, rmsAt, rmsAbove);
+    check(rmsBelow < rmsAt, "leftDepth negativo: nota abaixo do breakpoint fica mais quieta");
+    check(rmsAbove > rmsAt, "rightDepth positivo: nota acima do breakpoint fica mais alta");
+}
+
+static void testVelocitySensitivityAffectsLevel() {
+    auto renderRms = [](int velSens, int velocity) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v = makeSimpleFmPatch();
+        v.op[0].velocitySens = static_cast<uint8_t>(velSens);
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, 60, velocity);
+        std::vector<float> mono;
+        mono.reserve(4800);
+        for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); mono.push_back((l + r) * 0.5f); }
+        return computeRms(mono, 0, mono.size());
+    };
+
+    float rmsLoudHighSens = renderRms(7, 127);
+    float rmsQuietHighSens = renderRms(7, 1);
+    float rmsLoudNoSens = renderRms(0, 127);
+    float rmsQuietNoSens = renderRms(0, 1);
+
+    std::printf("  (velocitySens=7: vel127=%.5f vel1=%.5f | velocitySens=0: vel127=%.5f vel1=%.5f)\n",
+                rmsLoudHighSens, rmsQuietHighSens, rmsLoudNoSens, rmsQuietNoSens);
+    check(rmsLoudHighSens > rmsQuietHighSens * 1.5f,
+          "velocitySens=7: velocity alta soa MUITO mais forte que velocity baixa");
+    check(std::abs(rmsLoudNoSens - rmsQuietNoSens) < rmsLoudNoSens * 0.05f,
+          "velocitySens=0: velocity nao afeta o nivel (diferenca desprezivel)");
+}
+
+static void testOutputLevelCurveMatchesFormula() {
+    auto renderRms = [](int outputLevel) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v;
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f;
+        v.op[0].outputLevel = static_cast<uint8_t>(outputLevel);
+        for (int i = 1; i < kNumOps; ++i) {
+            v.op[i].ampEG.level[0] = 0; v.op[i].ampEG.level[1] = 0;
+            v.op[i].ampEG.level[2] = 0; v.op[i].ampEG.level[3] = 0;
+        }
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, 60, 100);
+        std::vector<float> mono;
+        mono.reserve(4800);
+        for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); mono.push_back((l + r) * 0.5f); }
+        return computeRms(mono, 0, mono.size());
+    };
+
+    float rms99 = renderRms(99);
+    float rms93 = renderRms(93);
+    float expectedRatio = dbToLinear((93.0f - 99.0f) * 0.75f); // formula exata de OperatorParams.outputLevel
+
+    float actualRatio = rms93 / rms99;
+    std::printf("  (RMS(99)=%.5f, RMS(93)=%.5f, razao=%.4f, esperado=%.4f)\n", rms99, rms93, actualRatio, expectedRatio);
+    check(std::abs(actualRatio - expectedRatio) < 0.02f,
+          "outputLevel segue a formula documentada (level-99)*0.75dB, sem floor de silencio exato (diferente do EG)");
+}
+
 static void testAlgorithmPresetsUseEachOperatorExactlyOnce() {
     // Rede de seguranca contra erro de digitacao nos 32 algoritmos
     // desenhados a mao em dx7_algorithms.h: pra CADA algoritmo, a uniao de
@@ -1055,6 +1319,16 @@ int main() {
     testDelayProducesEchoAtExpectedTime();
     testReverbAddsDecayTail();
     testAfmWaveformsAreBoundedAndDistinct();
+    testNoteToHzStandardTuning();
+    testCoarseRatioScalesFrequencyLinearly();
+    testFixedFreqIgnoresNote();
+    testFineAndDetuneCentsShiftPitch();
+    testClassicWaveformShapesMatchMath();
+    testAfmWaveformStructuralProperties();
+    testPhaseModulationZeroMeansUnmodifiedCarrier();
+    testKeyLevelScalingAffectsOutputBySide();
+    testVelocitySensitivityAffectsLevel();
+    testOutputLevelCurveMatchesFormula();
     testAlgorithmPresetsUseEachOperatorExactlyOnce();
     testAlgorithmPresetsRenderAudibly();
     testMultitimbral4Parts();
