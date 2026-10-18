@@ -2,7 +2,9 @@
 #include "dx7_params.h"
 #include <cctype>
 #include <cstdint>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -57,8 +59,10 @@ public:
             case Type::Null: return "null";
             case Type::Bool: return bool_ ? "true" : "false";
             case Type::Number: {
+                if (!std::isfinite(num_)) return "null"; // JSON nao tem NaN/Inf
                 std::ostringstream oss;
-                if (num_ == static_cast<double>(static_cast<long long>(num_))) {
+                // checa a faixa antes do cast: long long de um double enorme e UB
+                if (std::fabs(num_) < 9.0e15 && num_ == static_cast<double>(static_cast<long long>(num_))) {
                     oss << static_cast<long long>(num_);
                 } else {
                     oss.precision(9);
@@ -207,6 +211,17 @@ private:
     std::vector<std::pair<std::string, JsonValue>> obj_;
 };
 
+// Converte numero do JSON pro tipo do campo SEM UB: static_cast<uint8_t>(300.0),
+// de NaN, ou static_cast<float>(1e40) e comportamento indefinido; aqui satura
+// na faixa do tipo (NaN/Inf viram 0 -- sanitize() ajusta pra faixa util depois).
+template <typename T>
+inline T clampCast(double d) {
+    if (!std::isfinite(d)) return T{};
+    double lo = static_cast<double>(std::numeric_limits<T>::lowest());
+    double hi = static_cast<double>(std::numeric_limits<T>::max());
+    return static_cast<T>(std::clamp(d, lo, hi));
+}
+
 // --- enums <-> string (formato legivel/estavel entre versoes) ----------
 
 inline const char* waveformName(Waveform w) {
@@ -223,6 +238,7 @@ inline const char* waveformName(Waveform w) {
         case Waveform::CamelSine:       return "CamelSine";
         case Waveform::SquaredSine:     return "SquaredSine";
         case Waveform::LogSaw:          return "LogSaw";
+        case Waveform::Additive:        return "Additive";
     }
     return "Sine";
 }
@@ -238,6 +254,7 @@ inline Waveform waveformFromName(const std::string& s) {
     if (s == "CamelSine")       return Waveform::CamelSine;
     if (s == "SquaredSine")     return Waveform::SquaredSine;
     if (s == "LogSaw")          return Waveform::LogSaw;
+    if (s == "Additive")        return Waveform::Additive;
     return Waveform::Sine;
 }
 
@@ -252,6 +269,7 @@ inline const char* fxTypeName(FxType f) {
         case FxType::Crush:     return "Crush";
         case FxType::FreqShift: return "FreqShift";
         case FxType::Comb:      return "Comb";
+        case FxType::Fold:      return "Fold";
     }
     return "Bypass";
 }
@@ -264,6 +282,7 @@ inline FxType fxTypeFromName(const std::string& s) {
     if (s == "Crush")     return FxType::Crush;
     if (s == "FreqShift") return FxType::FreqShift;
     if (s == "Comb")      return FxType::Comb;
+    if (s == "Fold")      return FxType::Fold;
     return FxType::Bypass;
 }
 
@@ -316,6 +335,7 @@ inline const char* modDestName(ModDest d) {
         case ModDest::OperatorFx1:      return "OperatorFx1";
         case ModDest::OperatorFeedback: return "OperatorFeedback";
         case ModDest::VoicePitch:       return "VoicePitch";
+        case ModDest::OperatorMorph:    return "OperatorMorph";
     }
     return "None";
 }
@@ -324,6 +344,7 @@ inline ModDest modDestFromName(const std::string& s) {
     if (s == "OperatorFx1")      return ModDest::OperatorFx1;
     if (s == "OperatorFeedback") return ModDest::OperatorFeedback;
     if (s == "VoicePitch")       return ModDest::VoicePitch;
+    if (s == "OperatorMorph")    return ModDest::OperatorMorph;
     return ModDest::None;
 }
 
@@ -360,10 +381,10 @@ inline EGParams egParamsFromJson(const JsonValue* j) {
     if (!j) return eg;
     if (auto* rate = j->find("rate"))
         for (int i = 0; i < 4 && i < static_cast<int>(rate->arraySize()); ++i)
-            eg.rate[i] = static_cast<uint8_t>(rate->at(static_cast<size_t>(i)).asNumber(eg.rate[i]));
+            eg.rate[i] = clampCast<uint8_t>(rate->at(static_cast<size_t>(i)).asNumber(eg.rate[i]));
     if (auto* level = j->find("level"))
         for (int i = 0; i < 4 && i < static_cast<int>(level->arraySize()); ++i)
-            eg.level[i] = static_cast<uint8_t>(level->at(static_cast<size_t>(i)).asNumber(eg.level[i]));
+            eg.level[i] = clampCast<uint8_t>(level->at(static_cast<size_t>(i)).asNumber(eg.level[i]));
     return eg;
 }
 
@@ -385,11 +406,11 @@ inline PEGParams pegParamsFromJson(const JsonValue* j) {
     if (!j) return p;
     if (auto* rate = j->find("rate"))
         for (int i = 0; i < 4 && i < static_cast<int>(rate->arraySize()); ++i)
-            p.rate[i] = static_cast<uint8_t>(rate->at(static_cast<size_t>(i)).asNumber(p.rate[i]));
+            p.rate[i] = clampCast<uint8_t>(rate->at(static_cast<size_t>(i)).asNumber(p.rate[i]));
     if (auto* level = j->find("level"))
         for (int i = 0; i < 4 && i < static_cast<int>(level->arraySize()); ++i)
-            p.level[i] = static_cast<uint8_t>(level->at(static_cast<size_t>(i)).asNumber(p.level[i]));
-    p.rangeOctaves = static_cast<float>(j->numberAt("rangeOctaves", p.rangeOctaves));
+            p.level[i] = clampCast<uint8_t>(level->at(static_cast<size_t>(i)).asNumber(p.level[i]));
+    p.rangeOctaves = clampCast<float>(j->numberAt("rangeOctaves", p.rangeOctaves));
     return p;
 }
 
@@ -405,9 +426,9 @@ inline JsonValue keyLevelScalingToJson(const KeyLevelScaling& k) {
 inline KeyLevelScaling keyLevelScalingFromJson(const JsonValue* j) {
     KeyLevelScaling k;
     if (!j) return k;
-    k.breakpoint = static_cast<uint8_t>(j->numberAt("breakpoint", k.breakpoint));
-    k.leftDepth = static_cast<int8_t>(j->numberAt("leftDepth", k.leftDepth));
-    k.rightDepth = static_cast<int8_t>(j->numberAt("rightDepth", k.rightDepth));
+    k.breakpoint = clampCast<uint8_t>(j->numberAt("breakpoint", k.breakpoint));
+    k.leftDepth = clampCast<int8_t>(j->numberAt("leftDepth", k.leftDepth));
+    k.rightDepth = clampCast<int8_t>(j->numberAt("rightDepth", k.rightDepth));
     k.leftExp = j->boolAt("leftExp", k.leftExp);
     k.rightExp = j->boolAt("rightExp", k.rightExp);
     return k;
@@ -426,13 +447,37 @@ inline JsonValue lfoParamsToJson(const LFOParams& l) {
 inline LFOParams lfoParamsFromJson(const JsonValue* j) {
     LFOParams l;
     if (!j) return l;
-    l.rate = static_cast<float>(j->numberAt("rate", l.rate));
+    l.rate = clampCast<float>(j->numberAt("rate", l.rate));
     l.wave = lfoWaveFromName(j->stringAt("wave", lfoWaveName(l.wave)));
-    l.delaySec = static_cast<float>(j->numberAt("delaySec", l.delaySec));
+    l.delaySec = clampCast<float>(j->numberAt("delaySec", l.delaySec));
     l.keySync = j->boolAt("keySync", l.keySync);
-    l.pitchDepth = static_cast<float>(j->numberAt("pitchDepth", l.pitchDepth));
-    l.ampDepth = static_cast<float>(j->numberAt("ampDepth", l.ampDepth));
+    l.pitchDepth = clampCast<float>(j->numberAt("pitchDepth", l.pitchDepth));
+    l.ampDepth = clampCast<float>(j->numberAt("ampDepth", l.ampDepth));
     return l;
+}
+
+// "additive": {"a": {"amp": [8], "ratio": [8]}, "b": {...}, "morph": x}
+inline JsonValue partialSetToJson(const OperatorParams::PartialSet& p) {
+    JsonValue v = JsonValue::makeObject();
+    JsonValue amp = JsonValue::makeArray(), ratio = JsonValue::makeArray();
+    for (int k = 0; k < kNumPartials; ++k) {
+        amp.push(JsonValue::makeNumber(p.amp[k]));
+        ratio.push(JsonValue::makeNumber(p.ratio[k]));
+    }
+    v.set("amp", std::move(amp));
+    v.set("ratio", std::move(ratio));
+    return v;
+}
+inline OperatorParams::PartialSet partialSetFromJson(const JsonValue* j) {
+    OperatorParams::PartialSet p;
+    if (!j) return p;
+    if (auto* amp = j->find("amp"))
+        for (int k = 0; k < kNumPartials && k < static_cast<int>(amp->arraySize()); ++k)
+            p.amp[k] = clampCast<float>(amp->at(static_cast<size_t>(k)).asNumber(p.amp[k]));
+    if (auto* ratio = j->find("ratio"))
+        for (int k = 0; k < kNumPartials && k < static_cast<int>(ratio->arraySize()); ++k)
+            p.ratio[k] = clampCast<float>(ratio->at(static_cast<size_t>(k)).asNumber(p.ratio[k]));
+    return p;
 }
 
 inline JsonValue operatorParamsToJson(const OperatorParams& o) {
@@ -460,34 +505,44 @@ inline JsonValue operatorParamsToJson(const OperatorParams& o) {
     j.set("fxEGReleaseWithAmp", JsonValue::makeBool(o.fxEGReleaseWithAmp));
     j.set("pegDepth", JsonValue::makeNumber(o.pegDepth));
     j.set("pegAffectsFixed", JsonValue::makeBool(o.pegAffectsFixed));
+    JsonValue add = JsonValue::makeObject();
+    add.set("a", partialSetToJson(o.additiveA));
+    add.set("b", partialSetToJson(o.additiveB));
+    add.set("morph", JsonValue::makeNumber(o.morphDepth));
+    j.set("additive", std::move(add));
     return j;
 }
 inline OperatorParams operatorParamsFromJson(const JsonValue* j) {
     OperatorParams o;
     if (!j) return o;
     o.fixedFreq = j->boolAt("fixedFreq", o.fixedFreq);
-    o.coarseRatio = static_cast<float>(j->numberAt("coarseRatio", o.coarseRatio));
-    o.fineCents = static_cast<float>(j->numberAt("fineCents", o.fineCents));
-    o.fixedHz = static_cast<float>(j->numberAt("fixedHz", o.fixedHz));
-    o.detuneCents = static_cast<float>(j->numberAt("detuneCents", o.detuneCents));
-    o.outputLevel = static_cast<uint8_t>(j->numberAt("outputLevel", o.outputLevel));
+    o.coarseRatio = clampCast<float>(j->numberAt("coarseRatio", o.coarseRatio));
+    o.fineCents = clampCast<float>(j->numberAt("fineCents", o.fineCents));
+    o.fixedHz = clampCast<float>(j->numberAt("fixedHz", o.fixedHz));
+    o.detuneCents = clampCast<float>(j->numberAt("detuneCents", o.detuneCents));
+    o.outputLevel = clampCast<uint8_t>(j->numberAt("outputLevel", o.outputLevel));
     o.ampEG = egParamsFromJson(j->find("ampEG"));
     o.fxEG = egParamsFromJson(j->find("fxEG"));
     o.levelScaling = keyLevelScalingFromJson(j->find("levelScaling"));
-    o.rateScaling = static_cast<uint8_t>(j->numberAt("rateScaling", o.rateScaling));
-    o.velocitySens = static_cast<uint8_t>(j->numberAt("velocitySens", o.velocitySens));
-    o.lfoAmpModSens = static_cast<uint8_t>(j->numberAt("lfoAmpModSens", o.lfoAmpModSens));
-    o.lfoPitchModSens = static_cast<uint8_t>(j->numberAt("lfoPitchModSens", o.lfoPitchModSens));
-    o.feedback = static_cast<float>(j->numberAt("feedback", o.feedback));
+    o.rateScaling = clampCast<uint8_t>(j->numberAt("rateScaling", o.rateScaling));
+    o.velocitySens = clampCast<uint8_t>(j->numberAt("velocitySens", o.velocitySens));
+    o.lfoAmpModSens = clampCast<uint8_t>(j->numberAt("lfoAmpModSens", o.lfoAmpModSens));
+    o.lfoPitchModSens = clampCast<uint8_t>(j->numberAt("lfoPitchModSens", o.lfoPitchModSens));
+    o.feedback = clampCast<float>(j->numberAt("feedback", o.feedback));
     o.waveform = waveformFromName(j->stringAt("waveform", waveformName(o.waveform)));
-    o.phaseDistortion = static_cast<float>(j->numberAt("phaseDistortion", o.phaseDistortion));
+    o.phaseDistortion = clampCast<float>(j->numberAt("phaseDistortion", o.phaseDistortion));
     o.fxType = fxTypeFromName(j->stringAt("fxType", fxTypeName(o.fxType)));
-    o.fxParam1 = static_cast<float>(j->numberAt("fxParam1", o.fxParam1));
-    o.fxParam2 = static_cast<float>(j->numberAt("fxParam2", o.fxParam2));
-    o.ringModSource = static_cast<int>(j->numberAt("ringModSource", o.ringModSource));
+    o.fxParam1 = clampCast<float>(j->numberAt("fxParam1", o.fxParam1));
+    o.fxParam2 = clampCast<float>(j->numberAt("fxParam2", o.fxParam2));
+    o.ringModSource = clampCast<int>(j->numberAt("ringModSource", o.ringModSource));
     o.fxEGReleaseWithAmp = j->boolAt("fxEGReleaseWithAmp", o.fxEGReleaseWithAmp);
-    o.pegDepth = static_cast<float>(j->numberAt("pegDepth", o.pegDepth));
+    o.pegDepth = clampCast<float>(j->numberAt("pegDepth", o.pegDepth));
     o.pegAffectsFixed = j->boolAt("pegAffectsFixed", o.pegAffectsFixed);
+    if (auto* add = j->find("additive")) { // ausente (patch antigo) = mantem os defaults
+        o.additiveA = partialSetFromJson(add->find("a"));
+        o.additiveB = partialSetFromJson(add->find("b"));
+        o.morphDepth = clampCast<float>(add->numberAt("morph", o.morphDepth));
+    }
     return o;
 }
 
@@ -504,8 +559,8 @@ inline ModRoute modRouteFromJson(const JsonValue* j) {
     if (!j) return r;
     r.src = modSourceFromName(j->stringAt("src", modSourceName(r.src)));
     r.dest = modDestFromName(j->stringAt("dest", modDestName(r.dest)));
-    r.opIndex = static_cast<int>(j->numberAt("opIndex", r.opIndex));
-    r.depth = static_cast<float>(j->numberAt("depth", r.depth));
+    r.opIndex = clampCast<int>(j->numberAt("opIndex", r.opIndex));
+    r.depth = clampCast<float>(j->numberAt("depth", r.depth));
     return r;
 }
 
@@ -537,7 +592,7 @@ inline AlgorithmMatrix algorithmMatrixFromJson(const JsonValue* j) {
         for (int i = 0; i < kNumOps && i < static_cast<int>(mod->arraySize()); ++i) {
             const JsonValue& row = mod->at(static_cast<size_t>(i));
             for (int k = 0; k < kNumOps && k < static_cast<int>(row.arraySize()); ++k)
-                m.mod[i][k] = static_cast<float>(row.at(static_cast<size_t>(k)).asNumber(0.0));
+                m.mod[i][k] = clampCast<float>(row.at(static_cast<size_t>(k)).asNumber(0.0));
         }
     if (auto* ring = j->find("ring"))
         for (int i = 0; i < kNumOps && i < static_cast<int>(ring->arraySize()); ++i) {
@@ -547,7 +602,7 @@ inline AlgorithmMatrix algorithmMatrixFromJson(const JsonValue* j) {
         }
     if (auto* outMix = j->find("outputMix"))
         for (int i = 0; i < kNumOps && i < static_cast<int>(outMix->arraySize()); ++i)
-            m.outputMix[i] = static_cast<float>(outMix->at(static_cast<size_t>(i)).asNumber(0.0));
+            m.outputMix[i] = clampCast<float>(outMix->at(static_cast<size_t>(i)).asNumber(0.0));
     return m;
 }
 
@@ -567,6 +622,7 @@ inline JsonValue voiceParamsToJson(const VoiceParams& v) {
 }
 inline VoiceParams voiceParamsFromJson(const JsonValue& j) {
     VoiceParams v; // ja vem com o patch minimo default (op0 carrier, op1 modula op0)
+    if (j.type() != JsonValue::Type::Object) return v;
     if (auto* ops = j.find("op"))
         for (int i = 0; i < kNumOps && i < static_cast<int>(ops->arraySize()); ++i)
             v.op[i] = operatorParamsFromJson(&ops->at(static_cast<size_t>(i)));
@@ -580,6 +636,7 @@ inline VoiceParams voiceParamsFromJson(const JsonValue& j) {
     if (auto* mm = j.find("modMatrix"))
         for (int i = 0; i < kNumModRoutes && i < static_cast<int>(mm->arraySize()); ++i)
             v.modMatrix[i] = modRouteFromJson(&mm->at(static_cast<size_t>(i)));
+    sanitize(v);
     return v;
 }
 
@@ -612,25 +669,26 @@ inline PartParams partParamsFromJson(const JsonValue& j) {
     PartParams p;
     p.name = j.stringAt("name", p.name);
     if (auto* voice = j.find("voice")) p.voice = voiceParamsFromJson(*voice);
-    p.midiChannel = static_cast<int>(j.numberAt("midiChannel", p.midiChannel));
-    p.loKey = static_cast<uint8_t>(j.numberAt("loKey", p.loKey));
-    p.hiKey = static_cast<uint8_t>(j.numberAt("hiKey", p.hiKey));
-    p.loVel = static_cast<uint8_t>(j.numberAt("loVel", p.loVel));
-    p.hiVel = static_cast<uint8_t>(j.numberAt("hiVel", p.hiVel));
-    p.transpose = static_cast<int8_t>(j.numberAt("transpose", p.transpose));
-    p.level = static_cast<float>(j.numberAt("level", p.level));
-    p.pan = static_cast<float>(j.numberAt("pan", p.pan));
+    p.midiChannel = clampCast<int>(j.numberAt("midiChannel", p.midiChannel));
+    p.loKey = clampCast<uint8_t>(j.numberAt("loKey", p.loKey));
+    p.hiKey = clampCast<uint8_t>(j.numberAt("hiKey", p.hiKey));
+    p.loVel = clampCast<uint8_t>(j.numberAt("loVel", p.loVel));
+    p.hiVel = clampCast<uint8_t>(j.numberAt("hiVel", p.hiVel));
+    p.transpose = clampCast<int8_t>(j.numberAt("transpose", p.transpose));
+    p.level = clampCast<float>(j.numberAt("level", p.level));
+    p.pan = clampCast<float>(j.numberAt("pan", p.pan));
     p.voiceMode = voiceModeFromName(j.stringAt("voiceMode", voiceModeName(p.voiceMode)));
-    p.unisonCount = static_cast<int>(j.numberAt("unisonCount", p.unisonCount));
-    p.unisonDetuneCents = static_cast<float>(j.numberAt("unisonDetuneCents", p.unisonDetuneCents));
-    p.unisonSpread = static_cast<float>(j.numberAt("unisonSpread", p.unisonSpread));
+    p.unisonCount = clampCast<int>(j.numberAt("unisonCount", p.unisonCount));
+    p.unisonDetuneCents = clampCast<float>(j.numberAt("unisonDetuneCents", p.unisonDetuneCents));
+    p.unisonSpread = clampCast<float>(j.numberAt("unisonSpread", p.unisonSpread));
     p.glideEnabled = j.boolAt("glideEnabled", p.glideEnabled);
-    p.glideTimeSec = static_cast<float>(j.numberAt("glideTimeSec", p.glideTimeSec));
+    p.glideTimeSec = clampCast<float>(j.numberAt("glideTimeSec", p.glideTimeSec));
     p.glideLegatoOnly = j.boolAt("glideLegatoOnly", p.glideLegatoOnly);
     p.monoLegatoEnvReuse = j.boolAt("monoLegatoEnvReuse", p.monoLegatoEnvReuse);
-    p.reservedVoices = static_cast<int>(j.numberAt("reservedVoices", p.reservedVoices));
+    p.reservedVoices = clampCast<int>(j.numberAt("reservedVoices", p.reservedVoices));
     p.enabled = j.boolAt("enabled", p.enabled);
-    p.bendRangeSemis = static_cast<float>(j.numberAt("bendRangeSemis", p.bendRangeSemis));
+    p.bendRangeSemis = clampCast<float>(j.numberAt("bendRangeSemis", p.bendRangeSemis));
+    sanitize(p);
     return p;
 }
 
@@ -647,7 +705,9 @@ inline bool loadPatchFile(const std::string& path, VoiceParams& v) {
     if (!f) return false;
     std::ostringstream ss;
     ss << f.rdbuf();
-    v = voiceParamsFromJson(JsonValue::parse(ss.str()));
+    JsonValue j = JsonValue::parse(ss.str());
+    if (j.type() != JsonValue::Type::Object) return false; // vazio/lixo: nao troca o patch em silencio
+    v = voiceParamsFromJson(j);
     return true;
 }
 
@@ -662,7 +722,9 @@ inline bool loadPartFile(const std::string& path, PartParams& p) {
     if (!f) return false;
     std::ostringstream ss;
     ss << f.rdbuf();
-    p = partParamsFromJson(JsonValue::parse(ss.str()));
+    JsonValue j = JsonValue::parse(ss.str());
+    if (j.type() != JsonValue::Type::Object) return false;
+    p = partParamsFromJson(j);
     return true;
 }
 

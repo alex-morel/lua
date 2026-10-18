@@ -80,11 +80,16 @@ dx7fm/
                       voiceParamsToJson/FromJson, partParamsToJson/FromJson
                       e os helpers de arquivo savePatchFile/loadPatchFile,
                       savePartFile/loadPartFile. Ver secao 6B.
-    dx7_globalfx.h  - [ADICIONADO em 2026-09-21] Efeitos globais POS-MIX:
-                      StereoChorus, StereoDelay, SimpleReverb (Schroeder/
-                      Freeverb simplificado). Blocos genericos como
-                      dx7_dsp.h, mas operam em pares de amostra ESTEREO
-                      (a soma das 4 partes), nao por operador. Ver secao 7D.
+    dx7_globalfx.h  - Efeitos globais POS-MIX ([REESCRITO em 2026-10-18]
+                      a partir de efeitos open source): chorus ensemble,
+                      phaser, flanger, delay de fita, reverb Room/Hall/
+                      Plate, EQ 3 bandas, compressor, numa cadeia de ordem
+                      configuravel. Operam em pares de amostra ESTEREO (a
+                      soma das 4 partes), nao por operador. Ver secao 7D.
+    ../third_party/mverb/ - MVerb (GPLv3), vendorizado sem mudancas.
+    ../LICENSE, ../THIRD_PARTY_NOTICES.md - o projeto e GPLv3 (por causa do
+                      MVerb e da porta do ZamComp); origem e licenca de
+                      cada componente de terceiros.
     dx7_algorithms.h- [ADICIONADO em 2026-09-21] 32 algoritmos preset
                       (topologias de AlgorithmMatrix prontas) DESENHADOS
                       PARA OS 8 OPERADORES deste motor -- NAO e a lista
@@ -92,7 +97,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 86 checagens de sanidade em 45 funcoes de teste (nao
+    demo.cpp        - 180 checagens de sanidade em 91 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -156,11 +161,13 @@ separado alem do demo.
 Compilar e rodar os testes/demos ([ATUALIZADO em 2026-09-21] -pthread agora
 e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
 
-    g++ -std=c++20 -O2 -Wall -Wextra -pthread -o demo src/demo.cpp
+    g++ -std=c++20 -O2 -Wall -Wextra -pthread -Isrc -o demo src/demo.cpp
+    (-Isrc: o demo.cpp testa tambem app/event_queue.h e app/patch_browser.h,
+    que incluem os headers do motor pelo nome)
     ./demo
 
-Isso deve imprimir 86 linhas "[PASS] ..." e no final:
-    == Resultado: 86 passaram, 0 falharam ==
+Isso deve imprimir 180 linhas "[PASS] ..." e no final:
+    == Resultado: 180 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -254,7 +261,36 @@ ou um leitor de arquivo preencheria.
 
   enum Waveform { Sine, Triangle, Saw, Square, Noise,
                   HalfSine, AbsSine, QuarterSine, AlternatingSine,
-                  CamelSine, SquaredSine, LogSaw }
+                  CamelSine, SquaredSine, LogSaw, Additive }
+      [Additive ADICIONADO em 2026-10-18, no FIM do enum] Sintese aditiva:
+      o operador soma kNumPartials (8) osciladores senoidais REAIS, cada
+      um com amplitude (0..1) e razao de frequencia (0.01..32 x f do
+      operador) LIVRES -- razoes inteiras = harmonicos, fracionarias =
+      inarmonicos (sinos, tambores). Dois espectros, OperatorParams::
+      additiveA/additiveB (struct PartialSet {amp[8], ratio[8]}); a
+      posicao do morph entre eles e morphDepth * fxEG/99 + ModDest::
+      OperatorMorph (clampado 0..1) e o morph interpola amplitudes E
+      razoes (um parcial pode deslizar de frequencia na nota). O fxEG e o
+      MESMO que modula o FX do operador. Gerado por dx7_dsp.h::
+      PartialOscillators (estado = fase de cada parcial, em OperatorState):
+        - PM: o parcial k recebe modIn * ratio_k ciclos (= o que o
+          harmonico k de uma onda periodica receberia), entao com razoes
+          harmonicas soa igual a modular a onda inteira; phase distortion
+          e aplicada na fase de cada parcial.
+        - anti-aliasing: parcial com frequencia >= Nyquist (taxa INTERNA,
+          com oversampling) e desligado; a fase continua andando.
+        - normalizacao: divide pela SOMA das amplitudes (pico <= 1); a soma
+          inclui os desligados por Nyquist (volume nao sobe em nota aguda).
+        - seno por tabela (fastSin01: 4096 pontos + interpolacao, erro
+          ~3e-7), ~2x mais barato que std::sin.
+      Por que osciladores e nao wavetable: com razoes livres a soma nao e
+      periodica no periodo do operador, entao nao cabe numa tabela de um
+      ciclo. Custo medido (depois da otimizacao, ver 7C): 16 vozes com os
+      8 operadores aditivos (8 parciais cada) ~27% de um nucleo, ~2x o
+      custo dos mesmos 8 operadores em Sine.
+      (Uma versao de 32 harmonicos fixos em wavetable chegou a ser
+      prototipada e foi trocada por esta, a pedido do usuario, em troca
+      dos parciais inarmonicos.)
       Forma de onda do oscilador de cada operador (DX7 original: so Sine).
       [ADICIONADO em 2026-09-21] As ultimas 7 (HalfSine..LogSaw) sao uma
       reconstrucao PROPRIA das 8 formas de onda do motor AFM da Yamaha
@@ -281,7 +317,13 @@ ou um leitor de arquivo preencheria.
       (nenhum par produz sinais quase identicos).
 
   enum FxType { Bypass, LowPass, BandPass, HighPass, RingMod, Saturate,
-                Crush, FreqShift, Comb }
+                Crush, FreqShift, Comb, Fold }
+      [Fold ADICIONADO em 2026-09-23, no FIM do enum pra nao renumerar os
+      anteriores.] Fold = wavefolder: FX1 = drive (1..16; 1 = sem dobra),
+      modulado pelo fxEG igual ao corte do filtro (20% no nivel 0 do
+      envelope, 100% no 99) e pela mod matrix via OperatorFx1; FX Param2
+      = simetria/bias (0..1; 0 = so harmonicos impares, >0 = pares
+      tambem, com o DC resultante removido por um DcBlocker de ~10Hz).
       Qual efeito (se algum) roda DENTRO do operador, depois do oscilador
       e antes do envelope de amplitude. Ver secao 5 para o que cada um faz
       sonoramente.
@@ -344,7 +386,9 @@ ou um leitor de arquivo preencheria.
 
   ModSource { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend }
   ModDest   { None, OperatorLevel, OperatorFx1, OperatorFeedback,
-              VoicePitch }
+              VoicePitch, OperatorMorph }
+      [OperatorMorph ADICIONADO em 2026-10-18]: somado na posicao do morph
+      A->B da onda Additive do operador opIndex (ex.: mod wheel -> morph).
   ModRoute { src, dest, opIndex, depth(-1..1) }
       Uma matriz de modulacao pequena e generica (8 slots, kNumModRoutes).
       Cada ModRoute liga uma fonte a um destino com uma profundidade.
@@ -512,6 +556,17 @@ ou um leitor de arquivo preencheria.
       operador escolhe qual usar conforme op.fxType).
 
   softSaturate(x, drive) -> tanh(x * (1 + drive*8))
+
+  triangleFold(v) [ADICIONADO em 2026-09-23] -> wavefolder triangular:
+      identidade EXATA em [-1, 1]; fora disso o sinal rebate nas paredes
+      +-1 (periodo 4: 2 -> 0, 3 -> -1...), em vez de cortar (clip) ou
+      arredondar (tanh). Limitado a [-1, 1] pra qualquer entrada finita.
+      O brilho (centroide harmonico) sobe ~linear com o drive (~drive+1
+      pra um seno), mas harmonicos ISOLADOS nao sao monotonicos (com
+      drive ~2.4 a fundamental quase some) -- comportamento classico de
+      wavefolder, nao bug. Gera aliasing em notas agudas com drive alto
+      (nao e band-limited); oversampling 2x/4x (secao 11) ameniza.
+  class DcBlocker - passa-altas de 1 polo (~10Hz), usado pelo Fold.
 
   softLimit(x, threshold=0.9) -> [ADICIONADO em 2026-09-21] limitador de
       MASTER BUS, diferente de softSaturate acima (que e um efeito de
@@ -932,14 +987,15 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           (ver triggerSlot).
 
       sustainPedal(part, down) / sostenutoPedal(part, down)
-          Sustain: ao soltar (down=false), varre TODOS os slots daquela
-          parte com sustainHeld=true e !physicallyHeld (ou seja,
-          realmente foram soltos fisicamente, so estavam presos pelo
-          pedal) e chama noteOff() de verdade.
+          [ATUALIZADO em 2026-09-23] Os dois pedais seguram a voz com
+          flags SEPARADAS no VoiceSlot: sustainHeld (CC64) e
+          sostenutoHeld (CC66). Soltar um pedal limpa so a sua flag e
+          chama noteOff() apenas se a voz nao estiver fisicamente
+          pressionada NEM presa pelo outro pedal.
           Sostenuto: ao pressionar, captura o conjunto de notas
           FISICAMENTE pressionadas naquele instante (sostenutoCaptured).
           So essas notas, quando soltas enquanto o pedal continuar
-          pressionado, ficam "presas" (sustainHeld=true). Notas tocadas
+          pressionado, ficam presas (sostenutoHeld=true). Notas tocadas
           DEPOIS do pedal ja estar pressionado nao sao capturadas —
           comportamento identico ao sostenuto de piano acustico.
 
@@ -954,13 +1010,20 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           "correto" psicoacusticamente, trocar por curva seno/cosseno,
           ver secao 8). [ATUALIZADO em 2026-09-21] Logo apos somar as 4
           partes (dentro do mesmo loop, sem varredura extra), calcula
-          activeCount e aplica um ganho de compensacao de polifonia
-          1/sqrt(activeCount), suavizado (~30ms) num membro polyphonyGain_
+          a "carga" N = soma de Voice::loudness() (maior amplitude de
+          envelope entre as portadoras de cada voz, 0..1 -- [ATUALIZADO
+          em 2026-09-23], antes era a contagem crua de vozes ativas) e
+          aplica um ganho de compensacao de polifonia 1/sqrt(max(1,N)),
+          suavizado (~30ms) num membro polyphonyGain_
           -- evita que a soma de varias vozes cresca sem controle,
           mantendo a POTENCIA total aproximadamente constante entre 1 nota
           e um acorde. So depois disso passa o par (outL, outR) pela
           cadeia de efeitos globais pos-mix: chorus_ -> delay_ -> reverb_
-          (ver globalFx() abaixo e secao 7D). Por ULTIMO, aplica
+          (ver globalFx() abaixo e secao 7D). Depois dos FX aplica o
+          VOLUME GERAL ([ADICIONADO em 2026-09-23] setMasterVolume(0..2),
+          std::atomic<float> escrito pela UI, suavizado ~20ms num membro
+          masterGain_, com encaixe exato no alvo pra volume 0 ser
+          silencio exato). Por ULTIMO, aplica
           softLimit() (secao 5) em outL/outR -- limitador de master bus,
           rede de seguranca pra qualquer transiente que ainda passe de
           +-1.0 mesmo com a compensacao de polifonia (feedback pesado,
@@ -1019,7 +1082,14 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
 
       releaseSlot(idx, part, note)
           Decide se a nota deve realmente soltar (voice.noteOff()) ou
-          ficar "presa" por sustain/sostenuto (sustainHeld=true).
+          ficar presa por sustain (sustainHeld) e/ou sostenuto
+          (sostenutoHeld).
+
+      detachSlot(idx) [ADICIONADO em 2026-09-23]
+          Chamado antes de reusar um slot pra uma nota NOVA: apaga as
+          referencias do dono anterior (noteToSlot, heldStack de Poly,
+          activeSlots de Mono/Unison). Sem isso, o noteOff da nota
+          roubada soltava a nota que roubou o slot.
 
       polyNoteOn/polyNoteOff - modo Poly: 1 nota = 1 slot, via
           noteToSlot. Reataca (retrigger, sem alocar slot novo) se a
@@ -1040,25 +1110,27 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           unisonDetuneCents; pan = t * unisonSpread.
 
       monoGroupNoteOff(part, note)
-          Se ainda ha notas na heldStack (outra tecla continua
-          pressionada), REATACA pra a ULTIMA nota da pilha
-          (heldStack.back(), ou seja, prioridade de "ultima nota" —
-          nao "nota mais aguda" nem "mais grave") em modo legato (desliza
-          se glide estiver ligado). Senao, libera de fato (via
-          releaseSlot) e limpa activeSlots.
+          [ATUALIZADO em 2026-09-23] Ignora nota que nao esta na
+          heldStack (nunca foi aceita pela parte: fora do key range,
+          parte desabilitada...) e nota que nao e a que esta soando
+          (monoSoundingNote) -- soltar a tecla "de baixo" nao muda o
+          som. Se a nota solta ERA a que soava e ainda ha notas na
+          heldStack, REATACA pra a ULTIMA da pilha (prioridade de
+          "ultima nota") em modo legato, com a velocity ORIGINAL dela
+          (heldVelocity). Senao, libera de fato (via releaseSlot).
 
-      monoGroupNoteOnInternal(part, note, velocity, voiceCount)
-          Variante interna usada so pelo reataque acima: NAO reavalia
-          "legato" a partir do tamanho de activeSlots (ja sabido > 0,
-          entao sempre legato=true aqui) — evita duplicar a logica de
-          decisao de legato/alocacao do monoGroupNoteOn.
-          LIMITACAO CONHECIDA: a velocity usada no reataque e sempre
-          fixa em 100 (comentario no proprio codigo), porque a
-          velocity ORIGINAL de cada nota da heldStack nao e rastreada
-          hoje — so a nota (int), nao o par (nota, velocity). Se
-          precisar de velocity correta no reataque mono, trocar
-          heldStack de vector<int> pra vector<pair<int,int>> (nota,
-          velocity).
+      monoGroupStart / monoGroupRetrigger
+          Start aloca um grupo novo (voiceCount slots); Retrigger
+          reataca em legato os slots ja alocados, espalhando o detune
+          pelo tamanho REAL do grupo (activeSlots.size()). Se as vozes
+          do grupo foram roubadas enquanto teclas continuavam seguras,
+          o noteOff cai em Start e realoca.
+
+      runMode (PartRuntime) [ADICIONADO em 2026-09-23]
+          Modo em que as notas atuais foram disparadas. noteOff segue
+          runMode, nao params.voiceMode: se a UI trocar o modo com notas
+          seguras, o proximo noteOn solta tudo do modo antigo e so entao
+          adota o novo -- antes, a nota ficava presa.
 
 
 --------------------------------------------------------------------------------
@@ -1165,10 +1237,102 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
      testPolyphonyGainKeepsTotalLoudnessRoughlyConstant(),
      testPolyphonyGainIsSmoothedNoClick().
 
+  6) [ENCONTRADOS E CORRIGIDOS em 2026-09-23] Revisao geral de bugs.
+     Todos reproduzidos antes da correcao, cada um com teste de regressao
+     (secao 8, funcoes adicionadas em 2026-09-23 no fim do demo.cpp):
+     - Roubo de voz: a nota roubada continuava em noteToSlot/activeSlots
+       e o noteOff DELA soltava a nota nova (inclusive de outra parte).
+       Fix: Synth::detachSlot().
+     - Soltar o sostenuto nao liberava as notas; soltar o sustain
+       liberava notas presas pelo sostenuto. Fix: flags separadas.
+     - Mono: soltar uma nota que nao era a que soava (ou uma nota fora do
+       key range, que nunca tinha sido aceita) reatacava a nota de cima
+       com velocity 100. Fix: monoSoundingNote + heldVelocity.
+     - Crush com fxParam2 >= ~8: 2^(fxParam2*16) estourava pra inf e
+       gerava NaN, que ficava preso nos buffers do delay/reverb e
+       silenciava o synth ate reiniciar. Fix: bits limitados a 1..24 no
+       Crusher + guarda isfinite() na saida de cada operador.
+     - glideLegatoOnly=false nao fazia nada: o noteOn fora de legato
+       sempre pulava pro alvo. Fix: PartRuntime::lastNoteHz como origem.
+     - PEG comecava em 0 (= -rangeOctaves): toda nota com pegDepth>0
+       tinha um "blip" de pitch de ~2ms. Fix: comeca em level[3].
+     - Trocar voiceMode com notas seguras deixava notas presas. Fix:
+       runMode (secao 7A).
+     - Key level scaling positivo nao tinha teto (+60dB possiveis). Fix:
+       nivel total do operador limitado a 0dB, como no DX7.
+     - Feedback: diagonal da matriz e op.feedback se somam (documentado);
+       o auto-feedback agora usa a media das 2 ultimas amostras (DX7).
+     - LFO2 pitch/amp depth eram ignorados (so o LFO1 era lido).
+     - Compensacao de polifonia contava vozes mudas (release, sustain 0
+       preso no pedal). Fix: soma de Voice::loudness().
+     - Voz com release terminando em level[3]>0 era cortada seco. Agora
+       segue soando (DX7); isActive() so olha portadoras.
+     - Estado dos FX (comb/filtro/crusher/shifter) vazava pra nota
+       seguinte do mesmo slot. Fix: reset() no noteOn.
+     - JSON: static_cast de numero fora da faixa (uint8_t(300), NaN,
+       float(1e40)) e UB -> clampCast(); lixo nao-JSON carregava o patch
+       Init em silencio -> load retorna false; tudo passa por sanitize().
+     - UI: ctrl+clique nos sliders aceitava valores fora da faixa ->
+       ImGuiSliderFlags_AlwaysClamp + sanitize() no recompile().
+     - App: tecla do PC solta depois de trocar de aba (ou com foco num
+       campo de texto / janela sem foco) deixava nota presa; noteOff MIDI
+       nao chegava em parte desabilitada/com canal trocado; sample rate
+       negociado diferente do pedido nao reiniciava o synth; fechar o app
+       travava depois de usar MIDI (ver secao 13).
+     - UI: na tabela de operadores, o Selectable do numero do operador
+       usa SpanAllColumns (cobre a linha inteira) e, sem
+       ImGuiSelectableFlags_AllowOverlap, roubava o hover de TODOS os
+       widgets da linha -- onda, ratio, fixo, nivel, feedback, FX e FX1
+       dos 8 operadores nao aceitavam clique. O slider "Pan" ficava
+       metade fora da janela porque o "Nivel" ao lado usava a largura
+       padrao (65% da janela). Verificado com um harness headless que
+       instrumenta o ImGui (IMGUI_ENABLE_TEST_ENGINE), passa o mouse sobre
+       cada widget da UI real e confere se ele recebe o hover: 0
+       bloqueados depois do fix.
+     - recompile() refazia a busca de 8! permutacoes a cada frame de
+       slider arrastado; agora so quando a matriz muda, e auto-loops
+       (sempre atrasados) nao impedem mais a busca de parar cedo.
+
 
 --------------------------------------------------------------------------------
 7C. OUTRAS LIMITACOES CONHECIDAS (nao corrigidas, listadas de proposito)
 --------------------------------------------------------------------------------
+
+  - [OTIMIZADO em 2026-10-18] CPU. O audio roda numa thread so. Antes, o
+    motor calculava os 8 operadores de toda voz (inclusive os que nao
+    chegam na saida) e fazia ~7 funcoes transcendentais por operador por
+    amostra (37% do tempo dentro da libm): 64 vozes x 8 ops = ~141% de um
+    nucleo (engasgava acima de ~37 vozes). Mudancas, todas SEM mudar o som
+    (saida comparada amostra a amostra com a versao anterior em 4 cenarios:
+    diferenca <= 1e-5, ~-100dB; ver nota do Crush abaixo):
+      * operador morto (nem portadora nem fonte, direta ou indireta, de
+        PM/ring/fxRingMod de algo usado) nao calcula oscilador/FX -- so os
+        envelopes andam, pra uma edicao ao vivo que o ligue entrar no ponto
+        certo (testDeadOperatorRevivedByLiveEdit);
+      * cache por voz (Voice::OpCache) do que so muda com a nota ou o patch:
+        ganho estatico (nivel + key scaling + velocity), fator de afinacao,
+        listas de fontes de PM/ring. Invalidado por noteOn ou por um patch
+        publicado novo -- PatchSnapshot::generation, porque o triple buffer
+        reusa os 3 mesmos ponteiros;
+      * frequencia com 1 exp2 por operador (antes 4 pow) e nenhuma sem
+        PEG/vibrato/bend; dbToLinear/egLevelToAmplitude via exp2 e a
+        amplitude do EG so recalculada quando o nivel muda (sustain: nunca);
+      * SegmentEG calcula o passo por amostra 1x por estagio (antes um pow
+        por amostra em cada um dos 17 EGs da voz);
+      * seno por tabela (fastSin01) em todos os osciladores e LFOs;
+      * coeficientes constantes (glide, suavizacoes do Synth) e o tan() do
+        filtro / pow do Crush so recalculados quando o parametro muda.
+    Resultado (Release, mesmo PC): 64 vozes x 8 ops 141% -> ~53% de um
+    nucleo (2.6x); patch Init (2 ops roteados) com 64 vozes 131% -> ~27%
+    (4.8x); 32 vozes x 8 ops com filtro nos moduladores 80% -> 24%;
+    Additive 16 vozes 49% -> 27%. O que sobrou e o trabalho em si: numa
+    cadeia de FM cada operador depende do anterior na mesma amostra, entao
+    o custo e latencia dessa corrente (a leitura da tabela de seno domina
+    o perfil). Proximo passo, se precisar: SIMD entre vozes (layout SoA,
+    roteiro secao 11) ou processar vozes em mais de uma thread.
+    Nota do Crush: e um quantizador, entao diferencas de ~1e-7 na entrada
+    podem cair num degrau de quantizacao vizinho (~2.6e-3 com 9.6 bits) --
+    num cenario com Crush a diferenca chegou a 3e-4; sem ele, 2.7e-6.
 
   - [RESOLVIDO em 2026-09-21] ModDest::OperatorFeedback agora e aplicado:
     fbTrim[i] e somado a opParams.feedback (clampado 0..1) antes de
@@ -1255,48 +1419,65 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
 7D. dx7_globalfx.h — EFEITOS GLOBAIS POS-MIX
 --------------------------------------------------------------------------------
 
-[ADICIONADO em 2026-09-21] Item "Efeitos globais" original do roteiro
-(secao 11). Aplicados UMA VEZ na soma estereo das 4 partes, dentro de
-Synth::renderStereo(), depois de todo o mix de vozes -- nao sao FX por
-operador (isso ja existia, ver OperatorParams::fxType na secao 4). Cadeia
-fixa: chorus -> delay -> reverb; cada estagio e transparente (so copia
-xL/xR pra outL/outR) se o Params dele tiver enabled=false.
+[REESCRITO em 2026-10-18, a pedido do usuario: "atualizar a secao de
+efeitos usando efeitos open source como base", aceitando GPL.] Aplicados UMA
+VEZ na soma estereo das 4 partes, dentro de Synth::renderStereo(), depois do
+mix de vozes e da compensacao de polifonia e ANTES do volume geral e do
+softLimit(). Nao sao FX por operador (isso e OperatorParams::fxType).
 
-  class StereoChorus
-      N (1..4) linhas de delay curto (buffer de 50ms) moduladas por LFOs
-      senoidais com FASE DESLOCADA por voz (v/voices de ciclo) E entre os
-      canais L/R (mais 90 graus/0.25 de ciclo no R) -- e esse deslocamento
-      L/R que da largura estereo: uma fonte MONO na entrada sai
-      DESCORRELACIONADA (L != R) na saida. process(ChorusParams, xL, xR,
-      outL&, outR&).
+LICENCA: o modo Plate (MVerb) e o compressor (porta do ZamComp) sao GPL --
+por isso o projeto inteiro passou a ser GPLv3 (LICENSE na raiz de dx7fm/).
+Origem, licenca e avisos de cada componente: THIRD_PARTY_NOTICES.md. As
+mudancas de cada porta estao no comentario de cabecalho do bloco.
 
-  class StereoDelay
-      Delay estereo classico: buffers independentes por canal (ate 2s),
-      tempos timeLeftSec/timeRightSec independentes (delay "duplo" por
-      padrao: 0.3s/0.45s, da um efeito de eco assimetrico entre os
-      canais), feedback (0..0.95) e crossFeed (0=delays independentes,
-      1=ping-pong total, mistura o que realimenta cada canal com o
-      outro). process(DelayParams, xL, xR, outL&, outR&).
+  Cadeia (GlobalFxChain): 7 blocos em GlobalFxParams::order (permutacao
+  dos GlobalFxType; padrao Phaser -> Flanger -> Chorus -> Delay -> Reverb
+  -> EQ -> Compressor). A UI troca 2 posicoes com 2 escritas nao atomicas;
+  resolveOrder() valida a permutacao a cada amostra e, se pegar uma ordem
+  "no meio da troca" (tipo repetido), usa a padrao em vez de rodar um bloco
+  2x. Bloco desligado = identidade EXATA; ao ser religado, zera a memoria
+  (pra nao tocar uma cauda velha congelada). Buffers alocados so em
+  setSampleRate().
 
-  class SimpleReverb
-      Reverb algoritmico estilo Schroeder/Freeverb SIMPLIFICADO (a
-      topologia classica documentada publicamente, reimplementada do
-      zero aqui -- nao e codigo copiado de nenhum projeto): 4 combs
-      paralelos com feedback AMORTECIDO (um lowpass de 1 polo dentro do
-      loop de feedback de cada comb, controlado por `damping`) somados,
-      seguidos de 2 allpass em serie (dao a difusao/"borrão" caracteristico
-      de reverb sem colorir o espectro). Tunings dos delays de cada comb/
-      allpass em L sao os classicos do Freeverb (25.31/26.94/28.96/30.75ms
-      pros combs, 12.61/9.68ms pros allpass); os de R sao os MESMOS +23
-      amostras, pra decorrelacionar os canais sem duplicar a logica.
-      roomSize (0..1) mapeia pro feedback dos combs (0.70..0.98 -- mais
-      perto de 1.0 = cauda mais longa). width (0..1) controla a mistura
-      final L/R da cauda processada (matriz M/S simplificada).
-      process(ReverbParams, xL, xR, outL&, outR&).
+  EnsembleChorus  - porta do Ensemble do Rings (MIT): 3 leituras moduladas
+      por canal (base 1024 amostras @48k, +-128*depth), LFO lento + rapido
+      (~8.7x) em fases de 120 graus. Desvio: o canal R le com a modulacao
+      INVERTIDA (estilo Juno) -- o original e simetrico e com entrada mono
+      (o caso do synth) a saida seria mono; o teste de largura estereo pegou
+      isso.
+  Phaser          - porta de phaser2_stereo/vibrato2_mono do Faust (J. O.
+      Smith, STK-4.3): 1..8 all-pass de 2a ordem como SVF TPT, notch varrido
+      entre freqMin e freqMax, feedback, depth 0..2 (2 = vibrato), L/R em
+      quadratura.
+  Flanger         - porta de flanger_stereo do Faust: v = x + fb*v[n-D];
+      y = (x + depth*v[n-D]) normalizado por 1/(1+depth) (o original usa
+      0.5 fixo; depth=1 da o mesmo, depth=0 vira identidade).
+  TapeDelay       - proprio (evolucao do StereoDelay anterior): ping-pong,
+      passa-altas + passa-baixas + saturacao tanh (ganho 1 pra sinal
+      pequeno) no loop, tempo suavizado (~60ms) e wow (0.5Hz) + flutter (6Hz).
+  ReverbBlock     - predelay comum (ate 250ms) + algoritmo + largura (wet1/
+      wet2 do Freeverb) + dry/wet. Trocar o algoritmo zera o estado.
+      FreeverbRoom: Freeverb de Jezar (dominio publico), porta fiel (8 combs
+        + 4 all-pass, tuning.h escalado de 44.1k, freeze).
+      CloudsHall: reverb do Clouds (MIT), topologia Griesinger/Dattorro;
+        FxEngine de tamanhos em template virou tamanhos em tempo de execucao
+        escalados de 32k; parametros como o granular_processor do Clouds
+        (difusao 0.7, ganho 0.2, tempo 0.35+0.63*size, lp 0.6+0.37*(1-damp)).
+      MVerbPlate: MVerb vendorizado SEM mudancas, NO HEAP (~5.8MB de buffers
+        inline estourariam a pilha onde o Synth costuma morar); Size fixo
+        (mudar o Size do MVerb limpa os buffers), tamanho percebido via Decay.
+  Eq3             - low shelf / peaking / high shelf, biquads do Audio EQ
+      Cookbook (RBJ); coeficientes so recalculados quando um campo muda.
+  ZamCompressor   - porta do ZamComp (GPLv2+): curva em dB com knee,
+      attack/release exponenciais, makeup; estereo com detector ligado.
+      Desvio: no original a formula do knee suave e sobrescrita pela reta
+      de razao fixa (o Knee nao suavizava nada); aqui vale a quadratica.
+      gainReductionDb() (atomico) alimenta o medidor da UI.
 
-  Todos os 3 tem setSampleRate(sr), chamado por Synth::init(). Nenhum
-  conhece VoiceParams/PartParams/Synth -- so os *Params de dx7_params.h
-  e pares de float L/R, seguindo a mesma filosofia de dx7_dsp.h.
+  Custo medido: os 7 blocos ligados ~2% de um nucleo. Limitacoes que
+  continuam: GlobalFxParams e editado pela UI e lido pela audio thread sem
+  sincronizacao (floats; mesma ressalva da secao 7C), e nao e salvo em
+  arquivo (os patches guardam so o som das partes).
 
 
 --------------------------------------------------------------------------------
@@ -1624,7 +1805,7 @@ xL/xR pra outL/outR) se o Params dele tiver enabled=false.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 86 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 180 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
@@ -1798,8 +1979,6 @@ FALTANDO (nao implementado):
     (dx7_patch_io.h, secao 6B) e o app standalone usa (secao 13). Sysex
     real do DX7 e bancos de 32 vozes (pra importar patches classicos)
     continuam nao implementados.
-  - Velocity correta no reataque legato do modo Mono (hoje fixa em
-    100, ver limitacao 7C/nota em monoGroupNoteOnInternal)
 
 
 --------------------------------------------------------------------------------
@@ -1868,8 +2047,14 @@ com timeout de 200ms em vez de snd_seq_event_input() bloqueante -- e
 assim que a thread consegue notar `running_=false` e sair limpa quando o
 app fecha (ler-e-fechar um fd bloqueado de outra thread nao e
 confiavelmente seguro no ALSA). Traduz NOTEON/NOTEOFF/CONTROLLER(CC1=mod
-wheel, CC64=sustain, CC66=sostenuto, CC123=all notes off)/PITCHBEND/
-CHANPRESS em MidiEvent, repassados por callback (que so empilha na
+wheel, CC64=sustain, CC66=sostenuto, CC120/123=all sound/notes off,
+CC121=reset controllers)/PITCHBEND/CHANPRESS/KEYPRESS (poly aftertouch)
+em MidiEvent. [ATUALIZADO em 2026-09-23] O sequencer e aberto com
+SND_SEQ_NONBLOCK: em modo bloqueante, depois de esvaziar a fila o
+snd_seq_event_input() ficava bloqueado esperando o proximo evento e o
+fechamento do app travava no join(). O noteOff MIDI e roteado pela
+NoteRouting (event_queue.h) -- as partes que receberam o noteOn daquela
+(canal, nota) -- e nao pelo enabled/canal ATUAL da parte, repassados por callback (que so empilha na
 EventQueue, ver 13.1).
 
 13.4 TECLADO DO COMPUTADOR COMO PIANO (app/keyboard_piano.h)
@@ -1879,11 +2064,19 @@ caractere -- funciona igual em qualquer layout de idioma):
   A W S E D F T G Y H U J = uma oitava cromatica a partir da nota base
   K O L P ;               = mais 5 semitons acima
   Z / X                   = desce/sobe a oitava base
-So a PARTE selecionada na aba da UI (currentPart) recebe notas do
-teclado do PC. Ignora eventos SDL_KEYDOWN com `repeat != 0` (key-repeat
-do SO nao deve re-disparar a nota) e so processa teclado quando
+[ATUALIZADO em 2026-09-23] O teclado do PC se comporta como um teclado
+MIDI: as notas saem com part=-1 e channel1to16=AppState::pcKeyboardChannel
+(1..16, padrao 1, seletor na barra de status), pelo MESMO roteamento das
+notas MIDI -- tocam em toda parte habilitada em omni ou nesse canal,
+independente da aba aberta (antes, so a parte da aba atual tocava). O
+noteOff usa o canal gravado no noteOn (HeldPcNote), entao trocar o canal
+com a tecla segura nao prende nota. Por padrao so a parte A vem
+habilitada (main()), senao cada nota dispararia as 4 partes em omni.
+Ignora eventos SDL_KEYDOWN com `repeat != 0` (key-repeat do SO nao deve
+re-disparar a nota) e so processa KEYDOWN quando
 `!ImGui::GetIO().WantCaptureKeyboard` (senao roubaria teclas de campos de
-texto da UI, tipo o campo de caminho do arquivo de patch).
+texto da UI, tipo o campo de caminho do arquivo de patch); KEYUP e
+sempre processado, e perder o foco da janela solta todas as teclas.
 
 13.5 UI (app/main.cpp)
 
@@ -1913,10 +2106,21 @@ documentado na secao 7 pra quem usa a API C++ direto.
 
 13.6 LIMITACOES CONHECIDAS DESSA PRIMEIRA VERSAO
 
-  - Sem file dialog nativo: salvar/carregar patch usa um campo de texto
-    pro caminho, nao um seletor de arquivos grafico. Simples de trocar
-    por uma lib de file dialog (ex.: nativefiledialog-extended) depois,
-    mas adicionaria mais uma dependencia externa.
+  - [ATUALIZADO em 2026-09-23] Navegador de patches proprio (sem file
+    dialog nativo, pra nao adicionar dependencia): secao "Patch" no topo
+    de cada aba com nome, Salvar, Init, indicador de alteracoes nao
+    salvas (patchFingerprint vs baseline do ultimo save/load), lista da
+    pasta patches/ (filtro, Carregar, duplo clique, Excluir) e mensagens
+    de status na UI (antes: campo de texto com o caminho, erros so no
+    stderr, sobrescrita e descarte sem aviso). Confirmacao em modal pra
+    sobrescrever OUTRO patch, descartar alteracoes e excluir. Logica sem
+    UI em app/patch_browser.h (testada no demo.cpp): safeFileStem() (nome
+    -> arquivo sem escapar da pasta), listPatches(), e
+    copyPatchKeepingRouting() -- o load traz so o SOM e mantem o
+    roteamento/mix da parte (enabled, canal, key/vel range, vozes
+    reservadas, level, pan); antes o load substituia a parte inteira e
+    podia desligar a parte ou mudar o canal dela. Limitacao que sobra:
+    so a pasta patches/ (relativa ao diretorio de trabalho) e listada.
   - Oversample fixo em 1 (sem anti-aliasing extra) no app standalone --
     o motor suporta 2x/4x (secao 6, Voice::setOversample), so nao esta
     exposto na UI ainda. Trocar isso enquanto toca teria a mesma ressalva

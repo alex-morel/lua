@@ -12,6 +12,7 @@ find_package(Threads REQUIRED)
 # --- demo/testes (motor header-only, sem dependencias externas) -----------
 add_executable(demo src/demo.cpp)
 target_compile_options(demo PRIVATE -Wall -Wextra)
+target_include_directories(demo PRIVATE src) # demo.cpp inclui app/event_queue.h (sem SDL/ALSA)
 target_link_libraries(demo PRIVATE Threads::Threads)
 
 # --- app standalone (SDL2 + ALSA + Dear ImGui) -----------------------------

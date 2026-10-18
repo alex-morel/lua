@@ -2,6 +2,7 @@
 #include <alsa/asoundlib.h>
 #include <poll.h>
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -11,7 +12,7 @@
 namespace dx7fm_app {
 
 struct MidiEvent {
-    enum class Type { NoteOn, NoteOff, ControlChange, PitchBend, ChannelAftertouch };
+    enum class Type { NoteOn, NoteOff, ControlChange, PitchBend, ChannelAftertouch, PolyAftertouch };
     Type type = Type::NoteOn;
     int channel = 0;  // 0..15
     int data1 = 0;    // nota ou numero do CC
@@ -30,7 +31,10 @@ public:
         stop();
         onEvent_ = std::move(onEvent);
 
-        int err = snd_seq_open(&seq_, "default", SND_SEQ_OPEN_INPUT, 0);
+        // NONBLOCK: com o modo bloqueante, depois de esvaziar a fila o
+        // snd_seq_event_input() ficava BLOQUEADO esperando o proximo evento,
+        // e o join() do stop() travava o fechamento do app.
+        int err = snd_seq_open(&seq_, "default", SND_SEQ_OPEN_INPUT, SND_SEQ_NONBLOCK);
         if (err < 0) {
             std::fprintf(stderr, "[midi] snd_seq_open falhou: %s (MIDI desabilitado, teclado do PC ainda funciona)\n",
                           snd_strerror(err));
@@ -84,7 +88,10 @@ private:
             if (res <= 0) continue;
 
             snd_seq_event_t* ev = nullptr;
-            while (running_ && snd_seq_event_input(seq_, &ev) >= 0 && ev) {
+            while (running_) {
+                int r = snd_seq_event_input(seq_, &ev);
+                if (r == -ENOSPC) continue; // fila do kernel transbordou: eventos perdidos, segue lendo
+                if (r < 0 || !ev) break;    // -EAGAIN: fila vazia, volta pro poll()
                 dispatch(ev);
             }
         }
@@ -116,6 +123,12 @@ private:
                 me.type = MidiEvent::Type::PitchBend;
                 me.channel = ev->data.control.channel;
                 me.data2 = static_cast<int>(ev->data.control.value); // -8192..8191
+                break;
+            case SND_SEQ_EVENT_KEYPRESS:
+                me.type = MidiEvent::Type::PolyAftertouch;
+                me.channel = ev->data.note.channel;
+                me.data1 = ev->data.note.note;
+                me.data2 = ev->data.note.velocity; // pressao
                 break;
             case SND_SEQ_EVENT_CHANPRESS:
                 me.type = MidiEvent::Type::ChannelAftertouch;

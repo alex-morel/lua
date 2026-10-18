@@ -116,6 +116,7 @@ private:
                 written = snd_pcm_recover(pcm_, static_cast<int>(written), 1);
                 if (written < 0) {
                     std::fprintf(stderr, "[audio] erro irrecuperavel: %s\n", snd_strerror(static_cast<int>(written)));
+                    running_ = false; // UI mostra "PARADO" em vez de "ativo" com a thread morta
                     break;
                 }
             }

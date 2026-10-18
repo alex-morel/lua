@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -20,7 +21,8 @@ struct VoiceSlot {
     int ownerPart = -1;       // -1 = livre
     int note = -1;            // nota MIDI FISICA (sem transpose)
     bool physicallyHeld = false;
-    bool sustainHeld = false;
+    bool sustainHeld = false;   // tecla solta com o pedal de sustain (CC64) apertado
+    bool sostenutoHeld = false; // tecla solta, mas capturada pelo sostenuto (CC66)
     float subPan = 0.0f;
     uint64_t triggerCounter = 0;
 };
@@ -52,8 +54,22 @@ struct PartRuntime {
     }
 
     std::vector<int> heldStack;             // notas fisicas pressionadas, ordem de chegada
+    std::unordered_map<int, int> heldVelocity; // nota -> velocity (reataque mono usa a velocity original)
     std::vector<int> activeSlots;           // slots do grupo mono/unison atual
+    int monoSoundingNote = -1;              // nota que o grupo mono/unison esta tocando agora
     std::unordered_map<int, int> noteToSlot;// so usado no modo Poly
+    // Modo em que as notas ATUAIS foram disparadas. Pode diferir de
+    // params.voiceMode se a UI trocou o modo com notas seguras: o noteOff
+    // tem que ir pelo caminho do modo antigo, senao a nota fica presa.
+    VoiceMode runMode = VoiceMode::Poly;
+    float lastNoteHz = 0.0f;                // freq da ultima nota disparada (origem do glide)
+
+    // cache do compileAlgorithm (so a thread que chama recompile() toca aqui)
+    AlgorithmMatrix compiledFor{};
+    CompiledAlgorithm compiledCache{};
+    bool hasCompiledCache = false;
+    uint64_t generation = 0; // contador de recompile() (ver PatchSnapshot::generation)
+
     std::unordered_set<int> sostenutoCaptured;
     bool sostenutoDown = false;
     bool sustainDown = false;
@@ -68,15 +84,16 @@ public:
     // e ARQUITETURA.txt secao 11 (oversampling anti-aliasing).
     void init(double sampleRate, int maxVoices = 64, int oversample = 1) {
         sampleRate_ = sampleRate;
+        // coeficientes one-pole constantes (antes: um exp() por amostra cada)
+        polySmoothCoef_ = 1.0f - std::exp(-1.0f / (0.03f * static_cast<float>(sampleRate)));   // ~30ms
+        volumeSmoothCoef_ = 1.0f - std::exp(-1.0f / (0.02f * static_cast<float>(sampleRate))); // ~20ms
         slots_.assign(static_cast<size_t>(maxVoices), VoiceSlot{});
         for (auto& s : slots_) {
             s.voice.setOversample(oversample);
             s.voice.setSampleRate(sampleRate);
         }
         for (int p = 0; p < kNumParts; ++p) recompile(p);
-        chorus_.setSampleRate(sampleRate);
-        delay_.setSampleRate(sampleRate);
-        reverb_.setSampleRate(sampleRate);
+        fxChain_.setSampleRate(sampleRate);
     }
 
     // Referencia de STAGING: editar campos aqui (inclusive .voice, o timbre)
@@ -94,6 +111,20 @@ public:
     // noutra thread tem a mesma ressalva que os demais campos "fora do
     // timbre" de PartParams.
     GlobalFxParams& globalFx() { return globalFx_; }
+    // reducao de ganho atual do compressor global (dB), pra medidor na UI
+    float compressorGainReductionDb() const { return fxChain_.compressorGainReductionDb(); }
+
+    // [ADICIONADO em 2026-09-23] Volume geral (master), ganho linear 0..2
+    // (1.0 = 0dB). Atomico de proposito: a UI chama setMasterVolume() de
+    // outra thread enquanto renderStereo() roda na audio thread. Aplicado
+    // DEPOIS dos efeitos globais e ANTES do softLimit(): aumentar o volume
+    // acima de 1.0 continua protegido contra clipping. Suavizado (~20ms)
+    // em renderStereo() pra mexer no slider nao dar "zipper noise".
+    void setMasterVolume(float gain) {
+        if (!std::isfinite(gain)) return;
+        masterVolume_.store(std::clamp(gain, 0.0f, 2.0f), std::memory_order_relaxed);
+    }
+    float masterVolume() const { return masterVolume_.load(std::memory_order_relaxed); }
 
     // Publica params.voice (staging) como o novo patch AO VIVO: recompila o
     // algoritmo, escreve o par (voice, compiled) casado num slot de buffer
@@ -105,8 +136,18 @@ public:
     // (ver ARQUITETURA.txt secao 10) sem data race.
     void recompile(int idx) {
         auto& pr = parts_[idx];
+        sanitize(pr.params);
+        // A busca de 8! permutacoes custa ms; a UI chama recompile a cada
+        // frame enquanto um slider e arrastado, entao so recompila a
+        // topologia quando a matriz de fato mudou.
+        if (!pr.hasCompiledCache ||
+            std::memcmp(&pr.compiledFor, &pr.params.voice.matrix, sizeof(AlgorithmMatrix)) != 0) {
+            pr.compiledCache = compileAlgorithm(pr.params.voice.matrix);
+            pr.compiledFor = pr.params.voice.matrix;
+            pr.hasCompiledCache = true;
+        }
         int newIdx = pr.stagingIndex_;
-        pr.snapshots_[static_cast<size_t>(newIdx)] = makeSnapshot(pr.params.voice);
+        pr.snapshots_[static_cast<size_t>(newIdx)] = PatchSnapshot{pr.params.voice, pr.compiledCache, ++pr.generation};
         int oldLive = pr.liveIndex_.exchange(newIdx, std::memory_order_acq_rel);
         pr.stagingIndex_ = 3 - newIdx - oldLive; // o terceiro indice (0+1+2=3)
     }
@@ -117,16 +158,25 @@ public:
         if (note < pr.params.loKey || note > pr.params.hiKey) return;
         if (velocity < pr.params.loVel || velocity > pr.params.hiVel) return;
 
-        switch (pr.params.voiceMode) {
+        if (pr.params.voiceMode != pr.runMode) {
+            // modo trocado com notas soando: solta tudo do modo antigo antes
+            releaseAllHeld(part);
+            pr.runMode = pr.params.voiceMode;
+        }
+        switch (pr.runMode) {
             case VoiceMode::Poly:   polyNoteOn(part, note, velocity); break;
             case VoiceMode::Mono:   monoGroupNoteOn(part, note, velocity, 1); break;
             case VoiceMode::Unison: monoGroupNoteOn(part, note, velocity, std::max(1, pr.params.unisonCount)); break;
         }
     }
 
+    // NAO filtra por key range/velocity/enabled de proposito: uma nota que
+    // nao foi aceita no noteOn simplesmente nao e achada (poly: noteToSlot;
+    // mono: heldStack), e uma que FOI aceita tem que poder ser solta mesmo
+    // que a parte tenha sido desabilitada no meio.
     void noteOff(int part, int note) {
         auto& pr = parts_[part];
-        switch (pr.params.voiceMode) {
+        switch (pr.runMode) {
             case VoiceMode::Poly: polyNoteOff(part, note); break;
             case VoiceMode::Mono:
             case VoiceMode::Unison: monoGroupNoteOff(part, note); break;
@@ -135,10 +185,10 @@ public:
 
     void polyAftertouch(int part, int note, float pressure01) {
         auto& pr = parts_[part];
-        if (pr.params.voiceMode == VoiceMode::Poly) {
+        if (pr.runMode == VoiceMode::Poly) {
             auto it = pr.noteToSlot.find(note);
             if (it != pr.noteToSlot.end()) slots_[it->second].voice.controllers().polyAT01 = pressure01;
-        } else if (!pr.heldStack.empty() && pr.heldStack.back() == note) {
+        } else if (pr.monoSoundingNote == note) {
             for (int idx : pr.activeSlots) slots_[idx].voice.controllers().polyAT01 = pressure01;
         }
     }
@@ -161,15 +211,16 @@ public:
         for (auto& s : slots_) if (s.ownerPart == part) s.voice.controllers().modWheel01 = v01;
     }
 
+    // Sustain e sostenuto seguram a voz de forma INDEPENDENTE: soltar um
+    // pedal so libera as vozes que nao estao presas pelo outro.
     void sustainPedal(int part, bool down) {
         auto& pr = parts_[part];
         pr.sustainDown = down;
         if (!down) {
             for (auto& s : slots_) {
-                if (s.ownerPart == part && s.sustainHeld && !s.physicallyHeld) {
-                    s.sustainHeld = false;
-                    s.voice.noteOff();
-                }
+                if (s.ownerPart != part || !s.sustainHeld) continue;
+                s.sustainHeld = false;
+                if (!s.physicallyHeld && !s.sostenutoHeld) s.voice.noteOff();
             }
         }
     }
@@ -177,26 +228,21 @@ public:
     void sostenutoPedal(int part, bool down) {
         auto& pr = parts_[part];
         pr.sostenutoDown = down;
+        pr.sostenutoCaptured.clear();
         if (down) {
-            pr.sostenutoCaptured.clear();
             for (int n : pr.heldStack) pr.sostenutoCaptured.insert(n);
         } else {
-            pr.sostenutoCaptured.clear();
+            for (auto& s : slots_) {
+                if (s.ownerPart != part || !s.sostenutoHeld) continue;
+                s.sostenutoHeld = false;
+                if (!s.physicallyHeld && !s.sustainHeld) s.voice.noteOff();
+            }
         }
     }
 
     void allNotesOff(int part) {
         auto& pr = parts_[part];
-        for (auto& s : slots_) {
-            if (s.ownerPart == part) {
-                s.voice.noteOff();
-                s.physicallyHeld = false;
-                s.sustainHeld = false;
-            }
-        }
-        pr.heldStack.clear();
-        pr.activeSlots.clear();
-        pr.noteToSlot.clear();
+        releaseAllHeld(part);
         pr.sostenutoCaptured.clear();
     }
 
@@ -209,14 +255,14 @@ public:
         const PatchSnapshot* live[kNumParts];
         for (int p = 0; p < kNumParts; ++p) live[p] = parts_[p].live();
 
-        int activeCount = 0;
+        float voiceLoad = 0.0f;
         for (auto& s : slots_) {
             if (s.ownerPart < 0 || !s.voice.isActive()) continue;
-            ++activeCount;
             auto& pr = parts_[s.ownerPart];
             const PatchSnapshot* snap = live[s.ownerPart];
-            s.voice.rebind(&snap->voice, &snap->compiled); // "ao vivo": pega qualquer recompile() publicado ate agora
+            s.voice.rebind(&snap->voice, &snap->compiled, snap->generation); // "ao vivo": pega qualquer recompile() publicado ate agora
             float sample = s.voice.process();
+            voiceLoad += s.voice.loudness();
             float pan = std::clamp(pr.params.pan + s.subPan, -1.0f, 1.0f);
             float gL = 1.0f - std::max(0.0f, pan);
             float gR = 1.0f + std::min(0.0f, pan);
@@ -235,18 +281,24 @@ public:
         // ganho=1.0 -- NADA muda em relacao ao comportamento de antes.
         // Suavizada (~30ms, one-pole) pra nao dar "zipper noise"/degrau
         // audivel quando uma nota entra ou sai de um acorde.
-        float targetGain = 1.0f / std::sqrt(static_cast<float>(std::max(1, activeCount)));
-        float smoothCoef = 1.0f - std::exp(-1.0f / (0.03f * static_cast<float>(sampleRate_)));
-        polyphonyGain_ += (targetGain - polyphonyGain_) * smoothCoef;
+        // N nao e a contagem crua de vozes, e a soma de Voice::loudness():
+        // vozes em release (ou presas no pedal com sustain 0) pesam menos,
+        // senao cada nota nova de um acorde com pedal saia mais baixa.
+        float targetGain = 1.0f / std::sqrt(std::max(1.0f, voiceLoad));
+        polyphonyGain_ += (targetGain - polyphonyGain_) * polySmoothCoef_;
         outL *= polyphonyGain_;
         outR *= polyphonyGain_;
 
-        // Efeitos globais pos-mix, na soma das 4 partes: chorus -> delay ->
-        // reverb (cadeia fixa; cada estagio e transparente se !enabled).
-        float chL, chR, dlL, dlR;
-        chorus_.process(globalFx_.chorus, outL, outR, chL, chR);
-        delay_.process(globalFx_.delay, chL, chR, dlL, dlR);
-        reverb_.process(globalFx_.reverb, dlL, dlR, outL, outR);
+        // Efeitos globais pos-mix, na soma das 4 partes, na ordem de
+        // globalFx_.order (ver dx7_globalfx.h; bloco desligado = identidade).
+        fxChain_.process(globalFx_, outL, outR);
+
+        // Volume geral (ver setMasterVolume): depois dos FX, antes do limitador.
+        float volTarget = masterVolume_.load(std::memory_order_relaxed);
+        masterGain_ += (volTarget - masterGain_) * volumeSmoothCoef_;
+        if (std::fabs(masterGain_ - volTarget) < 1e-6f) masterGain_ = volTarget; // encaixa: volume 0 vira silencio EXATO
+        outL *= masterGain_;
+        outR *= masterGain_;
 
         // Limitador de master bus, camada 2 (rede de seguranca): mesmo com a
         // compensacao de polifonia acima, um patch com feedback pesado, um
@@ -313,7 +365,48 @@ private:
         v.bendRangeSemis_ = pr.params.bendRangeSemis;
     }
 
-    void triggerSlot(int idx, int part, int note, int velocity, float extraDetuneCents, bool legato) {
+    // Desliga o slot de quem o possuia ANTES de ele ser reusado por outra
+    // nota. Sem isso a nota antiga continuava apontando pro slot (noteToSlot
+    // / activeSlots) e o noteOff DELA soltava a nota nova que roubou a voz.
+    void detachSlot(int idx) {
+        auto& s = slots_[static_cast<size_t>(idx)];
+        if (s.ownerPart < 0) return;
+        auto& old = parts_[s.ownerPart];
+        for (auto it = old.noteToSlot.begin(); it != old.noteToSlot.end();) {
+            if (it->second == idx) {
+                auto& hs = old.heldStack;
+                hs.erase(std::remove(hs.begin(), hs.end(), it->first), hs.end());
+                it = old.noteToSlot.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        auto& as = old.activeSlots;
+        as.erase(std::remove(as.begin(), as.end(), idx), as.end());
+        s.ownerPart = -1;
+    }
+
+    // Solta todas as vozes da parte e zera o estado de teclas seguras
+    // (usado por allNotesOff e pela troca de voiceMode).
+    void releaseAllHeld(int part) {
+        auto& pr = parts_[part];
+        for (auto& s : slots_) {
+            if (s.ownerPart == part) {
+                s.voice.noteOff();
+                s.physicallyHeld = false;
+                s.sustainHeld = false;
+                s.sostenutoHeld = false;
+            }
+        }
+        pr.heldStack.clear();
+        pr.heldVelocity.clear();
+        pr.activeSlots.clear();
+        pr.noteToSlot.clear();
+        pr.monoSoundingNote = -1;
+    }
+
+    void triggerSlot(int idx, int part, int note, int velocity, float extraDetuneCents, bool legato,
+                     float glideFromHz) {
         auto& pr = parts_[part];
         auto& s = slots_[static_cast<size_t>(idx)];
         configureVoice(s.voice, pr, legato);
@@ -322,21 +415,27 @@ private:
         s.note = note;
         s.physicallyHeld = true;
         s.sustainHeld = false;
+        s.sostenutoHeld = false;
         s.triggerCounter = ++triggerCounter_;
         const PatchSnapshot* snap = pr.live(); // notas NOVAS sempre pegam o patch AO VIVO mais recente
-        s.voice.noteOn(&snap->voice, &snap->compiled, soundingNote, velocity, extraDetuneCents, legato);
+        s.voice.noteOn(&snap->voice, &snap->compiled, soundingNote, velocity, extraDetuneCents, legato, glideFromHz,
+                       snap->generation);
         s.voice.controllers().pitchBendSemis = pr.bend;
         s.voice.controllers().modWheel01 = pr.modWheel;
         s.voice.controllers().channelAT01 = pr.channelAT;
+    }
+
+    float soundingHz(const PartRuntime& pr, int note) const {
+        return Voice::noteToHz(std::clamp(note + pr.params.transpose, 0, 127));
     }
 
     void releaseSlot(int idx, int part, int note) {
         auto& pr = parts_[part];
         auto& s = slots_[static_cast<size_t>(idx)];
         s.physicallyHeld = false;
-        bool held = pr.sustainDown || (pr.sostenutoDown && pr.sostenutoCaptured.count(note) > 0);
-        if (held) s.sustainHeld = true;
-        else s.voice.noteOff();
+        if (pr.sustainDown) s.sustainHeld = true;
+        if (pr.sostenutoDown && pr.sostenutoCaptured.count(note) > 0) s.sostenutoHeld = true;
+        if (!s.sustainHeld && !s.sostenutoHeld) s.voice.noteOff();
     }
 
     void polyNoteOn(int part, int note, int velocity) {
@@ -344,9 +443,13 @@ private:
         auto it = pr.noteToSlot.find(note);
         bool retrigger = (it != pr.noteToSlot.end());
         int idx = retrigger ? it->second : allocateSlot(part);
+        if (!retrigger) detachSlot(idx);
         pr.noteToSlot[note] = idx;
-        triggerSlot(idx, part, note, velocity, 0.0f, false);
-        pr.heldStack.push_back(note);
+        triggerSlot(idx, part, note, velocity, 0.0f, false, pr.lastNoteHz);
+        pr.lastNoteHz = soundingHz(pr, note);
+        auto& hs = pr.heldStack;
+        hs.erase(std::remove(hs.begin(), hs.end(), note), hs.end());
+        hs.push_back(note);
     }
 
     void polyNoteOff(int part, int note) {
@@ -360,52 +463,80 @@ private:
         releaseSlot(idx, part, note);
     }
 
+    static float unisonOffset(int k, int voiceCount) {
+        return voiceCount > 1 ? ((static_cast<float>(k) / static_cast<float>(voiceCount - 1)) - 0.5f) * 2.0f : 0.0f;
+    }
+
     // Usado tanto por Mono (voiceCount=1) quanto Unison (voiceCount=unisonCount).
     void monoGroupNoteOn(int part, int note, int velocity, int voiceCount) {
         auto& pr = parts_[part];
-        bool legato = !pr.activeSlots.empty();
-        pr.heldStack.push_back(note);
-        if (legato) {
-            monoGroupNoteOnInternal(part, note, velocity, voiceCount);
-            return;
-        }
+        auto& hs = pr.heldStack;
+        hs.erase(std::remove(hs.begin(), hs.end(), note), hs.end());
+        hs.push_back(note);
+        pr.heldVelocity[note] = velocity;
+        if (!pr.activeSlots.empty()) monoGroupRetrigger(part, note, velocity);
+        else monoGroupStart(part, note, velocity, voiceCount);
+    }
+
+    // Grupo novo (nenhuma voz do grupo soando): aloca voiceCount slots.
+    void monoGroupStart(int part, int note, int velocity, int voiceCount) {
+        auto& pr = parts_[part];
         pr.activeSlots.clear();
+        float glideFrom = pr.lastNoteHz;
         for (int k = 0; k < voiceCount; ++k) {
             int idx = allocateSlot(part);
-            float t = voiceCount > 1 ? ((static_cast<float>(k) / static_cast<float>(voiceCount - 1)) - 0.5f) * 2.0f : 0.0f;
-            float detune = t * pr.params.unisonDetuneCents;
-            triggerSlot(idx, part, note, velocity, detune, false);
+            detachSlot(idx);
+            float t = unisonOffset(k, voiceCount);
+            triggerSlot(idx, part, note, velocity, t * pr.params.unisonDetuneCents, false, glideFrom);
             slots_[static_cast<size_t>(idx)].subPan = t * pr.params.unisonSpread;
             pr.activeSlots.push_back(idx);
         }
+        pr.monoSoundingNote = note;
+        pr.lastNoteHz = soundingHz(pr, note);
     }
 
-    // Variante interna usada so pelo reataque legato: ja sabe que legato=true,
-    // nao reavalia a decisao de alocacao (evita duplicar logica).
-    void monoGroupNoteOnInternal(int part, int note, int velocity, int voiceCount) {
+    // Reataque legato das vozes JA alocadas do grupo. O espalhamento de
+    // detune usa o tamanho real do grupo (activeSlots), nao o unisonCount
+    // atual, que pode ter mudado com a nota segura.
+    void monoGroupRetrigger(int part, int note, int velocity) {
         auto& pr = parts_[part];
-        for (size_t k = 0; k < pr.activeSlots.size(); ++k) {
-            int idx = pr.activeSlots[k];
-            float t = voiceCount > 1 ? ((static_cast<float>(k) / static_cast<float>(voiceCount - 1)) - 0.5f) * 2.0f : 0.0f;
-            float detune = t * pr.params.unisonDetuneCents;
-            // LIMITACAO CONHECIDA: velocity no reataque mono e sempre a informada
-            // aqui (fixa em 100 quando vem de monoGroupNoteOff), pois heldStack
-            // so guarda a nota, nao o par (nota, velocity).
-            triggerSlot(idx, part, note, velocity, detune, true);
+        int voiceCount = static_cast<int>(pr.activeSlots.size());
+        for (int k = 0; k < voiceCount; ++k) {
+            int idx = pr.activeSlots[static_cast<size_t>(k)];
+            float t = unisonOffset(k, voiceCount);
+            triggerSlot(idx, part, note, velocity, t * pr.params.unisonDetuneCents, true, 0.0f);
         }
+        pr.monoSoundingNote = note;
+        pr.lastNoteHz = soundingHz(pr, note);
     }
 
     void monoGroupNoteOff(int part, int note) {
         auto& pr = parts_[part];
         auto& hs = pr.heldStack;
-        hs.erase(std::remove(hs.begin(), hs.end(), note), hs.end());
+        auto found = std::find(hs.begin(), hs.end(), note);
+        if (found == hs.end()) return; // nota nunca aceita por esta parte (fora do range, parte desabilitada...)
+        hs.erase(found);
+        pr.heldVelocity.erase(note);
+
+        // soltar uma nota que NAO e a que esta soando (ex.: a de baixo, com
+        // outra segura por cima) nao muda nada no que se ouve
+        if (note != pr.monoSoundingNote) return;
+
         if (!hs.empty()) {
             int prevNote = hs.back();
-            int voiceCount = static_cast<int>(pr.activeSlots.size());
-            monoGroupNoteOnInternal(part, prevNote, 100, voiceCount);
+            auto v = pr.heldVelocity.find(prevNote);
+            int velocity = v != pr.heldVelocity.end() ? v->second : 100;
+            if (!pr.activeSlots.empty()) {
+                monoGroupRetrigger(part, prevNote, velocity);
+            } else {
+                // as vozes do grupo foram roubadas por outra nota/parte
+                int voiceCount = pr.runMode == VoiceMode::Unison ? std::max(1, pr.params.unisonCount) : 1;
+                monoGroupStart(part, prevNote, velocity, voiceCount);
+            }
         } else {
             for (int idx : pr.activeSlots) releaseSlot(idx, part, note);
             pr.activeSlots.clear();
+            pr.monoSoundingNote = -1;
         }
     }
 
@@ -415,10 +546,11 @@ private:
     uint64_t triggerCounter_ = 0;
 
     GlobalFxParams globalFx_;
-    StereoChorus chorus_;
-    StereoDelay delay_;
-    SimpleReverb reverb_;
+    GlobalFxChain fxChain_;
     float polyphonyGain_ = 1.0f; // suavizado, ver renderStereo() (compensacao 1/sqrt(N))
+    float polySmoothCoef_ = 0.0f, volumeSmoothCoef_ = 0.0f;
+    std::atomic<float> masterVolume_{1.0f}; // alvo, escrito pela UI (setMasterVolume)
+    float masterGain_ = 1.0f;               // valor suavizado, so a audio thread toca
 };
 
 } // namespace dx7fm

@@ -34,6 +34,7 @@ inline CompiledAlgorithm compileAlgorithm(const AlgorithmMatrix& m) {
         int count = 0;
         for (int i = 0; i < kNumOps; ++i) {
             for (int j = 0; j < kNumOps; ++j) {
+                if (i == j) continue; // auto-loop precisa de atraso em QUALQUER ordem: nao conta
                 bool hasEdge = (m.mod[i][j] != 0.0f) || m.ring[i][j];
                 if (hasEdge && pos[j] >= pos[i]) ++count;
             }
@@ -67,9 +68,14 @@ inline CompiledAlgorithm compileAlgorithm(const AlgorithmMatrix& m) {
 struct PatchSnapshot {
     VoiceParams voice;
     CompiledAlgorithm compiled;
+    // [2026-10-18, otimizacao] incrementado a cada Synth::recompile(): a Voice
+    // guarda dados derivados do patch em cache e usa (ponteiro, geracao) pra
+    // saber quando refaze-los -- so o ponteiro nao basta, porque o triple
+    // buffer reusa os mesmos 3 slots de memoria.
+    uint64_t generation = 0;
 };
 inline PatchSnapshot makeSnapshot(const VoiceParams& v) {
-    return PatchSnapshot{v, compileAlgorithm(v.matrix)};
+    return PatchSnapshot{v, compileAlgorithm(v.matrix), 0};
 }
 
 struct OperatorState {
@@ -80,8 +86,13 @@ struct OperatorState {
     Crusher crusher;
     CombFilter comb;
     FreqShifter shifter;
+    DcBlocker dcBlock; // so usado pelo FxType::Fold com simetria != 0
+    PartialOscillators partials; // so usado pela Waveform::Additive
     float signal = 0.0f;
     float prevOut = 0.0f;
+    float prevPrevOut = 0.0f; // auto-feedback usa a media das 2 ultimas amostras (estilo DX7)
+    float lastAmp = 0.0f;     // amplitude do ampEG na ultima amostra (0..1), ver Voice::loudness()
+    float lastAmpRaw = -1.0f; // nivel do EG (0..99) que gerou lastAmp (cache da exp2)
 };
 
 struct VoiceControllers {
@@ -114,13 +125,20 @@ public:
             op.crusher.setSampleRate(sampleRate_);
             op.comb.setSampleRate(sampleRate_);
             op.shifter.setSampleRate(sampleRate_);
+            op.dcBlock.setSampleRate(sampleRate_);
         }
     }
 
+    // glideFromHz > 0: com glide ligado e fora de legato, a nota desliza a
+    // partir dessa frequencia (a da nota anterior da parte, ver
+    // Synth::triggerSlot) em vez de comecar ja no alvo.
     void noteOn(const VoiceParams* patch, const CompiledAlgorithm* compiled,
-                int note, int velocity, float extraDetuneCents = 0.0f, bool legato = false) {
+                int note, int velocity, float extraDetuneCents = 0.0f, bool legato = false,
+                float glideFromHz = 0.0f, uint64_t generation = 0) {
         patch_ = patch;
         compiled_ = compiled;
+        generation_ = generation;
+        cacheValid_ = false; // nota/velocity/detune mudaram: refaz o cache derivado do patch
         note_ = note;
         velocity_ = velocity;
         extraDetuneCents_ = extraDetuneCents;
@@ -128,7 +146,15 @@ public:
         releasing_ = false;
 
         targetHz_ = noteToHz(note);
-        if (!(legato && glideEnabled_)) currentHz_ = targetHz_;
+        targetLog2_ = std::log2(targetHz_);
+        if (legato && glideEnabled_) {
+            // mantem currentHz_: desliza de onde a voz estiver agora
+        } else if (glideEnabled_ && glideFromHz > 0.0f) {
+            currentHz_ = glideFromHz;
+        } else {
+            currentHz_ = targetHz_;
+        }
+        currentLog2_ = std::log2(currentHz_);
 
         bool reuse = legato && reuseEnvOnLegato_;
         if (!reuse) {
@@ -142,10 +168,18 @@ public:
                 op.fxEG.configure(opParams.fxEG.rate, opParams.fxEG.level);
                 op.fxEG.noteOn(rateScaleAdd);
                 op.prevOut = 0.0f;
+                op.prevPrevOut = 0.0f;
                 op.signal = 0.0f;
+                // estado dos FX do slot NAO pode vazar da nota anterior (voz roubada)
+                op.filter.reset();
+                op.crusher.reset();
+                op.comb.reset();
+                op.shifter.reset();
+                op.dcBlock.reset();
+                op.partials.reset();
             }
             peg_.configure(patch_->peg.rate, patch_->peg.level);
-            peg_.noteOn(0.0f);
+            peg_.noteOn(0.0f, static_cast<float>(patch_->peg.level[3]));
             lfo1_.configure(patch_->lfo1);
             lfo2_.configure(patch_->lfo2);
             lfo1_.noteOn();
@@ -154,6 +188,7 @@ public:
     }
 
     void noteOff() {
+        if (!patch_) return;
         releasing_ = true;
         for (int i = 0; i < kNumOps; ++i) {
             ops_[i].ampEG.noteOff();
@@ -165,10 +200,20 @@ public:
     void setGlide(bool enabled, float timeSec) { glideEnabled_ = enabled; glideTimeSec_ = timeSec; }
     void setLegatoEnvReuse(bool reuse) { reuseEnvOnLegato_ = reuse; }
 
-    bool isActive() const {
-        if (!active_) return false;
-        for (auto& op : ops_) if (!op.ampEG.isIdle()) return true;
-        return false;
+    // Ativa enquanto alguma PORTADORA (outputMix != 0) ainda soa. Moduladores
+    // nao contam: sem portadora audivel a voz e silencio, mesmo que um
+    // modulador ainda esteja no release.
+    bool isActive() const { return active_ && anyCarrierSounding(); }
+
+    // Estimativa de "quanto essa voz pesa" no mix (0..1): maior amplitude de
+    // envelope entre as portadoras. Usada pela compensacao de polifonia, pra
+    // vozes em release ou com sustain 0 nao abaixarem o volume das outras.
+    float loudness() const {
+        if (!active_ || !patch_) return 0.0f;
+        float m = 0.0f;
+        for (int i = 0; i < kNumOps; ++i)
+            if (patch_->matrix.outputMix[i] != 0.0f) m = std::max(m, ops_[i].lastAmp);
+        return m;
     }
     bool isReleasing() const { return releasing_; }
     int note() const { return note_; }
@@ -181,9 +226,10 @@ public:
     // a CADA amostra, pra vozes ja soando acompanharem "ao vivo" edicoes
     // de timbre publicadas via recompile() -- ver PartRuntime::live() em
     // dx7_alloc.h. Custo desprezivel (2 escritas de ponteiro).
-    void rebind(const VoiceParams* patch, const CompiledAlgorithm* compiled) {
+    void rebind(const VoiceParams* patch, const CompiledAlgorithm* compiled, uint64_t generation = 0) {
         patch_ = patch;
         compiled_ = compiled;
+        generation_ = generation;
     }
 
     // Uma amostra na taxa BASE (nao superamostrada). Se oversampleFactor_>1,
@@ -209,15 +255,104 @@ public:
     }
 
 private:
+    // [2026-10-18, otimizacao] Dados de cada operador que so mudam quando a
+    // nota comeca ou o patch publicado muda -- antes eram recalculados a
+    // cada amostra (pow de dB, pow de cents, varredura da matriz 8x8).
+    struct OpCache {
+        bool used = true;         // contribui pra saida (portadora ou modulador de alguem usado)
+        bool fixed = false;
+        float baseHz = 0.0f;      // fixo: fixedHz; senao: multiplicador (ratio * 2^(cents/1200))
+        bool pegApplies = false;
+        float pegDepth = 0.0f;
+        float pitchSens = 0.0f;   // lfoPitchModSens/7
+        float ampSens = 0.0f;     // lfoAmpModSens/3
+        float staticGain = 1.0f;  // outputLevel + key scaling + velocity (teto 0dB), linear
+        float selfMod = 0.0f;     // diagonal da matriz
+        int nMod = 0;
+        uint8_t modSrc[kNumOps];
+        float modAmt[kNumOps];
+        bool modDelayed[kNumOps];
+        int nRing = 0;
+        uint8_t ringSrc[kNumOps];
+        bool ringDelayed[kNumOps];
+    };
+
+    void rebuildCache() {
+        const VoiceParams& v = *patch_;
+        // operadores usados: portadoras + tudo que alimenta (PM, ring, fxRingMod) algo usado
+        bool used[kNumOps] = {};
+        for (int i = 0; i < kNumOps; ++i) used[i] = v.matrix.outputMix[i] != 0.0f;
+        for (bool grew = true; grew;) {
+            grew = false;
+            for (int i = 0; i < kNumOps; ++i) {
+                if (!used[i]) continue;
+                for (int j = 0; j < kNumOps; ++j) {
+                    bool feeds = j != i && (v.matrix.mod[i][j] != 0.0f || v.matrix.ring[i][j]);
+                    if (v.op[i].fxType == FxType::RingMod && v.op[i].ringModSource == j) feeds = true;
+                    if (feeds && !used[j]) { used[j] = true; grew = true; }
+                }
+            }
+        }
+        for (int i = 0; i < kNumOps; ++i) {
+            const OperatorParams& o = v.op[i];
+            OpCache& c = cache_[i];
+            c.used = used[i];
+            c.fixed = o.fixedFreq;
+            c.baseHz = o.fixedFreq ? o.fixedHz
+                                   : o.coarseRatio * std::exp2((o.fineCents + o.detuneCents + extraDetuneCents_) / 1200.0f);
+            c.pegApplies = !(o.fixedFreq && !o.pegAffectsFixed) && o.pegDepth != 0.0f;
+            c.pegDepth = o.pegDepth;
+            c.pitchSens = o.lfoPitchModSens / 7.0f;
+            c.ampSens = o.lfoAmpModSens / 3.0f;
+            float levelDb = (static_cast<float>(o.outputLevel) - 99.0f) * 0.75f;
+            levelDb += keyLevelScaleDb(o.levelScaling, note_);
+            levelDb += (static_cast<float>(velocity_) - 127.0f) / 127.0f * (o.velocitySens / 7.0f) * 12.0f;
+            c.staticGain = dbToLinear(std::min(levelDb, 0.0f)); // teto de 0dB (= outputLevel 99), como no DX7
+            c.selfMod = v.matrix.mod[i][i];
+            c.nMod = c.nRing = 0;
+            for (int j = 0; j < kNumOps; ++j) {
+                if (j == i) continue;
+                bool delayed = compiled_->feedbackEdge[i][j];
+                if (v.matrix.mod[i][j] != 0.0f) {
+                    c.modSrc[c.nMod] = static_cast<uint8_t>(j);
+                    c.modAmt[c.nMod] = v.matrix.mod[i][j];
+                    c.modDelayed[c.nMod] = delayed;
+                    ++c.nMod;
+                }
+                if (v.matrix.ring[i][j]) {
+                    c.ringSrc[c.nRing] = static_cast<uint8_t>(j);
+                    c.ringDelayed[c.nRing] = delayed;
+                    ++c.nRing;
+                }
+            }
+        }
+        cachedPatch_ = patch_;
+        cachedCompiled_ = compiled_;
+        cachedGeneration_ = generation_;
+        cacheValid_ = true;
+    }
+
     float processOneSample() {
+        if (!cacheValid_ || patch_ != cachedPatch_ || compiled_ != cachedCompiled_ || generation_ != cachedGeneration_)
+            rebuildCache();
+
         // 1. glide (portamento continuo em log2 de frequencia)
         if (glideEnabled_ && currentHz_ != targetHz_) {
-            float coef = 1.0f - std::exp(-1.0f / (std::max(0.001f, glideTimeSec_) * static_cast<float>(sampleRate_)));
-            float lg0 = std::log2(currentHz_);
-            float lg1 = std::log2(targetHz_);
-            currentHz_ = std::pow(2.0f, lg0 + (lg1 - lg0) * coef);
+            if (glideTimeSec_ != glideCoefTime_ || sampleRate_ != glideCoefRate_) {
+                glideCoef_ = 1.0f - std::exp(-1.0f / (std::max(0.001f, glideTimeSec_) * static_cast<float>(sampleRate_)));
+                glideCoefTime_ = glideTimeSec_;
+                glideCoefRate_ = sampleRate_;
+            }
+            if (std::fabs(targetLog2_ - currentLog2_) < 1e-5f) { // encaixa (float pode nunca ficar ==)
+                currentHz_ = targetHz_;
+                currentLog2_ = targetLog2_;
+            } else {
+                currentLog2_ += (targetLog2_ - currentLog2_) * glideCoef_;
+                currentHz_ = std::exp2(currentLog2_);
+            }
         } else {
             currentHz_ = targetHz_;
+            currentLog2_ = targetLog2_;
         }
 
         // 2. LFOs
@@ -232,6 +367,7 @@ private:
         // 4. fontes da matriz de modulacao -> trims
         float levelTrim[kNumOps] = {};
         float fx1Trim[kNumOps] = {};
+        float morphTrim[kNumOps] = {};
         float fbTrim[kNumOps] = {};
         float voicePitchTrimSemis = 0.0f;
 
@@ -253,62 +389,85 @@ private:
             switch (route.dest) {
                 case ModDest::OperatorLevel:    if (oi >= 0 && oi < kNumOps) levelTrim[oi] += amount; break;
                 case ModDest::OperatorFx1:      if (oi >= 0 && oi < kNumOps) fx1Trim[oi] += amount; break;
+                case ModDest::OperatorMorph:    if (oi >= 0 && oi < kNumOps) morphTrim[oi] += amount; break;
                 case ModDest::OperatorFeedback: if (oi >= 0 && oi < kNumOps) fbTrim[oi] += amount; break;
                 case ModDest::VoicePitch:       voicePitchTrimSemis += amount * 12.0f; break;
                 default: break;
             }
         }
 
+        // pitch comum a todos os operadores da voz (bend + mod matrix) e
+        // vibrato antes da sensibilidade de cada operador
+        const float voiceSemis = controllers_.pitchBendSemis + voicePitchTrimSemis;
+        const float vibratoRaw = lfo1v * patch_->lfo1.pitchDepth + lfo2v * patch_->lfo2.pitchDepth;
+        const float tremoloRaw = lfo1v * patch_->lfo1.ampDepth + lfo2v * patch_->lfo2.ampDepth;
+        const double invSr = 1.0 / sampleRate_;
+
         // 5. operadores, na ordem compilada
         for (int idx = 0; idx < kNumOps; ++idx) {
             int i = compiled_->order[idx];
             const auto& opParams = patch_->op[i];
+            const OpCache& c = cache_[i];
             auto& op = ops_[i];
 
-            // a. frequencia
-            float freqHz;
-            if (opParams.fixedFreq) {
-                freqHz = opParams.fixedHz;
-            } else {
-                float centsTotal = opParams.fineCents + opParams.detuneCents + extraDetuneCents_;
-                freqHz = currentHz_ * opParams.coarseRatio * std::pow(2.0f, centsTotal / 1200.0f);
+            if (!c.used) {
+                // operador morto (nao chega na saida por nenhum caminho): nao
+                // calcula oscilador/FX, so deixa os envelopes andarem -- se uma
+                // edicao ao vivo o ligar no meio da nota, ele entra no ponto
+                // certo do envelope. Saida 0 (ninguem le, mas fica coerente).
+                op.fxEG.process(sampleRate_);
+                op.ampEG.process(sampleRate_);
+                op.signal = 0.0f;
+                continue;
             }
-            if (!(opParams.fixedFreq && !opParams.pegAffectsFixed)) {
-                freqHz *= std::pow(2.0f, pegSemis * opParams.pegDepth / 12.0f);
-            }
-            float lfoPitchSens = opParams.lfoPitchModSens / 7.0f;
-            float vibratoSemis = lfo1v * patch_->lfo1.pitchDepth * lfoPitchSens;
-            freqHz *= std::pow(2.0f, vibratoSemis / 12.0f);
-            freqHz *= std::pow(2.0f, (controllers_.pitchBendSemis + voicePitchTrimSemis) / 12.0f);
+
+            // a. frequencia: 1 exp2 por operador (antes: 4 pow), e nenhuma
+            // quando nao ha PEG/vibrato/bend
+            float semis = voiceSemis + vibratoRaw * c.pitchSens + (c.pegApplies ? pegSemis * c.pegDepth : 0.0f);
+            float freqHz = c.fixed ? c.baseHz : currentHz_ * c.baseHz;
+            if (semis != 0.0f) freqHz *= std::exp2(semis * (1.0f / 12.0f));
 
             // b. modulacao de fase recebida (PM aditiva) + feedback proprio
             float modIn = 0.0f;
-            for (int j = 0; j < kNumOps; ++j) {
-                bool hasEdge = (patch_->matrix.mod[i][j] != 0.0f) || patch_->matrix.ring[i][j];
-                if (!hasEdge) continue;
-                float srcSig = compiled_->feedbackEdge[i][j] ? ops_[j].prevOut : ops_[j].signal;
-                modIn += patch_->matrix.mod[i][j] * srcSig;
+            for (int k = 0; k < c.nMod; ++k) {
+                const auto& src = ops_[c.modSrc[k]];
+                modIn += c.modAmt[k] * (c.modDelayed[k] ? src.prevOut : src.signal);
             }
+            // Auto-feedback = diagonal da matriz + op.feedback (somados). Usa a
+            // media das 2 ultimas saidas, como o DX7: com 1 amostra so, feedback
+            // alto entra em oscilacao caotica (ruido "chiado" em vez de serra).
             float effectiveFeedback = std::clamp(opParams.feedback + fbTrim[i], 0.0f, 1.0f);
-            if (effectiveFeedback > 0.0f) modIn += effectiveFeedback * op.prevOut;
+            float selfAmount = c.selfMod + effectiveFeedback;
+            if (selfAmount != 0.0f) modIn += selfAmount * 0.5f * (op.prevOut + op.prevPrevOut);
 
             // c. avanca fase, aplica phase distortion, le forma de onda
-            op.phase += static_cast<double>(freqHz) / sampleRate_;
-            op.phase -= std::floor(op.phase);
+            op.phase += static_cast<double>(freqHz) * invSr;
+            if (op.phase >= 1.0) op.phase -= std::floor(op.phase);
             double phaseWithMod = op.phase + static_cast<double>(modIn);
-            phaseWithMod -= std::floor(phaseWithMod);
+            if (phaseWithMod >= 1.0 || phaseWithMod < 0.0) phaseWithMod -= std::floor(phaseWithMod);
             float ph = phaseDistort(static_cast<float>(phaseWithMod), opParams.phaseDistortion);
-            float raw = oscWave(ph, opParams.waveform, rng_, dist_);
+            // fxEG processado ANTES da onda: alem do FX (passo e), ele move o
+            // morph A->B da onda Additive
+            float fxEnv = op.fxEG.process(sampleRate_);
+            float raw;
+            if (opParams.waveform == Waveform::Additive) {
+                // 8 osciladores reais (dx7_dsp.h::PartialOscillators), cada um
+                // na sua frequencia; recebem a MESMA PM (modIn) que o operador
+                // e sampleRate_ e a taxa INTERNA (com oversampling)
+                float morph = std::clamp(opParams.morphDepth * (fxEnv / 99.0f) + morphTrim[i], 0.0f, 1.0f);
+                raw = op.partials.process(opParams.additiveA, opParams.additiveB, morph, freqHz, modIn,
+                                          opParams.phaseDistortion, static_cast<float>(sampleRate_));
+            } else {
+                raw = oscWave(ph, opParams.waveform, rng_, dist_);
+            }
 
             // d. ring modulation entre operadores (conexoes da matriz marcadas ring=true)
-            for (int j = 0; j < kNumOps; ++j) {
-                if (!patch_->matrix.ring[i][j]) continue;
-                float srcSig = compiled_->feedbackEdge[i][j] ? ops_[j].prevOut : ops_[j].signal;
-                raw *= srcSig;
+            for (int k = 0; k < c.nRing; ++k) {
+                const auto& src = ops_[c.ringSrc[k]];
+                raw *= c.ringDelayed[k] ? src.prevOut : src.signal;
             }
 
             // e. fx slot do operador, com fxEG modulando fxParam1
-            float fxEnv = op.fxEG.process(sampleRate_);
             float fx1 = opParams.fxParam1 * (1.0f + fx1Trim[i]);
             float processed = raw;
             switch (opParams.fxType) {
@@ -341,29 +500,53 @@ private:
                 case FxType::Crush:    processed = op.crusher.process(raw, fx1, opParams.fxParam2 * 16.0f); break;
                 case FxType::FreqShift:processed = op.shifter.process(raw, fx1); break;
                 case FxType::Comb:     processed = op.comb.process(raw, fx1, opParams.fxParam2); break;
+                case FxType::Fold: {
+                    // FX1 = drive (1 = sem dobra, ate 16), modulado pelo fxEG do
+                    // mesmo jeito que o corte do filtro: 20% no nivel 0 do
+                    // envelope, 100% no nivel 99 -- a dobra "abre" no ataque e
+                    // "fecha" no release. FX Param2 = simetria/bias (0..1):
+                    // 0 = dobra simetrica, so harmonicos impares; >0 = pares
+                    // tambem (e DC, removido pelo dcBlock).
+                    float maxDrive = std::clamp(fx1, 1.0f, 16.0f);
+                    float drive = 1.0f + (maxDrive - 1.0f) * (0.2f + 0.8f * (fxEnv / 99.0f));
+                    float bias = std::clamp(opParams.fxParam2, 0.0f, 1.0f);
+                    processed = triangleFold(raw * drive + bias);
+                    if (bias > 0.0f) processed = op.dcBlock.process(processed);
+                    break;
+                }
             }
 
-            // f. envelope de amplitude + key/velocity scaling + tremolo + levelTrim
+            // f. envelope de amplitude x ganho estatico (cache) x tremolo x levelTrim.
+            // A amplitude do EG (uma exp2) so e recalculada quando o nivel muda --
+            // no sustain, nunca.
             float ampRaw = op.ampEG.process(sampleRate_);
-            float amp = egLevelToAmplitude(ampRaw);
-            float levelDb = (static_cast<float>(opParams.outputLevel) - 99.0f) * 0.75f;
-            levelDb += keyLevelScaleDb(opParams.levelScaling, note_);
-            levelDb += (static_cast<float>(velocity_) - 127.0f) / 127.0f * (opParams.velocitySens / 7.0f) * 12.0f;
-            float tremolo = 1.0f + lfo1v * patch_->lfo1.ampDepth * (opParams.lfoAmpModSens / 3.0f) * 0.5f;
-            float levelLinear = dbToLinear(levelDb) * amp * std::max(0.0f, tremolo) * (1.0f + levelTrim[i]);
+            if (ampRaw != op.lastAmpRaw) {
+                op.lastAmpRaw = ampRaw;
+                op.lastAmp = egLevelToAmplitude(ampRaw);
+            }
+            float tremolo = 1.0f + tremoloRaw * c.ampSens * 0.5f;
+            float levelLinear = c.staticGain * op.lastAmp * std::max(0.0f, tremolo) * std::max(0.0f, 1.0f + levelTrim[i]);
 
             op.signal = processed * levelLinear;
+            if (!std::isfinite(op.signal)) {
+                // rede de seguranca: um NaN/Inf aqui se propagaria pelo feedback
+                // da voz e pelos buffers dos efeitos globais, silenciando tudo
+                op.signal = 0.0f;
+                op.filter.reset();
+                op.comb.reset();
+                op.shifter.reset();
+                op.crusher.reset();
+                op.dcBlock.reset();
+            }
         }
 
         // 6. soma outputMix, depois propaga signal -> prevOut para TODOS de uma vez
         float sum = 0.0f;
         for (int i = 0; i < kNumOps; ++i) sum += ops_[i].signal * patch_->matrix.outputMix[i];
-        for (auto& op : ops_) op.prevOut = op.signal;
+        for (auto& op : ops_) { op.prevPrevOut = op.prevOut; op.prevOut = op.signal; }
 
         // 7. idle check
-        bool anyActive = false;
-        for (auto& op : ops_) if (!op.ampEG.isIdle()) { anyActive = true; break; }
-        if (!anyActive) active_ = false;
+        if (!anyCarrierSounding()) active_ = false;
 
         return sum;
     }
@@ -375,9 +558,16 @@ public:
     float glideTimeSec_ = 0.05f;
     bool reuseEnvOnLegato_ = false;
 
-private:
     static float noteToHz(int note) {
         return 440.0f * std::pow(2.0f, (note - 69) / 12.0f);
+    }
+
+private:
+    bool anyCarrierSounding() const {
+        if (!patch_) return false;
+        for (int i = 0; i < kNumOps; ++i)
+            if (patch_->matrix.outputMix[i] != 0.0f && !ops_[i].ampEG.isSilent()) return true;
+        return false;
     }
 
     static float keyLevelScaleDb(const KeyLevelScaling& kls, int note) {
@@ -404,6 +594,14 @@ private:
     bool releasing_ = false;
     float currentHz_ = 440.0f;
     float targetHz_ = 440.0f;
+    float currentLog2_ = std::log2(440.0f), targetLog2_ = std::log2(440.0f); // glide em log2
+    float glideCoef_ = 1.0f, glideCoefTime_ = -1.0f;
+    double glideCoefRate_ = 0.0;
+    OpCache cache_[kNumOps];
+    const VoiceParams* cachedPatch_ = nullptr;
+    const CompiledAlgorithm* cachedCompiled_ = nullptr;
+    uint64_t generation_ = 0, cachedGeneration_ = 0;
+    bool cacheValid_ = false;
 
     OperatorState ops_[kNumOps];
     SegmentEG peg_;

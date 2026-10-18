@@ -5,12 +5,16 @@
 #include "dx7_patch_io.h"
 #include "dx7_algorithms.h"
 #include "wav_writer.h"
+#include "../app/event_queue.h"
+#include "../app/patch_browser.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <random>
 #include <thread>
 #include <vector>
@@ -772,7 +776,7 @@ static void testChorusChangesStereoImage() {
         synth.recompile(0);
         synth.globalFx().chorus.enabled = chorusOn;
         synth.globalFx().chorus.mix = 0.5f;
-        synth.globalFx().chorus.depthMs = 4.0f;
+        synth.globalFx().chorus.depth = 0.6f;
         synth.globalFx().chorus.rateHz = 1.2f;
         synth.noteOn(0, 60, 100);
 
@@ -1110,6 +1114,7 @@ static void testKeyLevelScalingAffectsOutputBySide() {
         Synth synth;
         synth.init(48000.0, 4);
         VoiceParams v = makeSimpleFmPatch();
+        v.op[0].outputLevel = 80;              // abaixo do maximo: o ganho do key scaling tem teto de 0dB (= level 99)
         v.op[0].levelScaling.breakpoint = 60;
         v.op[0].levelScaling.leftDepth = -12; // mais QUIETO abaixo do breakpoint
         v.op[0].levelScaling.rightDepth = 12; // mais ALTO acima do breakpoint
@@ -1391,6 +1396,1130 @@ static void testPolyphonyCap() {
     check(maxSeen <= 64, "activeVoiceCount() nunca excede o pool de 64 vozes");
 }
 
+// --- [ADICIONADO em 2026-09-23] regressoes da revisao de bugs -------------
+
+static void renderN(Synth& synth, int n) {
+    for (int i = 0; i < n; ++i) { float l, r; synth.renderStereo(l, r); }
+}
+
+static float renderRmsN(Synth& synth, int n) {
+    double acc = 0.0;
+    for (int i = 0; i < n; ++i) { float l, r; synth.renderStereo(l, r); acc += 0.5 * (l * l + r * r); }
+    return static_cast<float>(std::sqrt(acc / n));
+}
+
+// Voz ATIVA da parte tocando `note` (nota soando, com transpose), ou nullptr.
+static Voice* findVoice(Synth& synth, int part, int note) {
+    int n = synth.activeVoiceCount(part);
+    for (int k = 0; k < n; ++k) {
+        Voice& v = synth.debugVoiceOfPart(part, k);
+        if (v.note() == note) return &v;
+    }
+    return nullptr;
+}
+
+static void testStolenVoiceNotReleasedByOldNote() {
+    Synth synth;
+    synth.init(48000.0, 2);
+    synth.part(0).voice = makeSimpleFmPatch();
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100); renderN(synth, 100);
+    synth.noteOn(0, 62, 100); renderN(synth, 100);
+    synth.noteOn(0, 64, 100); renderN(synth, 100); // pool de 2: rouba a voz da 60
+    synth.noteOff(0, 60);                          // a 60 ja nao soa: nao pode soltar ninguem
+    Voice* v64 = findVoice(synth, 0, 64);
+    check(v64 && !v64->isReleasing(), "roubo de voz: noteOff da nota roubada NAO solta a nota que roubou o slot");
+
+    // entre partes: parte 1 rouba a voz da parte 0, noteOff da parte 0 nao pode solta-la
+    Synth s2;
+    s2.init(48000.0, 1);
+    for (int p = 0; p < 2; ++p) { s2.part(p).voice = makeSimpleFmPatch(); s2.recompile(p); }
+    s2.noteOn(0, 60, 100); renderN(s2, 100);
+    s2.noteOn(1, 72, 100); renderN(s2, 100);
+    s2.noteOff(0, 60);
+    Voice* v72 = findVoice(s2, 1, 72);
+    check(v72 && !v72->isReleasing(), "roubo de voz entre partes: noteOff da parte antiga NAO solta a voz da parte nova");
+}
+
+static void testSostenutoReleaseFreesHeldNotes() {
+    Synth synth;
+    synth.init(48000.0, 8);
+    synth.part(0).voice = makeSimpleFmPatch();
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100); renderN(synth, 100);
+    synth.sostenutoPedal(0, true);
+    synth.noteOff(0, 60); renderN(synth, 4800);
+    Voice* v = findVoice(synth, 0, 60);
+    check(v && !v->isReleasing(), "sostenuto segura a nota capturada depois do noteOff");
+    synth.sostenutoPedal(0, false);
+    for (int i = 0; i < 48000 * 3 && synth.activeVoiceCount() > 0; ++i) renderN(synth, 1);
+    check(synth.activeVoiceCount() == 0, "soltar o sostenuto libera a nota (antes ela ficava presa)");
+}
+
+static void testSustainReleaseKeepsSostenutoNotes() {
+    Synth synth;
+    synth.init(48000.0, 8);
+    synth.part(0).voice = makeSimpleFmPatch();
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100); renderN(synth, 100);
+    synth.sostenutoPedal(0, true);
+    synth.sustainPedal(0, true);
+    synth.noteOff(0, 60);
+    synth.noteOn(0, 64, 100); synth.noteOff(0, 64); // 64 so e segura pelo sustain
+    synth.sustainPedal(0, false);
+    Voice* v60 = findVoice(synth, 0, 60);
+    Voice* v64 = findVoice(synth, 0, 64);
+    check(v60 && !v60->isReleasing(), "soltar o sustain NAO solta nota que o sostenuto ainda segura");
+    check(v64 && v64->isReleasing(), "soltar o sustain solta a nota que so ele segurava");
+}
+
+static void testMonoReleasingNonSoundingNoteDoesNothing() {
+    Synth synth;
+    synth.init(48000.0, 8);
+    VoiceParams v = makeSimpleFmPatch();
+    v.op[0].velocitySens = 7;
+    synth.part(0).voice = v;
+    synth.part(0).voiceMode = VoiceMode::Mono;
+    synth.recompile(0);
+    synth.noteOn(0, 60, 20);
+    synth.noteOn(0, 64, 20);
+    float before = renderRmsN(synth, 4800);
+    synth.noteOff(0, 60); // a 60 esta "embaixo", quem soa e a 64
+    float after = renderRmsN(synth, 4800);
+    std::printf("  (RMS antes=%.4f depois=%.4f)\n", before, after);
+    check(nearlyEqualRel(after, before, 0.05f), "mono: soltar a nota de baixo nao reataca a de cima (nem com velocity 100)");
+
+    // velocity original e restaurada no reataque ao voltar pra nota anterior
+    Synth s2;
+    s2.init(48000.0, 8);
+    s2.part(0).voice = v;
+    s2.part(0).voiceMode = VoiceMode::Mono;
+    s2.recompile(0);
+    s2.noteOn(0, 60, 20);
+    float quiet = renderRmsN(s2, 4800);
+    s2.noteOn(0, 60 + 12, 127); renderN(s2, 4800);
+    s2.noteOff(0, 72);    // volta pra 60
+    float back = renderRmsN(s2, 4800);
+    std::printf("  (RMS nota 60 vel20=%.4f, de volta a 60=%.4f)\n", quiet, back);
+    check(nearlyEqualRel(back, quiet, 0.1f), "mono: ao voltar pra nota anterior, usa a velocity original dela (nao 100)");
+}
+
+static void testNoteOffOutsideKeyRangeIgnored() {
+    Synth synth;
+    synth.init(48000.0, 8);
+    VoiceParams v = makeSimpleFmPatch();
+    v.op[0].velocitySens = 7;
+    synth.part(0).voice = v;
+    synth.part(0).voiceMode = VoiceMode::Mono;
+    synth.part(0).hiKey = 59;
+    synth.recompile(0);
+    synth.noteOn(0, 48, 20);
+    synth.noteOn(0, 72, 100); // fora do range: ignorada
+    float before = renderRmsN(synth, 4800);
+    synth.noteOff(0, 72);
+    float after = renderRmsN(synth, 4800);
+    check(nearlyEqualRel(after, before, 0.05f), "noteOff de nota fora do key range nao reataca a nota mono");
+}
+
+static void testCrushHighBitsStaysFinite() {
+    Synth synth;
+    synth.init(48000.0, 8);
+    VoiceParams v = makeSimpleFmPatch();
+    v.op[0].fxType = FxType::Crush;
+    v.op[0].fxParam1 = 8000.0f;
+    v.op[0].fxParam2 = 16.0f; // maximo do slider: 256 "bits" -> 2^256 estourava pra inf
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.globalFx().reverb.enabled = true;
+    synth.globalFx().delay.enabled = true;
+    synth.noteOn(0, 60, 100);
+    bool finite = true;
+    float rms = 0.0f;
+    std::vector<float> mono;
+    for (int i = 0; i < 9600; ++i) {
+        float l, r;
+        synth.renderStereo(l, r);
+        if (!std::isfinite(l) || !std::isfinite(r)) finite = false;
+        mono.push_back(l);
+    }
+    rms = computeRms(mono, 0, mono.size());
+    check(finite && rms > 0.01f, "Crush com FX Param2 no maximo gera audio finito (antes: NaN que matava o master bus)");
+}
+
+static void testGlideAlwaysOnDetachedNotes() {
+    Synth synth;
+    synth.init(48000.0, 8);
+    synth.part(0).voice = makeSimpleFmPatch();
+    synth.part(0).voiceMode = VoiceMode::Mono;
+    synth.part(0).glideEnabled = true;
+    synth.part(0).glideLegatoOnly = false;
+    synth.part(0).glideTimeSec = 0.3f;
+    synth.recompile(0);
+    synth.noteOn(0, 48, 100); renderN(synth, 4800);
+    synth.noteOff(0, 48); renderN(synth, 10);
+    synth.noteOn(0, 72, 100); renderN(synth, 2400);
+    Voice* v = findVoice(synth, 0, 72);
+    float hz = v ? v->debugCurrentHz() : 0.0f;
+    std::printf("  (50ms depois da nota destacada: %.1f Hz; 130.8 -> 523.3)\n", hz);
+    check(hz > 140.0f && hz < 500.0f, "glide 'sempre' (legatoOnly=false) desliza tambem em nota destacada");
+
+    Synth s2;
+    s2.init(48000.0, 8);
+    s2.part(0).voice = makeSimpleFmPatch();
+    s2.part(0).voiceMode = VoiceMode::Mono;
+    s2.part(0).glideEnabled = true;
+    s2.part(0).glideLegatoOnly = true;
+    s2.part(0).glideTimeSec = 0.3f;
+    s2.recompile(0);
+    s2.noteOn(0, 48, 100); renderN(s2, 4800);
+    s2.noteOff(0, 48); renderN(s2, 10);
+    s2.noteOn(0, 72, 100); renderN(s2, 10);
+    Voice* v2 = findVoice(s2, 0, 72);
+    check(v2 && std::abs(v2->debugCurrentHz() - 523.25f) < 1.0f, "glide 'so em legato': nota destacada comeca direto no alvo");
+}
+
+static void testPegStartsAtReleaseLevel() {
+    SegmentEG peg;
+    uint8_t rate[4] = {99, 99, 99, 99}, level[4] = {50, 50, 50, 50};
+    peg.configure(rate, level);
+    peg.noteOn(0.0f, 50.0f);
+    check(std::abs(peg.process(48000.0) - 50.0f) < 1e-3f, "PEG parte do level[3] (centro), nao de 0");
+
+    // pela voz: PEG centrado com pegDepth=1 tem que soar IDENTICO a pegDepth=0 desde a 1a amostra
+    auto firstSamples = [](float pegDepth) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v = makeSimpleFmPatch();
+        v.op[0].pegDepth = pegDepth;
+        v.op[1].pegDepth = pegDepth;
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, 60, 100);
+        std::vector<float> out;
+        for (int i = 0; i < 200; ++i) { float l, r; synth.renderStereo(l, r); out.push_back(l); }
+        return out;
+    };
+    auto a = firstSamples(0.0f), b = firstSamples(1.0f);
+    float maxDiff = 0.0f;
+    for (size_t i = 0; i < a.size(); ++i) maxDiff = std::max(maxDiff, std::abs(a[i] - b[i]));
+    check(maxDiff < 1e-4f, "PEG centrado nao faz 'blip' de pitch no inicio da nota");
+}
+
+static void testVoiceModeSwitchDoesNotStickNotes() {
+    Synth synth;
+    synth.init(48000.0, 8);
+    synth.part(0).voice = makeSimpleFmPatch();
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100); renderN(synth, 100);
+    synth.part(0).voiceMode = VoiceMode::Mono; // UI troca o modo com a nota segura
+    synth.noteOff(0, 60);
+    for (int i = 0; i < 48000 * 3 && synth.activeVoiceCount() > 0; ++i) renderN(synth, 1);
+    check(synth.activeVoiceCount() == 0, "trocar Poly->Mono com nota segura nao deixa nota presa");
+
+    synth.noteOn(0, 60, 100); synth.noteOn(0, 64, 100);
+    synth.part(0).voiceMode = VoiceMode::Poly;
+    synth.noteOn(0, 67, 100);                 // 1a nota no modo novo solta as do modo antigo
+    synth.noteOff(0, 60); synth.noteOff(0, 64); synth.noteOff(0, 67);
+    for (int i = 0; i < 48000 * 3 && synth.activeVoiceCount() > 0; ++i) renderN(synth, 1);
+    check(synth.activeVoiceCount() == 0, "trocar Mono->Poly com notas seguras nao deixa nota presa");
+}
+
+static void testLevelScalingNeverExceedsMaxLevel() {
+    auto peakAt = [](int note, int rightDepth) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v;
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f;
+        v.op[0].levelScaling.rightDepth = static_cast<int8_t>(rightDepth);
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, note, 127);
+        float pk = 0.0f;
+        for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); pk = std::max(pk, std::abs(l)); }
+        return pk;
+    };
+    float plain = peakAt(108, 0), boosted = peakAt(108, 12);
+    std::printf("  (pico nota 108: sem scaling=%.3f, +12dB/oit=%.3f)\n", plain, boosted);
+    check(boosted <= plain * 1.01f, "key level scaling positivo nao passa do nivel maximo (antes: ate +60dB)");
+}
+
+static void testFeedbackStaysBoundedAtMax() {
+    Synth synth;
+    synth.init(48000.0, 4);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.matrix.mod[0][0] = 1.0f;
+    v.op[0].feedback = 1.0f; // diagonal + feedback somados = 2.0: o pior caso
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100);
+    bool finite = true;
+    for (int i = 0; i < 48000; ++i) {
+        float l, r;
+        synth.renderStereo(l, r);
+        if (!std::isfinite(l) || std::abs(l) > 1.0001f) finite = false;
+    }
+    check(finite, "feedback maximo (diagonal + op.feedback) continua finito e dentro de +-1");
+}
+
+static void testLfo2DepthsHaveEffect() {
+    auto render = [](float lfo2Pitch) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v = makeSimpleFmPatch();
+        v.op[0].lfoPitchModSens = 7;
+        v.lfo2.rate = 6.0f;
+        v.lfo2.pitchDepth = lfo2Pitch;
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, 60, 100);
+        std::vector<float> out;
+        for (int i = 0; i < 9600; ++i) { float l, r; synth.renderStereo(l, r); out.push_back(l); }
+        return out;
+    };
+    auto a = render(0.0f), b = render(1.0f);
+    float maxDiff = 0.0f;
+    for (size_t i = 0; i < a.size(); ++i) maxDiff = std::max(maxDiff, std::abs(a[i] - b[i]));
+    check(maxDiff > 0.05f, "LFO2 pitch depth tem efeito (antes so o LFO1 fazia vibrato)");
+}
+
+static void testPolyphonyGainIgnoresSilentPedalVoices() {
+    VoiceParams v = makeSimpleFmPatch();
+    v.op[0].ampEG.rate[1] = 70;
+    v.op[0].ampEG.level[1] = 0; // percussivo: decai a 0 e fica no sustain 0
+    v.op[0].ampEG.level[2] = 0;
+
+    Synth ref;
+    ref.init(48000.0, 16);
+    ref.part(0).voice = v;
+    ref.recompile(0);
+    ref.noteOn(0, 72, 100);
+    float alone = renderRmsN(ref, 2400);
+
+    Synth synth;
+    synth.init(48000.0, 16);
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.sustainPedal(0, true);
+    for (int n = 0; n < 6; ++n) { synth.noteOn(0, 48 + n, 100); synth.noteOff(0, 48 + n); }
+    renderN(synth, 48000); // todas decaem a 0 mas continuam "ativas" pelo pedal
+    synth.noteOn(0, 72, 100);
+    float withPedal = renderRmsN(synth, 2400);
+    std::printf("  (RMS nota nova: sozinha=%.4f, com 6 vozes mudas no pedal=%.4f)\n", alone, withPedal);
+    check(nearlyEqualRel(withPedal, alone, 0.1f), "vozes mudas presas no pedal nao abaixam o volume da nota nova");
+}
+
+static void testNonZeroReleaseLevelKeepsSounding() {
+    Synth synth;
+    synth.init(48000.0, 4);
+    VoiceParams v = makeSimpleFmPatch();
+    v.op[0].ampEG.level[3] = 50; // release termina em 50, nao em 0 (como no DX7: continua soando)
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100); renderN(synth, 4800);
+    synth.noteOff(0, 60); renderN(synth, 48000);
+    float rms = renderRmsN(synth, 4800);
+    check(synth.activeVoiceCount() == 1 && rms > 0.001f,
+          "release com level[3]>0 segue soando (antes a voz era cortada seco, com clique)");
+}
+
+static void testJsonLoadClampsAndRejectsGarbage() {
+    std::filesystem::create_directories("output");
+    {
+        std::ofstream f("output/garbage.json");
+        f << "isto nao e json";
+    }
+    PartParams p;
+    p.name = "intacto";
+    check(!loadPartFile("output/garbage.json", p) && p.name == "intacto",
+          "loadPartFile rejeita arquivo que nao e JSON (antes carregava o Init em silencio)");
+
+    JsonValue j = JsonValue::parse(
+        R"({"voice":{"op":[{"outputLevel":300,"fxParam2":1e9,"coarseRatio":-5,"ampEG":{"rate":[500,-3,99,99]}}]},)"
+        R"("unisonCount":1000,"transpose":-128,"level":1e40})");
+    PartParams q = partParamsFromJson(j);
+    check(q.voice.op[0].outputLevel == 99 && q.voice.op[0].fxParam2 == 16.0f && q.voice.op[0].coarseRatio > 0.0f &&
+          q.voice.op[0].ampEG.rate[0] == 99 && q.voice.op[0].ampEG.rate[1] == 0,
+          "JSON com valores fora da faixa e saturado nos limites (sem UB no cast)");
+    check(q.unisonCount == 8 && q.transpose == -48 && q.level == 2.0f, "campos da parte tambem sao saturados no load");
+}
+
+static void testMidiNoteOffReachesPartAfterDisable() {
+    using namespace dx7fm_app;
+    Synth synth;
+    synth.init(48000.0, 8);
+    synth.part(0).voice = makeSimpleFmPatch();
+    synth.recompile(0);
+    std::atomic<bool> enabled[kNumParts];
+    std::atomic<int> channel[kNumParts];
+    for (int p = 0; p < kNumParts; ++p) { enabled[p] = (p == 0); channel[p] = 1; }
+    NoteRouting routing;
+
+    AppEvent on;
+    on.kind = AppEvent::Kind::NoteOn; on.channel1to16 = 1; on.note = 60; on.velocity = 100;
+    applyAppEvent(synth, on, enabled, channel, routing);
+    renderN(synth, 100);
+
+    enabled[0] = false; // usuario desabilita a parte com a nota segura
+    channel[0] = 5;     // ...e muda o canal
+    AppEvent off = on;
+    off.kind = AppEvent::Kind::NoteOff;
+    applyAppEvent(synth, off, enabled, channel, routing);
+    for (int i = 0; i < 48000 * 3 && synth.activeVoiceCount() > 0; ++i) renderN(synth, 1);
+    check(synth.activeVoiceCount() == 0, "noteOff MIDI chega na parte que recebeu o noteOn mesmo apos desabilitar/mudar canal");
+}
+
+static void testRecompileCacheFollowsMatrixChanges() {
+    Synth synth;
+    synth.init(48000.0, 4);
+    VoiceParams v;
+    applyAlgorithm(v, 1); // cadeia 0<-1<-...<-7
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.part(0).voice.op[0].outputLevel = 90; // muda so o timbre: cache reaproveitado
+    synth.recompile(0);
+    applyAlgorithm(synth.part(0).voice, 22);      // 8 portadoras em paralelo: topologia nova
+    synth.recompile(0);
+    // o compilado publicado tem que bater com o que compileAlgorithm daria do zero
+    CompiledAlgorithm fresh = compileAlgorithm(synth.part(0).voice.matrix);
+    synth.noteOn(0, 60, 100);
+    renderN(synth, 10);
+    bool same = true;
+    VoiceParams probe = synth.part(0).voice;
+    CompiledAlgorithm again = makeSnapshot(probe).compiled;
+    for (int i = 0; i < kNumOps; ++i)
+        for (int j = 0; j < kNumOps; ++j) same &= fresh.feedbackEdge[i][j] == again.feedbackEdge[i][j];
+    std::vector<float> a;
+    for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); a.push_back(l); }
+    check(same && computeRms(a, 0, a.size()) > 0.01f, "recompile com cache de algoritmo publica a topologia nova");
+}
+
+static void testMasterVolume() {
+    // portadora a outputLevel 80 (pico ~0.2): bem abaixo do limiar do
+    // limitador, entao o volume geral tem que escalar a saida EXATAMENTE
+    auto render = [](float volume, bool changeMidway) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v;
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f;
+        v.op[0].outputLevel = 80;
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        if (!changeMidway) synth.setMasterVolume(volume);
+        synth.noteOn(0, 60, 100);
+        std::vector<float> out;
+        for (int i = 0; i < 48000; ++i) { // 1s: a rampa (~20ms, exponencial) termina muito antes
+            if (changeMidway && i == 4800) synth.setMasterVolume(volume);
+            float l, r;
+            synth.renderStereo(l, r);
+            out.push_back(l);
+        }
+        return out;
+    };
+    auto full = render(1.0f, false), half = render(0.5f, false);
+    float rFull = computeRms(full, 4800, 4800), rHalf = computeRms(half, 4800, 4800);
+    std::printf("  (RMS volume 1.0=%.5f, 0.5=%.5f)\n", rFull, rHalf);
+    check(std::abs(rHalf / rFull - 0.5f) < 0.01f, "volume geral 0.5 reduz a saida pela metade");
+
+    auto muted = render(0.0f, false);
+    float peakMuted = 0.0f;
+    for (size_t i = 24000; i < muted.size(); ++i) peakMuted = std::max(peakMuted, std::abs(muted[i]));
+    check(peakMuted == 0.0f, "volume geral 0 e silencio exato (depois da rampa)");
+
+    auto change = render(0.0f, true); // baixa de 1.0 pra 0 no meio de uma nota
+    float maxJump = 0.0f;
+    for (size_t i = 4801; i < 4900; ++i) maxJump = std::max(maxJump, std::abs(change[i] - change[i - 1]));
+    float tailPeak = 0.0f;
+    for (size_t i = 24000; i < change.size(); ++i) tailPeak = std::max(tailPeak, std::abs(change[i]));
+    check(maxJump < 0.05f && tailPeak < 1e-4f, "mudanca de volume geral e suavizada (sem degrau) e chega ao alvo");
+
+    Synth s;
+    s.setMasterVolume(99.0f);
+    bool clamped = s.masterVolume() == 2.0f;
+    s.setMasterVolume(std::nanf(""));
+    check(clamped && s.masterVolume() == 2.0f, "setMasterVolume satura em 0..2 e ignora NaN");
+}
+
+// --- [ADICIONADO em 2026-09-23] wavefolder (FxType::Fold) ---------------
+
+static void testTriangleFoldShape() {
+    bool identity = true;
+    for (float v = -1.0f; v <= 1.0f; v += 0.125f) identity &= std::abs(triangleFold(v) - v) < 1e-6f;
+    check(identity, "triangleFold e identidade exata em [-1, 1]");
+    check(std::abs(triangleFold(1.5f) - 0.5f) < 1e-6f && std::abs(triangleFold(3.0f) + 1.0f) < 1e-6f &&
+          std::abs(triangleFold(-1.5f) + 0.5f) < 1e-6f,
+          "triangleFold rebate nas paredes: 1.5 -> 0.5, 3 -> -1, -1.5 -> -0.5");
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> d(-100.0f, 100.0f);
+    bool bounded = true;
+    for (int i = 0; i < 100000; ++i) { float y = triangleFold(d(rng)); bounded &= (y >= -1.0f && y <= 1.0f); }
+    check(bounded, "triangleFold fica em [-1, 1] pra qualquer entrada (100k valores aleatorios em +-100)");
+}
+
+// Portadora senoidal isolada (op0) em 440Hz, nivel 80 (pico ~0.2, abaixo do
+// limitador, que senao adicionaria harmonicos proprios e sujaria a medicao).
+static std::vector<float> renderFoldedSine(FxType fx, float drive, float bias, int samples,
+                                           const uint8_t* fxEgLevels = nullptr, const uint8_t* fxEgRates = nullptr) {
+    Synth synth;
+    synth.init(48000.0, 4);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.op[0].outputLevel = 80;
+    v.op[0].fxType = fx;
+    v.op[0].fxParam1 = drive;
+    v.op[0].fxParam2 = bias;
+    if (fxEgLevels) for (int k = 0; k < 4; ++k) { v.op[0].fxEG.level[k] = fxEgLevels[k]; v.op[0].fxEG.rate[k] = fxEgRates[k]; }
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.noteOn(0, 69, 100);
+    std::vector<float> out;
+    out.reserve(static_cast<size_t>(samples));
+    for (int i = 0; i < samples; ++i) { float l, r; synth.renderStereo(l, r); out.push_back(l); }
+    return out;
+}
+
+static float harmonicRatio(const std::vector<float>& x, int harmonic) {
+    return goertzelMagnitude(x, 440.0 * harmonic, 48000.0) / goertzelMagnitude(x, 440.0, 48000.0);
+}
+
+// "Brilho": centroide harmonico (media dos numeros de harmonico 1..40
+// ponderada pela potencia). Razoes isoladas tipo h3/h1 NAO servem pra
+// wavefolder: nao sao monotonicas no drive (com drive ~2.4 a fundamental
+// quase some e h3/h1 passa de 9; com drive 4 cai pra 0.1). O centroide sobe
+// de forma monotonica com o drive (~drive+1).
+static float harmonicCentroid(const std::vector<float>& x) {
+    double sum = 0.0, weighted = 0.0;
+    for (int k = 1; k <= 40; ++k) {
+        double m = goertzelMagnitude(x, 440.0 * k, 48000.0);
+        sum += m * m;
+        weighted += k * m * m;
+    }
+    return static_cast<float>(weighted / sum);
+}
+
+static void testFoldDriveOneIsTransparent() {
+    auto bypass = renderFoldedSine(FxType::Bypass, 1.0f, 0.0f, 4800);
+    auto fold = renderFoldedSine(FxType::Fold, 1.0f, 0.0f, 4800);
+    float maxDiff = 0.0f;
+    for (size_t i = 0; i < bypass.size(); ++i) maxDiff = std::max(maxDiff, std::abs(bypass[i] - fold[i]));
+    check(maxDiff == 0.0f, "Fold com drive 1 e simetria 0 e IDENTICO ao Bypass (nada dobra)");
+}
+
+static void testFoldAddsOddHarmonics() {
+    auto bypass = renderFoldedSine(FxType::Bypass, 1.0f, 0.0f, 48000);
+    auto fold = renderFoldedSine(FxType::Fold, 4.0f, 0.0f, 48000);
+    std::vector<float> b(bypass.begin() + 24000, bypass.end()), f(fold.begin() + 24000, fold.end());
+    float cBypass = harmonicCentroid(b), cFold = harmonicCentroid(f), h2Fold = harmonicRatio(f, 2);
+    std::printf("  (centroide harmonico: bypass=%.2f, fold drive 4=%.2f; 2o harmonico no fold=%.4f)\n",
+                cBypass, cFold, h2Fold);
+    check(cBypass < 1.05f && cFold > 3.0f, "Fold com drive 4 desloca a energia pros harmonicos (seno puro fica so na fundamental)");
+    check(h2Fold < 0.01f, "Fold simetrico (bias 0) NAO gera harmonicos pares");
+    float peak = 0.0f;
+    for (float x : f) peak = std::max(peak, std::abs(x));
+    float peakBypass = 0.0f;
+    for (float x : b) peakBypass = std::max(peakBypass, std::abs(x));
+    check(peak <= peakBypass * 1.001f, "Fold nunca aumenta o pico alem do nivel do operador");
+}
+
+static void testFoldBiasAddsEvenHarmonicsWithoutDc() {
+    auto fold = renderFoldedSine(FxType::Fold, 4.0f, 0.5f, 48000);
+    std::vector<float> f(fold.begin() + 24000, fold.end()); // depois do DC blocker assentar
+    double mean = 0.0;
+    for (float x : f) mean += x;
+    mean /= static_cast<double>(f.size());
+    float h2 = harmonicRatio(f, 2);
+    std::printf("  (simetria 0.5: 2o harmonico/fundamental=%.4f, DC medio=%.6f)\n", h2, mean);
+    check(h2 > 0.05f, "Fold com simetria > 0 gera harmonicos pares");
+    check(std::abs(mean) < 0.002, "o DC introduzido pela simetria e removido (media ~0)");
+}
+
+static void testFoldDriveFollowsFxEnvelope() {
+    // fxEG: ataque instantaneo ao maximo (drive 8), depois decai devagar
+    // (~0.6s) ate 0 (drive 1 + 7*20% = 2.4)
+    const uint8_t levels[4] = {99, 0, 0, 0};
+    const uint8_t rates[4] = {99, 40, 99, 99};
+    auto x = renderFoldedSine(FxType::Fold, 8.0f, 0.0f, 48000 * 3, levels, rates);
+    // janelas de 4800 amostras (440 ciclos inteiros): logo apos o ataque vs no fim
+    std::vector<float> early(x.begin() + 480, x.begin() + 5280), late(x.end() - 4800, x.end());
+    float cEarly = harmonicCentroid(early), cLate = harmonicCentroid(late);
+    std::printf("  (centroide harmonico: logo apos ataque=%.2f, apos o fxEG cair=%.2f)\n", cEarly, cLate);
+    check(cEarly > cLate * 1.5f, "fxEG modula o drive do Fold (mais brilho no ataque, menos depois)");
+}
+
+static void testFoldJsonRoundTrip() {
+    VoiceParams v;
+    v.op[2].fxType = FxType::Fold;
+    v.op[2].fxParam1 = 5.5f;
+    v.op[2].fxParam2 = 0.25f;
+    VoiceParams back = voiceParamsFromJson(JsonValue::parse(voiceParamsToJson(v).dump()));
+    check(back.op[2].fxType == FxType::Fold && back.op[2].fxParam1 == 5.5f && back.op[2].fxParam2 == 0.25f,
+          "Fold sobrevive ao round-trip de JSON (nome \"Fold\", drive e simetria)");
+}
+
+// --- [ADICIONADO em 2026-09-23] navegador de patches (app/patch_browser.h) ---
+
+static void testSafeFileStem() {
+    using dx7fm_app::safeFileStem;
+    check(safeFileStem("Piano Eletrico") == "Piano Eletrico", "safeFileStem mantem nome comum (com espaco)");
+    check(safeFileStem("Órgão Ácido") == "Órgão Ácido", "safeFileStem mantem acentos (UTF-8)");
+    check(safeFileStem("../../etc/passwd") == "_.._etc_passwd", "safeFileStem nao deixa escapar da pasta (../ e /)");
+    check(safeFileStem("a:b*c?d\"e<f>g|h\\i") == "a_b_c_d_e_f_g_h_i", "safeFileStem troca caracteres invalidos por _");
+    check(safeFileStem("   ") == "sem_nome" && safeFileStem("") == "sem_nome" && safeFileStem("..") == "sem_nome",
+          "safeFileStem de nome vazio/so espacos/.. vira sem_nome");
+}
+
+static void testListPatchesSortedJsonOnly() {
+    namespace fs = std::filesystem;
+    fs::path dir = "output/patch_list_test";
+    fs::remove_all(dir);
+    fs::create_directories(dir / "subpasta.json");
+    for (const char* n : {"beta.json", "Alfa.json", "gama.json", "leia-me.txt"}) std::ofstream(dir / n) << "{}";
+    auto list = dx7fm_app::listPatches(dir);
+    bool ok = list.size() == 3 && list[0].stem == "Alfa" && list[1].stem == "beta" && list[2].stem == "gama";
+    check(ok, "listPatches lista so arquivos .json, em ordem alfabetica sem diferenciar maiusculas");
+    check(dx7fm_app::listPatches("output/pasta_que_nao_existe").empty(), "listPatches de pasta inexistente e lista vazia (nao erro)");
+    fs::remove_all(dir);
+}
+
+static void testLoadPatchKeepsPartRouting() {
+    PartParams partB;
+    partB.enabled = false;
+    partB.midiChannel = 3;
+    partB.loKey = 60;
+    partB.level = 0.4f;
+    partB.pan = -0.5f;
+
+    PartParams saved; // patch salvo de OUTRA parte, com roteamento diferente
+    saved.name = "Baixo";
+    saved.enabled = true;
+    saved.midiChannel = 1;
+    saved.loKey = 0;
+    saved.voiceMode = VoiceMode::Mono;
+    saved.transpose = -12;
+    saved.voice.op[0].waveform = Waveform::Saw;
+
+    dx7fm_app::copyPatchKeepingRouting(partB, saved);
+    check(partB.name == "Baixo" && partB.voiceMode == VoiceMode::Mono && partB.transpose == -12 &&
+          partB.voice.op[0].waveform == Waveform::Saw,
+          "carregar patch traz o SOM (timbre, nome, modo de voz, transpose)");
+    check(!partB.enabled && partB.midiChannel == 3 && partB.loKey == 60 && partB.level == 0.4f && partB.pan == -0.5f,
+          "carregar patch NAO muda o roteamento/mix da parte (habilitada, canal, key range, nivel, pan)");
+}
+
+static void testPatchFingerprintIgnoresRouting() {
+    PartParams a, b;
+    b.enabled = false;
+    b.midiChannel = 7;
+    b.pan = 1.0f;
+    check(dx7fm_app::patchFingerprint(a) == dx7fm_app::patchFingerprint(b),
+          "fingerprint do patch ignora roteamento (mudar canal/pan nao conta como alteracao do som)");
+    b.voice.op[3].outputLevel = 42;
+    check(dx7fm_app::patchFingerprint(a) != dx7fm_app::patchFingerprint(b), "fingerprint muda quando o som muda");
+    b.voice.op[3].outputLevel = a.voice.op[3].outputLevel;
+    check(dx7fm_app::patchFingerprint(a) == dx7fm_app::patchFingerprint(b), "desfazer a edicao volta ao mesmo fingerprint");
+}
+
+// --- [ADICIONADO em 2026-10-18] forma de onda Additive (8 osciladores livres) ---
+
+// Portadora isolada (op0) em 440Hz (nota 69), nivel 80 (pico ~0.2, abaixo do
+// limitador). `setup` ajusta o patch antes de publicar.
+template <typename Setup>
+static std::vector<float> renderAdditive(Setup setup, int samples = 48000, float modWheel = -1.0f) {
+    Synth synth;
+    synth.init(48000.0, 4);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.op[0].outputLevel = 80;
+    v.op[0].waveform = Waveform::Additive;
+    setup(v);
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    if (modWheel >= 0.0f) synth.modWheel(0, modWheel);
+    synth.noteOn(0, 69, 100);
+    std::vector<float> out;
+    out.reserve(static_cast<size_t>(samples));
+    for (int i = 0; i < samples; ++i) { float l, r; synth.renderStereo(l, r); out.push_back(l); }
+    return out;
+}
+
+static std::vector<float> lastHalf(const std::vector<float>& x) {
+    return std::vector<float>(x.begin() + static_cast<long>(x.size() / 2), x.end());
+}
+
+static float mag(const std::vector<float>& x, double hz) { return goertzelMagnitude(x, hz, 48000.0); }
+
+static float maxAbsDiff(const std::vector<float>& a, const std::vector<float>& b) {
+    float d = 0.0f;
+    for (size_t i = 0; i < std::min(a.size(), b.size()); ++i) d = std::max(d, std::abs(a[i] - b[i]));
+    return d;
+}
+
+static void testAdditiveSinglePartialMatchesSine() {
+    auto add = renderAdditive([](VoiceParams&) {}, 9600);
+    auto sine = renderAdditive([](VoiceParams& v) { v.op[0].waveform = Waveform::Sine; }, 9600);
+    float d = maxAbsDiff(add, sine);
+    std::printf("  (diferenca maxima Additive(so parcial 1) x Sine: %.2e)\n", d);
+    check(d < 1e-3f, "Additive com so o parcial 1 (razao 1) soa igual ao operador Sine");
+
+    // com PM: o operador 1 modulando o 0 (patch default) -- mesma resposta
+    auto pmAdd = renderAdditive([](VoiceParams& v) { v.matrix.mod[0][1] = 1.0f; v.op[1].outputLevel = 70; }, 9600);
+    auto pmSine = renderAdditive([](VoiceParams& v) {
+        v.matrix.mod[0][1] = 1.0f; v.op[1].outputLevel = 70; v.op[0].waveform = Waveform::Sine; }, 9600);
+    float dpm = maxAbsDiff(pmAdd, pmSine);
+    std::printf("  (com modulacao de fase: diferenca maxima %.2e)\n", dpm);
+    check(dpm < 2e-3f, "Additive recebe a modulacao de fase (FM) igual a uma onda comum");
+}
+
+static void testAdditiveFreeRatios() {
+    auto x = lastHalf(renderAdditive([](VoiceParams& v) {
+        auto& a = v.op[0].additiveA;
+        a.amp[0] = 1.0f; a.ratio[0] = 1.0f;
+        a.amp[1] = 0.5f; a.ratio[1] = 2.75f; // inarmonico: 1210Hz
+    }));
+    float m1 = mag(x, 440.0), mInh = mag(x, 1210.0), mH2 = mag(x, 880.0);
+    std::printf("  (magnitudes: 440Hz=%.4f, 1210Hz=%.4f, 880Hz=%.5f)\n", m1, mInh, mH2);
+    check(std::abs(mInh / m1 - 0.5f) < 0.025f, "parcial com razao livre 2.75 soa em 1210Hz com a amplitude pedida (0.5)");
+    check(mH2 < m1 * 0.01f, "sem energia no harmonico 2 (so os parciais definidos soam)");
+}
+
+static void testAdditiveSkipsPartialsAboveNyquist() {
+    auto render = [](float hz) {
+        return renderAdditive([hz](VoiceParams& v) {
+            v.op[0].fixedFreq = true;
+            v.op[0].fixedHz = hz;
+            auto& a = v.op[0].additiveA;
+            a.amp[0] = 0.0f;
+            a.amp[1] = 1.0f; a.ratio[1] = 20.0f; // so um parcial, em 20x
+        }, 9600);
+    };
+    auto high = render(1500.0f), low = render(300.0f);
+    float peakHigh = 0.0f;
+    for (float s : high) peakHigh = std::max(peakHigh, std::abs(s));
+    std::printf("  (parcial 20x: em 1500Hz (30kHz) pico=%.2e; em 300Hz (6kHz) RMS=%.4f)\n", peakHigh, computeRms(low, 0, low.size()));
+    check(peakHigh == 0.0f, "parcial acima de Nyquist (20 x 1500Hz = 30kHz) e desligado, sem alias");
+    check(computeRms(low, 0, low.size()) > 0.01f, "o mesmo parcial abaixo de Nyquist (20 x 300Hz = 6kHz) soa normal");
+}
+
+static void testAdditiveMorph() {
+    auto withDepth = [](float depth) {
+        return lastHalf(renderAdditive([depth](VoiceParams& v) {
+            auto& o = v.op[0];
+            o.additiveB.amp[0] = 0.0f;
+            o.additiveB.amp[1] = 1.0f; // B = so o parcial 2 (880Hz)
+            o.morphDepth = depth;
+        }));
+    };
+    auto a = withDepth(0.0f), b = withDepth(1.0f), mid = withDepth(0.5f);
+    check(mag(a, 880.0) < mag(a, 440.0) * 0.01f, "morph 0: so o espectro A (440Hz)");
+    check(mag(b, 440.0) < mag(b, 880.0) * 0.01f, "morph 1 (FX EG no maximo): so o espectro B (880Hz)");
+    float r = mag(mid, 880.0) / mag(mid, 440.0);
+    check(r > 0.8f && r < 1.25f, "morph 0.5: metade de cada espectro");
+
+    // o morph tambem interpola a RAZAO: parcial 1 indo de 1x (440) a 1.5x (660)
+    auto glide = lastHalf(renderAdditive([](VoiceParams& v) {
+        v.op[0].additiveB.ratio[0] = 1.5f;
+        v.op[0].morphDepth = 1.0f;
+    }));
+    check(mag(glide, 660.0) > 0.05f && mag(glide, 440.0) < mag(glide, 660.0) * 0.01f,
+          "morph interpola a razao de frequencia (parcial 1 vai de 440Hz pra 660Hz)");
+}
+
+static void testAdditiveMorphFollowsFxEgAndModMatrix() {
+    auto x = renderAdditive([](VoiceParams& v) {
+        auto& o = v.op[0];
+        o.additiveB.amp[0] = 0.0f;
+        o.additiveB.amp[1] = 1.0f;
+        o.morphDepth = 1.0f;
+        const uint8_t r[4] = {99, 40, 99, 99}, l[4] = {99, 0, 0, 0}; // ataque em B, decai pra A em ~0.6s
+        for (int k = 0; k < 4; ++k) { o.fxEG.rate[k] = r[k]; o.fxEG.level[k] = l[k]; }
+    }, 48000 * 2);
+    std::vector<float> early(x.begin() + 480, x.begin() + 5280), late(x.end() - 4800, x.end());
+    std::printf("  (880/440: logo apos o ataque=%.2f, no fim=%.3f)\n", mag(early, 880.0) / mag(early, 440.0),
+                mag(late, 880.0) / mag(late, 440.0));
+    check(mag(early, 880.0) > mag(early, 440.0) && mag(late, 440.0) > mag(late, 880.0) * 20.0f,
+          "FX EG move o morph: comeca em B (880Hz) e termina em A (440Hz)");
+
+    auto wheel = lastHalf(renderAdditive([](VoiceParams& v) {
+        auto& o = v.op[0];
+        o.additiveB.amp[0] = 0.0f;
+        o.additiveB.amp[1] = 1.0f;
+        o.morphDepth = 0.0f; // so a mod matrix move o morph
+        v.modMatrix[0] = ModRoute{ModSource::ModWheel, ModDest::OperatorMorph, 0, 1.0f};
+    }, 48000, 1.0f));
+    check(mag(wheel, 440.0) < mag(wheel, 880.0) * 0.01f, "mod wheel -> OperatorMorph leva o espectro ate B");
+}
+
+static void testAdditiveSilentWhenAllAmpsZero() {
+    auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
+    bool ok = true;
+    for (float s : x) ok &= (s == 0.0f);
+    check(ok, "Additive com todas as amplitudes em 0 e silencio exato (sem divisao por zero)");
+}
+
+static void testAdditiveJson() {
+    VoiceParams v;
+    v.op[3].waveform = Waveform::Additive;
+    v.op[3].additiveA.amp[4] = 0.25f;
+    v.op[3].additiveA.ratio[4] = 2.756f;
+    v.op[3].additiveB.ratio[7] = 31.5f;
+    v.op[3].morphDepth = 0.6f;
+    v.modMatrix[2] = ModRoute{ModSource::ModWheel, ModDest::OperatorMorph, 3, 0.5f};
+    VoiceParams back = voiceParamsFromJson(JsonValue::parse(voiceParamsToJson(v).dump()));
+    const auto& o = back.op[3];
+    check(o.waveform == Waveform::Additive && o.additiveA.amp[4] == 0.25f && o.additiveA.ratio[4] == 2.756f &&
+          o.additiveB.ratio[7] == 31.5f && o.morphDepth == 0.6f && back.modMatrix[2].dest == ModDest::OperatorMorph,
+          "Additive (amplitudes, razoes, morph) e OperatorMorph sobrevivem ao round-trip de JSON");
+
+    VoiceParams old = voiceParamsFromJson(JsonValue::parse(R"({"op":[{"waveform":"Saw"}]})"));
+    check(old.op[0].additiveA.amp[0] == 1.0f && old.op[0].additiveA.ratio[2] == 3.0f && old.op[0].morphDepth == 0.0f,
+          "patch antigo sem a chave \"additive\" carrega com os defaults (seno, razoes harmonicas)");
+
+    VoiceParams bad = voiceParamsFromJson(JsonValue::parse(
+        R"({"op":[{"additive":{"a":{"amp":[5,-1],"ratio":[0,1e9]},"morph":7}}]})"));
+    check(bad.op[0].additiveA.amp[0] == 1.0f && bad.op[0].additiveA.amp[1] == 0.0f &&
+          bad.op[0].additiveA.ratio[0] == 0.01f && bad.op[0].additiveA.ratio[1] == 32.0f && bad.op[0].morphDepth == 1.0f,
+          "valores fora da faixa no JSON da Additive sao saturados (amp 0..1, razao 0.01..32, morph 0..1)");
+}
+
+static void testAdditiveCost() {
+    auto timeIt = [](bool additive) {
+        Synth synth;
+        synth.init(48000.0, 16);
+        VoiceParams v;
+        applyAlgorithm(v, 1);
+        for (auto& op : v.op) {
+            op.outputLevel = 80;
+            if (additive) {
+                op.waveform = Waveform::Additive;
+                for (int k = 0; k < kNumPartials; ++k) { op.additiveA.amp[k] = 1.0f / (k + 1); op.additiveA.ratio[k] = k + 1.0f; }
+            }
+        }
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        for (int n = 0; n < 16; ++n) synth.noteOn(0, 40 + n, 100);
+        auto t0 = std::chrono::steady_clock::now();
+        float sink = 0.0f;
+        for (int i = 0; i < 48000; ++i) { float l, r; synth.renderStereo(l, r); sink += l; }
+        double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        return sink == 12345.0f ? 0.0 : sec;
+    };
+    double sine = timeIt(false), add = timeIt(true);
+    std::printf("  (16 vozes x 8 ops, 1s de audio: Sine=%.3fs, Additive 8 parciais=%.3fs, razao=%.2fx)\n", sine, add, add / sine);
+    // Limite 3x (era 2x): na otimizacao de 2026-10-18 o operador Sine ficou
+    // ~2.7x mais barato (seno por tabela, cache de nivel/afinacao), entao a
+    // RAZAO subiu mesmo com a Additive tambem mais rapida em termos absolutos.
+    check(add < sine * 3.0, "Additive (8 osciladores em todos os 8 ops) custa menos que 3x um operador Sine");
+}
+
+// --- [ADICIONADO em 2026-10-18] efeitos globais baseados em open source ---
+
+// Roda `n` amostras de um sinal mono (gen(i)) por um bloco/cadeia e devolve L.
+template <typename Fx, typename Gen>
+static std::vector<float> runFx(Fx&& fx, Gen gen, int n, std::vector<float>* right = nullptr) {
+    std::vector<float> out;
+    out.reserve(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        float l = gen(i), r = l;
+        fx(l, r);
+        out.push_back(l);
+        if (right) right->push_back(r);
+    }
+    return out;
+}
+static float sineAt(int i, float hz, float amp = 0.5f) { return amp * std::sin(2.0f * kPi * hz * static_cast<float>(i) / 48000.0f); }
+static float rmsTail(const std::vector<float>& x, size_t from) { return computeRms(x, from, x.size() - from); }
+static float dbRatio(float out, float in) { return 20.0f * std::log10(out / in); }
+
+static void testGlobalFxChainDisabledIsIdentity() {
+    GlobalFxChain chain;
+    chain.setSampleRate(48000.0);
+    GlobalFxParams p; // tudo desligado por padrao
+    std::mt19937 rng(3);
+    std::uniform_real_distribution<float> d(-1.0f, 1.0f);
+    bool same = true;
+    for (int i = 0; i < 4800; ++i) {
+        float l = d(rng), r = d(rng), l0 = l, r0 = r;
+        chain.process(p, l, r);
+        same &= (l == l0 && r == r0);
+    }
+    check(same, "cadeia de efeitos globais toda desligada e identidade EXATA");
+}
+
+static void testPhaserNotch() {
+    auto run = [](float hz) {
+        Phaser ph;
+        ph.setSampleRate(48000.0);
+        PhaserParams p;
+        p.notches = 1; p.rateHz = 0.0f; p.feedback = 0.0f; p.depth = 1.0f;
+        p.notchWidthHz = 100.0f; p.freqMinHz = 1000.0f; p.freqMaxHz = 1000.0f;
+        auto out = runFx([&](float& l, float& r) { ph.process(p, l, r); }, [hz](int i) { return sineAt(i, hz); }, 24000);
+        return rmsTail(out, 12000) / (0.5f / std::sqrt(2.0f));
+    };
+    float atNotch = run(1000.0f), away = run(4000.0f);
+    std::printf("  (phaser 1 notch em 1kHz: ganho em 1kHz=%.1fdB, em 4kHz=%.1fdB)\n", 20 * std::log10(atNotch), 20 * std::log10(away));
+    check(atNotch < 0.05f, "phaser: seno na frequencia do notch e cancelado (< -26dB)");
+    check(away > 0.7f, "phaser: seno longe do notch passa quase inteiro");
+}
+
+static void testFlangerImpulseResponse() {
+    Flanger fl;
+    fl.setSampleRate(48000.0);
+    FlangerParams p;
+    p.rateHz = 0.0f; p.delayMs = 1.0f; p.sweepMs = 0.0f; p.depth = 1.0f; p.feedback = 0.5f;
+    auto out = runFx([&](float& l, float& r) { fl.process(p, l, r); }, [](int i) { return i == 0 ? 1.0f : 0.0f; }, 400);
+    std::printf("  (flanger impulso: y[0]=%.3f y[48]=%.3f y[96]=%.3f y[20]=%.3f)\n", out[0], out[48], out[96], out[20]);
+    check(std::abs(out[0] - 0.5f) < 1e-4f && std::abs(out[48] - 0.5f) < 1e-3f && std::abs(out[96] - 0.25f) < 1e-3f &&
+          std::abs(out[20]) < 1e-6f,
+          "flanger: resposta ao impulso = 0.5 em 0, 0.5 no atraso (1ms), 0.25 no dobro (feedback 0.5)");
+}
+
+static void testTapeDelayFiltersRepeats() {
+    auto peaks = [](float highCut) {
+        TapeDelay dl;
+        dl.setSampleRate(48000.0);
+        DelayParams p;
+        p.enabled = true; p.timeLeftSec = p.timeRightSec = 0.1f; p.feedback = 0.8f; p.mix = 1.0f;
+        p.lowCutHz = 10.0f; p.highCutHz = highCut;
+        auto out = runFx([&](float& l, float& r) { dl.process(p, l, r); }, [](int i) { return i == 0 ? 1.0f : 0.0f; }, 15000);
+        float p1 = 0, p2 = 0;
+        for (int i = 4790; i < 4810; ++i) p1 = std::max(p1, std::abs(out[i]));
+        for (int i = 9590; i < 9700; ++i) p2 = std::max(p2, std::abs(out[i]));
+        return std::make_pair(p1, p2);
+    };
+    auto [open1, open2] = peaks(20000.0f);
+    auto [dark1, dark2] = peaks(1000.0f);
+    std::printf("  (pico eco1/eco2: sem filtro %.3f/%.3f, passa-baixas 1kHz %.3f/%.3f)\n", open1, open2, dark1, dark2);
+    check(std::abs(open1 - 1.0f) < 1e-3f, "delay: primeiro eco chega exatamente no tempo configurado (100ms)");
+    check(open2 > 0.8f * 0.8f && dark2 < 0.5f * 0.8f * dark1, "delay: passa-baixas no loop escurece cada repeticao");
+
+    TapeDelay dl;
+    dl.setSampleRate(48000.0);
+    DelayParams p;
+    p.enabled = true; p.feedback = 0.95f; p.drive = 1.0f; p.wow = 1.0f; p.mix = 1.0f;
+    float peak = 0.0f;
+    for (int i = 0; i < 48000 * 3; ++i) {
+        float l = sineAt(i, 220.0f, 1.0f), r = l;
+        dl.process(p, l, r);
+        peak = std::max(peak, std::abs(l));
+    }
+    std::printf("  (delay feedback 0.95 + drive + wow com seno cheio, 3s: pico=%.2f)\n", peak);
+    check(std::isfinite(peak) && peak < 20.0f, "delay: feedback maximo com drive e wow continua estavel");
+}
+
+static void testReverbTypes() {
+    const char* names[] = {"Room (Freeverb)", "Hall (Clouds)", "Plate (MVerb)"};
+    for (int t = 0; t < 3; ++t) {
+        ReverbBlock rv;
+        rv.setSampleRate(48000.0);
+        ReverbParams p;
+        p.enabled = true; p.type = static_cast<ReverbType>(t); p.mix = 1.0f; p.roomSize = 0.6f;
+        std::vector<float> right;
+        auto out = runFx([&](float& l, float& r) { rv.process(p, l, r); },
+                         [](int i) { return i < 480 ? sineAt(i, 440.0f) : 0.0f; }, 48000 * 3, &right);
+        bool finite = true;
+        for (float x : out) finite &= std::isfinite(x);
+        float early = computeRms(out, 4800, 19200), late = computeRms(out, 96000, 24000);
+        double lr = 0;
+        for (size_t i = 4800; i < 24000; ++i) lr += std::abs(out[i] - right[i]);
+        std::printf("  (%s: RMS 0.1-0.5s=%.4f, 2-2.5s=%.5f, diferenca L/R=%.2f)\n", names[t], early, late, lr);
+        char msg[160];
+        std::snprintf(msg, sizeof msg, "reverb %s: cauda audivel, finita, decaindo e estereo", names[t]);
+        check(finite && early > 0.002f && late < early * 0.5f && lr > 1.0, msg);
+    }
+
+    // freeze do Room segura a cauda e ignora entrada nova
+    ReverbBlock rv;
+    rv.setSampleRate(48000.0);
+    ReverbParams p;
+    p.enabled = true; p.mix = 1.0f; p.roomSize = 0.6f;
+    std::vector<float> out;
+    for (int i = 0; i < 48000 * 3; ++i) {
+        p.freeze = i >= 9600;
+        float l = i < 480 ? sineAt(i, 440.0f) : (i > 48000 ? sineAt(i, 3000.0f) : 0.0f), r = l;
+        rv.process(p, l, r);
+        out.push_back(l);
+    }
+    float frozen1 = computeRms(out, 14400, 24000), frozen2 = computeRms(out, 120000, 24000);
+    std::printf("  (freeze: RMS 0.3-0.8s=%.4f, 2.5-3s=%.4f -- entrada nova a partir de 1s ignorada)\n", frozen1, frozen2);
+    check(frozen1 > 0.002f && frozen2 > frozen1 * 0.8f && frozen2 < frozen1 * 1.25f, "reverb Room com freeze: cauda sustenta sem decair nem somar entrada nova");
+
+    // predelay: nada molhado antes de 100ms, nos 3 algoritmos. Limiar 1e-9
+    // e nao 0: o MVerb soma 1e-25 no filtro interno (antidenormal), entao a
+    // saida dele nunca e zero exato (~2e-24, ~470dB abaixo do sinal)
+    bool predelayOk = true;
+    for (int t = 0; t < 3; ++t) {
+        ReverbBlock pd;
+        pd.setSampleRate(48000.0);
+        ReverbParams q;
+        q.enabled = true; q.mix = 1.0f; q.predelayMs = 100.0f; q.type = static_cast<ReverbType>(t);
+        auto o = runFx([&](float& l, float& r) { pd.process(q, l, r); }, [](int i) { return i == 0 ? 1.0f : 0.0f; }, 9600);
+        float before = 0.0f, after = 0.0f;
+        for (int i = 0; i < 4800; ++i) before = std::max(before, std::abs(o[i]));
+        for (int i = 4800; i < 9600; ++i) after = std::max(after, std::abs(o[i]));
+        predelayOk &= before < 1e-9f && after > 0.01f;
+    }
+    check(predelayOk, "reverb: predelay de 100ms nos 3 algoritmos (nada molhado antes de 4800 amostras)");
+
+    // trocar de algoritmo nao toca a cauda velha do outro
+    ReverbBlock sw;
+    sw.setSampleRate(48000.0);
+    ReverbParams s;
+    s.enabled = true; s.mix = 1.0f; s.type = ReverbType::Plate; s.roomSize = 1.0f;
+    runFx([&](float& l, float& r) { sw.process(s, l, r); }, [](int i) { return sineAt(i, 440.0f); }, 4800);
+    s.type = ReverbType::Room;
+    runFx([&](float& l, float& r) { sw.process(s, l, r); }, [](int) { return 0.0f; }, 10);
+    s.type = ReverbType::Plate;
+    auto back = runFx([&](float& l, float& r) { sw.process(s, l, r); }, [](int) { return 0.0f; }, 4800);
+    float stale = 0.0f;
+    for (float x : back) stale = std::max(stale, std::abs(x));
+    check(stale < 1e-6f, "reverb: voltar pra um algoritmo nao toca a cauda velha congelada dele");
+}
+
+static void testEqResponse() {
+    auto gainDb = [](EqParams p, float hz) {
+        Eq3 eq;
+        eq.setSampleRate(48000.0);
+        p.enabled = true;
+        auto out = runFx([&](float& l, float& r) { eq.process(p, l, r); }, [hz](int i) { return sineAt(i, hz); }, 48000);
+        return dbRatio(rmsTail(out, 24000), 0.5f / std::sqrt(2.0f));
+    };
+    EqParams flat;
+    EqParams low; low.lowGainDb = 12.0f;
+    EqParams mid; mid.midGainDb = 6.0f;
+    EqParams high; high.highGainDb = -12.0f;
+    float f40 = gainDb(flat, 40.0f), l40 = gainDb(low, 40.0f), l5k = gainDb(low, 5000.0f);
+    float m1k = gainDb(mid, 1000.0f), m100 = gainDb(mid, 100.0f), h16k = gainDb(high, 16000.0f), h200 = gainDb(high, 200.0f);
+    std::printf("  (EQ: plano 40Hz=%.2f | low +12: 40Hz=%.2f 5kHz=%.2f | mid +6@1k: 1k=%.2f 100Hz=%.2f | high -12: 16k=%.2f 200Hz=%.2f dB)\n",
+                f40, l40, l5k, m1k, m100, h16k, h200);
+    check(std::abs(f40) < 0.05f, "EQ com ganhos 0 e transparente");
+    check(std::abs(l40 - 12.0f) < 0.7f && std::abs(l5k) < 0.5f, "EQ low shelf +12dB: +12 no grave, ~0 no agudo");
+    check(std::abs(m1k - 6.0f) < 0.3f && std::abs(m100) < 0.7f, "EQ peaking +6dB em 1kHz: +6 no centro, ~0 longe");
+    check(std::abs(h16k + 12.0f) < 1.0f && std::abs(h200) < 0.5f, "EQ high shelf -12dB: -12 no agudo, ~0 no grave");
+}
+
+static void testCompressor() {
+    auto run = [](float amp, float kneeDb, float* grOut = nullptr) {
+        ZamCompressor c;
+        c.setSampleRate(48000.0);
+        CompressorParams p;
+        p.enabled = true; p.thresholdDb = -20.0f; p.ratio = 4.0f; p.kneeDb = kneeDb; p.makeupDb = 0.0f;
+        // onda quadrada: |x| constante, entao o detector de pico ve um nivel fixo
+        auto out = runFx([&](float& l, float& r) { c.process(p, l, r); },
+                         [amp](int i) { return ((i / 100) % 2) ? amp : -amp; }, 48000);
+        if (grOut) *grOut = c.gainReductionDb();
+        return std::abs(out.back());
+    };
+    float gr = 0.0f;
+    float y = run(0.5f, 0.0f, &gr); // -6dB -> -20 + 14/4 = -16.5dB
+    float expected = std::pow(10.0f, -16.5f / 20.0f);
+    std::printf("  (compressor -20dB 4:1, entrada -6dB: saida=%.4f (esperado %.4f), reducao=%.2fdB)\n", y, expected, gr);
+    check(std::abs(y / expected - 1.0f) < 0.02f, "compressor: nivel de saida segue a curva estatica (thres -20, 4:1)");
+    check(std::abs(gr - 10.49f) < 0.2f, "compressor: medidor de reducao de ganho bate com a curva (~10.5dB)");
+    float hardBelow = run(std::pow(10.0f, -30.0f / 20.0f), 0.0f), softBelow = run(std::pow(10.0f, -30.0f / 20.0f), 8.0f);
+    float in = std::pow(10.0f, -30.0f / 20.0f);
+    std::printf("  (10dB abaixo do threshold: knee 0 -> %.2fdB, knee 8 -> %.2fdB)\n", dbRatio(hardBelow, in), dbRatio(softBelow, in));
+    check(std::abs(hardBelow / in - 1.0f) < 1e-3f && softBelow < in * 0.97f,
+          "compressor: knee suave comprime antes do threshold (corrigido em relacao ao ZamComp original)");
+}
+
+static void testGlobalFxOrder() {
+    auto render = [](const GlobalFxType* order) {
+        GlobalFxChain chain;
+        chain.setSampleRate(48000.0);
+        GlobalFxParams p;
+        p.compressor.enabled = true; p.compressor.thresholdDb = -30.0f; p.compressor.ratio = 10.0f;
+        p.reverb.enabled = true; p.reverb.mix = 0.5f;
+        if (order) std::copy(order, order + kNumGlobalFx, p.order);
+        return runFx([&](float& l, float& r) { chain.process(p, l, r); },
+                     [](int i) { return i < 4800 ? sineAt(i, 440.0f) : 0.0f; }, 24000);
+    };
+    GlobalFxType compFirst[kNumGlobalFx] = {GlobalFxType::Compressor, GlobalFxType::Phaser, GlobalFxType::Flanger,
+                                            GlobalFxType::Chorus, GlobalFxType::Delay, GlobalFxType::Reverb, GlobalFxType::Eq};
+    GlobalFxType broken[kNumGlobalFx] = {GlobalFxType::Reverb, GlobalFxType::Reverb, GlobalFxType::Flanger,
+                                         GlobalFxType::Chorus, GlobalFxType::Delay, GlobalFxType::Eq, GlobalFxType::Compressor};
+    auto def = render(nullptr), cf = render(compFirst), br = render(broken);
+    float diff = 0.0f, diffBroken = 0.0f;
+    for (size_t i = 0; i < def.size(); ++i) {
+        diff = std::max(diff, std::abs(def[i] - cf[i]));
+        diffBroken = std::max(diffBroken, std::abs(def[i] - br[i]));
+    }
+    std::printf("  (diferenca maxima: compressor antes x depois do reverb=%.3f; ordem invalida x padrao=%.1e)\n", diff, diffBroken);
+    check(diff > 0.01f, "ordem da cadeia muda o som (compressor antes vs depois do reverb)");
+    check(diffBroken == 0.0f, "ordem invalida (bloco repetido) cai na ordem padrao, sem rodar bloco 2x");
+}
+
+static void testGlobalFxCost() {
+    GlobalFxChain chain;
+    chain.setSampleRate(48000.0);
+    GlobalFxParams p;
+    p.chorus.enabled = p.phaser.enabled = p.flanger.enabled = p.delay.enabled = true;
+    p.reverb.enabled = p.eq.enabled = p.compressor.enabled = true;
+    p.phaser.notches = 8;
+    float worst = 0.0f;
+    for (int t = 0; t < 3; ++t) {
+        p.reverb.type = static_cast<ReverbType>(t);
+        auto t0 = std::chrono::steady_clock::now();
+        float sink = 0.0f;
+        for (int i = 0; i < 48000; ++i) { float l = sineAt(i, 220.0f), r = l; chain.process(p, l, r); sink += l; }
+        float sec = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+        worst = std::max(worst, sink == 12345.0f ? 0.0f : sec);
+    }
+    std::printf("  (os 7 efeitos ligados, pior modo de reverb: %.1f%% de um nucleo)\n", worst * 100.0f);
+    check(worst < 0.25f, "cadeia completa de efeitos globais roda bem abaixo do tempo real (< 25% de um nucleo)");
+}
+
+// --- [ADICIONADO em 2026-10-18] otimizacao: operadores mortos ---------------
+
+static void testDeadOperatorRevivedByLiveEdit() {
+    // op 2 comeca morto (nao e portadora nem modula ninguem). No meio da nota
+    // uma edicao ao vivo o torna portadora: ele tem que entrar soando, com o
+    // envelope no ponto certo (o motor nao calcula o oscilador de op morto,
+    // mas continua andando o envelope dele).
+    auto patchWithOp2 = [](bool op2Carrier) {
+        VoiceParams v;
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f;
+        v.op[0].outputLevel = 75;
+        v.op[2].outputLevel = 75;
+        v.op[2].coarseRatio = 3.0f;          // em 3x a fundamental: da pra medir separado
+        v.op[2].ampEG.rate[0] = 45;          // ataque de ~0.8s: aos 0.5s ainda subindo, o ponto do envelope importa
+        if (op2Carrier) v.matrix.outputMix[2] = 1.0f;
+        return v;
+    };
+    Synth live;
+    live.init(48000.0, 4);
+    live.part(0).voice = patchWithOp2(false);
+    live.recompile(0);
+    live.noteOn(0, 69, 100);
+    std::vector<float> before;
+    for (int i = 0; i < 24000; ++i) { float l, r; live.renderStereo(l, r); if (i >= 19200) before.push_back(l); }
+    live.part(0).voice = patchWithOp2(true); // edicao ao vivo: op 2 vira portadora
+    live.recompile(0);
+    std::vector<float> a;
+    for (int i = 0; i < 4800; ++i) { float l, r; live.renderStereo(l, r); a.push_back(l); }
+
+    Synth fresh; // referencia: o mesmo patch desde o inicio da nota
+    fresh.init(48000.0, 4);
+    fresh.part(0).voice = patchWithOp2(true);
+    fresh.recompile(0);
+    fresh.noteOn(0, 69, 100);
+    for (int i = 0; i < 24000; ++i) { float l, r; fresh.renderStereo(l, r); }
+    std::vector<float> b;
+    for (int i = 0; i < 4800; ++i) { float l, r; fresh.renderStereo(l, r); b.push_back(l); }
+
+    float liveH3 = goertzelMagnitude(a, 1320.0, 48000.0), freshH3 = goertzelMagnitude(b, 1320.0, 48000.0);
+    float beforeH3 = goertzelMagnitude(before, 1320.0, 48000.0);
+    std::printf("  (1320Hz: antes da edicao %.6f; op revivido ao vivo %.4f; mesmo patch desde o inicio %.4f)\n",
+                beforeH3, liveH3, freshH3);
+    check(beforeH3 < liveH3 * 0.01f && std::abs(liveH3 / freshH3 - 1.0f) < 0.05f,
+          "operador morto ligado ao vivo entra soando no ponto certo do envelope");
+}
+
 int main() {
     std::filesystem::create_directories("output");
 
@@ -1439,6 +2568,52 @@ int main() {
     testPolyphonyGainIsSmoothedNoClick();
     testMultitimbral4Parts();
     testPolyphonyCap();
+    testStolenVoiceNotReleasedByOldNote();
+    testSostenutoReleaseFreesHeldNotes();
+    testSustainReleaseKeepsSostenutoNotes();
+    testMonoReleasingNonSoundingNoteDoesNothing();
+    testNoteOffOutsideKeyRangeIgnored();
+    testCrushHighBitsStaysFinite();
+    testGlideAlwaysOnDetachedNotes();
+    testPegStartsAtReleaseLevel();
+    testVoiceModeSwitchDoesNotStickNotes();
+    testLevelScalingNeverExceedsMaxLevel();
+    testFeedbackStaysBoundedAtMax();
+    testLfo2DepthsHaveEffect();
+    testPolyphonyGainIgnoresSilentPedalVoices();
+    testNonZeroReleaseLevelKeepsSounding();
+    testJsonLoadClampsAndRejectsGarbage();
+    testMidiNoteOffReachesPartAfterDisable();
+    testRecompileCacheFollowsMatrixChanges();
+    testMasterVolume();
+    testTriangleFoldShape();
+    testFoldDriveOneIsTransparent();
+    testFoldAddsOddHarmonics();
+    testFoldBiasAddsEvenHarmonicsWithoutDc();
+    testFoldDriveFollowsFxEnvelope();
+    testFoldJsonRoundTrip();
+    testSafeFileStem();
+    testListPatchesSortedJsonOnly();
+    testLoadPatchKeepsPartRouting();
+    testPatchFingerprintIgnoresRouting();
+    testAdditiveSinglePartialMatchesSine();
+    testAdditiveFreeRatios();
+    testAdditiveSkipsPartialsAboveNyquist();
+    testAdditiveMorph();
+    testAdditiveMorphFollowsFxEgAndModMatrix();
+    testAdditiveSilentWhenAllAmpsZero();
+    testAdditiveJson();
+    testAdditiveCost();
+    testGlobalFxChainDisabledIsIdentity();
+    testPhaserNotch();
+    testFlangerImpulseResponse();
+    testTapeDelayFiltersRepeats();
+    testReverbTypes();
+    testEqResponse();
+    testCompressor();
+    testGlobalFxOrder();
+    testGlobalFxCost();
+    testDeadOperatorRevivedByLiveEdit();
 
     std::printf("== Resultado: %d passaram, %d falharam ==\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

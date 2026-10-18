@@ -9,17 +9,49 @@ namespace dx7fm {
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kTwoPi = 6.28318530717958647692f;
+constexpr float kLog2Of10Over20 = 0.166096404744368f; // 10^(dB/20) == 2^(dB * log2(10)/20)
+
+// [ADICIONADO em 2026-10-18] Seno rapido por tabela (4096 pontos +
+// interpolacao linear; erro maximo ~3e-7) pros osciladores da forma de onda
+// Additive: ~2x mais barato que std::sin, e e o que torna viavel ter 8
+// osciladores reais por operador. Tabela montada na inicializacao estatica
+// do programa (inline variable), nunca na audio thread.
+struct SineTable {
+    static constexpr int kSize = 4096;
+    float v[kSize + 1];
+    SineTable() {
+        for (int i = 0; i <= kSize; ++i) v[i] = static_cast<float>(std::sin(2.0 * 3.14159265358979323846 * i / kSize));
+    }
+};
+inline const SineTable kSineTable{};
+
+// Parte fracionaria em [0, 1) sem chamar std::floor (que nao vira uma
+// instrucao so em todo alvo): truncar pra int e corrigir negativos. Vale pra
+// |x| < 2^31, folgado pra fases.
+inline float wrap01(float x) {
+    x -= static_cast<float>(static_cast<int>(x));
+    return x < 0.0f ? x + 1.0f : x;
+}
+
+// phase01 em [0, 1)
+inline float fastSin01(float phase01) {
+    float x = phase01 * static_cast<float>(SineTable::kSize);
+    int i = static_cast<int>(x);
+    i = i < 0 ? 0 : (i >= SineTable::kSize ? SineTable::kSize - 1 : i);
+    float f = x - static_cast<float>(i);
+    return kSineTable.v[i] + (kSineTable.v[i + 1] - kSineTable.v[i]) * f;
+}
+
 
 inline float dbToLinear(float db) {
-    return std::pow(10.0f, db / 20.0f);
+    return std::exp2(db * kLog2Of10Over20);
 }
 
 // ~0.75 dB por passo (8 passos = 6dB, igual ao comportamento do DX7 real).
 // Level 0 retorna silencio exato, nao apenas muito baixo.
 inline float egLevelToAmplitude(float level0to99) {
     if (level0to99 <= 0.0f) return 0.0f;
-    float db = (level0to99 - 99.0f) * 0.75f;
-    return dbToLinear(db);
+    return std::exp2((level0to99 - 99.0f) * (0.75f * kLog2Of10Over20));
 }
 
 // speed = 5.0 * 1.0897^rate : rate=99 percorre 99 unidades em ~4ms,
@@ -34,13 +66,18 @@ class SegmentEG {
 public:
     void configure(const uint8_t rate[4], const uint8_t level[4]) {
         for (int i = 0; i < 4; ++i) { rate_[i] = rate[i]; level_[i] = level[i]; }
+        stepStage_ = -1;
     }
 
-    void noteOn(float rateScaleAdd) {
+    // startLevel: nivel de onde o estagio 0 parte. 0 pro EG de amplitude;
+    // o PEG passa o proprio level[3] (como no DX7), senao toda nota comecaria
+    // em 0 = -rangeOctaves e daria um "blip" de pitch nos primeiros ms.
+    void noteOn(float rateScaleAdd, float startLevel = 0.0f) {
         rateScaleAdd_ = rateScaleAdd;
         stage_ = 0;
-        current_ = 0.0f;
+        current_ = startLevel;
         idle_ = false;
+        stepStage_ = -1;
     }
 
     void noteOff() {
@@ -51,9 +88,14 @@ public:
     float process(double controlRateHz) {
         if (idle_) return current_;
         float target = static_cast<float>(level_[stage_]);
-        float rate = std::clamp(static_cast<float>(rate_[stage_]) + rateScaleAdd_, 0.0f, 99.0f);
-        float speed = egRateToSpeed(rate);
-        float step = speed / static_cast<float>(controlRateHz);
+        if (stage_ != stepStage_ || controlRateHz != stepRateHz_) {
+            // egRateToSpeed usa pow: so recalcula quando o estagio (ou a taxa) muda
+            float rate = std::clamp(static_cast<float>(rate_[stage_]) + rateScaleAdd_, 0.0f, 99.0f);
+            step_ = egRateToSpeed(rate) / static_cast<float>(controlRateHz);
+            stepStage_ = stage_;
+            stepRateHz_ = controlRateHz;
+        }
+        float step = step_;
         if (current_ < target) current_ = std::min(target, current_ + step);
         else if (current_ > target) current_ = std::max(target, current_ - step);
 
@@ -69,6 +111,10 @@ public:
     }
 
     bool isIdle() const { return idle_; }
+    // Idle E em nivel 0. Um EG de amplitude que termina o release num
+    // level[3] > 0 fica idle mas continua soando (comportamento do DX7).
+    bool isSilent() const { return idle_ && current_ <= 0.0f; }
+    float current() const { return current_; }
 
 private:
     uint8_t rate_[4]  = {99, 99, 99, 50};
@@ -77,6 +123,10 @@ private:
     int stage_ = 2;
     float current_ = 0.0f;
     bool idle_ = true;
+    // cache do passo por amostra do estagio atual
+    float step_ = 0.0f;
+    int stepStage_ = -1;
+    double stepRateHz_ = 0.0;
 };
 
 class LFO {
@@ -111,7 +161,7 @@ private:
             case LfoWave::SawUp:    return 2.0f * t - 1.0f;
             case LfoWave::SawDown:  return 1.0f - 2.0f * t;
             case LfoWave::Square:   return t < 0.5f ? 1.0f : -1.0f;
-            case LfoWave::Sine:     return std::sin(t * kTwoPi);
+            case LfoWave::Sine:     return fastSin01(t);
             case LfoWave::SampleHold: return shValue_;
         }
         return 0.0f;
@@ -137,29 +187,31 @@ private:
 // as tabelas bit-exatas da SY77/TX81Z) -- mesmo espirito de
 // egRateToSpeed()/egLevelToAmplitude(). Ver ARQUITETURA.txt secao 5.
 inline float afmHalfSine(float p) {
-    return p < 0.5f ? std::sin(p * kTwoPi) : 0.0f;
+    return p < 0.5f ? fastSin01(p) : 0.0f;
 }
 inline float afmAbsSine(float p) {
-    return std::fabs(std::sin(p * kTwoPi));
+    return std::fabs(fastSin01(p));
 }
 inline float afmQuarterSine(float p) {
     // 2 "bicos" rapidos (taxa dobrada) comprimidos na primeira metade, silencio na segunda
-    return p < 0.5f ? std::fabs(std::sin(p * 2.0f * kTwoPi)) : 0.0f;
+    return p < 0.5f ? std::fabs(fastSin01(p * 2.0f)) : 0.0f; // p*2 < 1 aqui
 }
 inline float afmAlternatingSine(float p) {
     // seno em taxa dobrada: alterna +,-,+,- dentro de UM ciclo do operador
-    return std::sin(p * 2.0f * kTwoPi);
+    float q = p * 2.0f;
+    return fastSin01(q >= 1.0f ? q - 1.0f : q);
 }
 inline float afmCamelSine(float p) {
     // 2 corcovas positivas separadas por silencio (em vez de se tocarem
     // suavemente como no AbsSine) -- daí o nome "camelo"
     bool inHump = (p < 0.25f) || (p >= 0.5f && p < 0.75f);
-    return inHump ? std::fabs(std::sin(p * 2.0f * kTwoPi)) : 0.0f;
+    float q = p * 2.0f;
+    return inHump ? std::fabs(fastSin01(q >= 1.0f ? q - 1.0f : q)) : 0.0f;
 }
 inline float afmSquaredSine(float p) {
     // s*|s|: "espreme" a regiao central pro zero mantendo os picos, dando
     // um carater mais "ressonante/pontudo" que o seno puro
-    float s = std::sin(p * kTwoPi);
+    float s = fastSin01(p);
     return s * std::fabs(s);
 }
 inline float afmLogSaw(float p) {
@@ -171,7 +223,7 @@ inline float afmLogSaw(float p) {
 inline float oscWave(float phase01, Waveform wf, std::mt19937& rng,
                       std::uniform_real_distribution<float>& dist) {
     switch (wf) {
-        case Waveform::Sine:            return std::sin(phase01 * kTwoPi);
+        case Waveform::Sine:            return fastSin01(phase01);
         case Waveform::Triangle:        return phase01 < 0.5f ? (4.0f * phase01 - 1.0f) : (3.0f - 4.0f * phase01);
         case Waveform::Saw:             return 2.0f * phase01 - 1.0f;
         case Waveform::Square:          return phase01 < 0.5f ? 1.0f : -1.0f;
@@ -183,6 +235,9 @@ inline float oscWave(float phase01, Waveform wf, std::mt19937& rng,
         case Waveform::CamelSine:       return afmCamelSine(phase01);
         case Waveform::SquaredSine:     return afmSquaredSine(phase01);
         case Waveform::LogSaw:          return afmLogSaw(phase01);
+        // Additive tem estado (fase de 8 osciladores) e e gerada pela Voice
+        // via PartialOscillators; se chegar aqui, cai no seno do parcial 1
+        case Waveform::Additive:        return fastSin01(phase01);
     }
     return 0.0f;
 }
@@ -195,13 +250,61 @@ inline float phaseDistort(float phase01, float amount) {
     return warped;
 }
 
+// [ADICIONADO em 2026-10-18] Os 8 osciladores senoidais de um operador
+// Additive (estado = fase de cada parcial). Cada parcial tem frequencia
+// propria (razao livre, nao precisa ser harmonica), entao nao da pra usar
+// uma wavetable: sao osciladores de verdade.
+//  - morph (0..1) interpola amplitude E razao entre os espectros A e B.
+//  - PM: o parcial k recebe modIn * ratio_k ciclos de desvio de fase -- o
+//    mesmo que acontece com o harmonico k de uma onda periodica modulada em
+//    fase, entao com razoes harmonicas soa igual a modular a onda inteira.
+//  - Anti-aliasing: parcial com frequencia >= Nyquist e simplesmente
+//    desligado (a fase continua andando, pra voltar sem descontinuidade).
+//  - Normalizacao: divide pela SOMA das amplitudes (pico <= 1, como as
+//    outras formas de onda). A soma inclui os parciais desligados por
+//    Nyquist, entao o volume nao sobe quando uma nota aguda perde parciais.
+//    Todas as amplitudes em 0 = silencio.
+struct PartialOscillators {
+    float phase[kNumPartials] = {};
+
+    void reset() { for (auto& p : phase) p = 0.0f; }
+
+    float process(const OperatorParams::PartialSet& a, const OperatorParams::PartialSet& b, float morph,
+                  float baseHz, float modIn, float phaseDistortion, float sampleRate) {
+        // laco quente (8 parciais x 8 ops x vozes x amostras): sem std::floor
+        // no caso comum (fase em [0,1) so precisa subtrair a parte inteira) e
+        // sem interpolar A/B quando o morph esta em 0
+        const float nyquist = 0.5f * sampleRate;
+        const float baseInc = baseHz / sampleRate;
+        const bool morphing = morph > 0.0f;
+        float sum = 0.0f, ampSum = 0.0f;
+        for (int k = 0; k < kNumPartials; ++k) {
+            float amp = morphing ? a.amp[k] + (b.amp[k] - a.amp[k]) * morph : a.amp[k];
+            float ratio = morphing ? a.ratio[k] + (b.ratio[k] - a.ratio[k]) * morph : a.ratio[k];
+            float ph = phase[k] + ratio * baseInc; // incremento > 0 (razao e baseHz positivos)
+            if (ph >= 1.0f) ph -= static_cast<float>(static_cast<int>(ph));
+            phase[k] = ph;
+            ampSum += amp;
+            if (amp <= 0.0f || ratio * baseHz >= nyquist) continue;
+            float p = ph + ratio * modIn;
+            if (p >= 1.0f || p < 0.0f) p = wrap01(p); // PM pode empurrar pra qualquer lado
+            if (phaseDistortion > 0.0f) p = phaseDistort(p, phaseDistortion);
+            sum += amp * fastSin01(p);
+        }
+        return ampSum > 0.0f ? sum / ampSum : 0.0f;
+    }
+};
+
 // Filtro State-Variable "Topology-Preserving Transform" (zero-delay feedback,
 // forma de Andrew Simper). Estavel sob modulacao rapida de corte.
 class TPTStateVariableFilter {
 public:
-    void setSampleRate(double sr) { sampleRate_ = sr; }
+    void setSampleRate(double sr) { sampleRate_ = sr; lastCutoff_ = -1.0f; }
 
     void setParams(float cutoffHz, float q) {
+        if (cutoffHz == lastCutoff_ && q == lastQ_) return; // sustain do fxEG: nada mudou, poupa o tan()
+        lastCutoff_ = cutoffHz;
+        lastQ_ = q;
         cutoffHz = std::clamp(cutoffHz, 10.0f, static_cast<float>(sampleRate_) * 0.49f);
         q = std::max(0.05f, q);
         float g = std::tan(kPi * cutoffHz / static_cast<float>(sampleRate_));
@@ -213,6 +316,8 @@ public:
     }
 
     struct Outputs { float lp, bp, hp; };
+
+    void reset() { ic1eq_ = 0.0f; ic2eq_ = 0.0f; }
 
     Outputs process(float x) {
         float v3 = x - ic2eq_;
@@ -230,6 +335,7 @@ private:
     double sampleRate_ = 48000.0;
     float k_ = 1.0f, a1_ = 0.0f, a2_ = 0.0f, a3_ = 0.0f;
     float ic1eq_ = 0.0f, ic2eq_ = 0.0f;
+    float lastCutoff_ = -1.0f, lastQ_ = -1.0f;
 };
 
 inline float softSaturate(float x, float drive) {
@@ -257,10 +363,44 @@ inline float softLimit(float x, float threshold = 0.9f) {
     return sign * compressed;
 }
 
+// [ADICIONADO em 2026-09-23] Wavefolder triangular: identidade exata em
+// [-1, 1]; fora disso o sinal "rebate" nas paredes +-1 em vez de ser
+// cortado (clip) ou arredondado (softSaturate/tanh). Cada dobra adiciona
+// harmonicos novos -- quanto mais drive, mais dobras e mais brilho
+// metalico (estilo Buchla/"West Coast"). Continua e limitada a [-1, 1]
+// pra QUALQUER entrada finita, entao nunca estoura por si so.
+inline float triangleFold(float v) {
+    if (std::fabs(v) <= 1.0f) return v; // identidade EXATA (a formula abaixo erra 1 ulp aqui)
+    // periodo 4: v=-1 -> -1, 0 -> 0, 1 -> 1, 2 -> 0, 3 -> -1, ...
+    float t = (v + 1.0f) * 0.25f;
+    t -= std::floor(t);
+    return 1.0f - 4.0f * std::fabs(t - 0.5f);
+}
+
+// Passa-altas de 1 polo (~10Hz) pra tirar o DC que o wavefolder com
+// simetria (bias != 0) introduz -- sem isso uma portadora dobrada com bias
+// empurraria a saida inteira pra um lado.
+class DcBlocker {
+public:
+    void setSampleRate(double sr) { r_ = 1.0f - static_cast<float>(kTwoPi * 10.0 / sr); }
+    void reset() { x1_ = 0.0f; y1_ = 0.0f; }
+    float process(float x) {
+        float y = x - x1_ + r_ * y1_;
+        x1_ = x;
+        y1_ = y;
+        return y;
+    }
+
+private:
+    float r_ = 0.9987f;
+    float x1_ = 0.0f, y1_ = 0.0f;
+};
+
 // Reducao de sample rate (sample & hold) + reducao de bits.
 class Crusher {
 public:
     void setSampleRate(double sr) { sampleRate_ = sr; }
+    void reset() { timer_ = 0.0f; held_ = 0.0f; }
 
     float process(float x, float crushSampleHz, float bits) {
         crushSampleHz = std::max(1.0f, crushSampleHz);
@@ -270,14 +410,17 @@ public:
             timer_ -= holdTime;
             held_ = x;
         }
-        float levels = std::pow(2.0f, std::max(1.0f, bits));
-        return std::round(held_ * levels * 0.5f) / (levels * 0.5f);
+        // teto de 24 bits: acima de ~127, 2^bits estoura float (inf) e
+        // round(held*inf)/inf vira NaN -- que contaminava o master bus inteiro.
+        if (bits != lastBits_) { lastBits_ = bits; halfLevels_ = 0.5f * std::exp2(std::clamp(bits, 1.0f, 24.0f)); }
+        return std::round(held_ * halfLevels_) / halfLevels_;
     }
 
 private:
     double sampleRate_ = 48000.0;
     float timer_ = 0.0f;
     float held_ = 0.0f;
+    float lastBits_ = -1.0f, halfLevels_ = 1.0f;
 };
 
 // Delay curto com feedback e interpolacao linear (buffer de 50ms).
@@ -286,6 +429,11 @@ public:
     void setSampleRate(double sr) {
         sampleRate_ = sr;
         buffer_.assign(static_cast<size_t>(sr * 0.05) + 4, 0.0f);
+        writePos_ = 0;
+    }
+
+    void reset() {
+        std::fill(buffer_.begin(), buffer_.end(), 0.0f);
         writePos_ = 0;
     }
 
@@ -315,6 +463,7 @@ private:
 class FreqShifter {
 public:
     void setSampleRate(double sr) { sampleRate_ = sr; }
+    void reset() { phase_ = 0.0f; apState_ = 0.0f; apDelay_ = 0.0f; }
 
     float process(float x, float shiftHz) {
         const float a = 0.6f;
@@ -323,8 +472,8 @@ public:
         apState_ = apOut;
 
         phase_ += kTwoPi * shiftHz / static_cast<float>(sampleRate_);
-        if (phase_ > kPi) phase_ -= kTwoPi;
-        if (phase_ < -kPi) phase_ += kTwoPi;
+        phase_ -= kTwoPi * std::floor((phase_ + kPi) / kTwoPi); // volta pra [-pi, pi) mesmo com shift > sampleRate
+
         return x * std::cos(phase_) - apOut * std::sin(phase_);
     }
 

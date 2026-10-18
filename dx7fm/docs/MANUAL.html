@@ -492,12 +492,13 @@ cmake --build dx7fm/build -j$(nproc)</code></pre>
         <table>
           <tr><td class="mono" style="width:1%;white-space:nowrap">Audio</td><td>dispositivo, taxa de amostra, tamanho do period, formato (float32 ou s16) e contador de xruns (falhas de buffer)</td></tr>
           <tr><td class="mono">MIDI</td><td>se a porta ALSA sequencer abriu com sucesso — se não, o app continua funcionando só com o teclado do PC</td></tr>
-          <tr><td class="mono">Voz do teclado</td><td>qual parte (A–D) o teclado do computador está tocando agora, e a oitava base atual</td></tr>
+          <tr><td class="mono">Teclado do PC</td><td>oitava base atual e o <strong>canal MIDI</strong> (1–16, padrão 1) em que o teclado do computador toca</td></tr>
           <tr><td class="mono">Vozes ativas</td><td>quantas das 64 vozes do pool estão soando</td></tr>
           <tr><td class="mono">Nível</td><td>dois medidores de pico, esquerdo e direito</td></tr>
+          <tr><td class="mono">Volume geral</td><td>volume master de −60 dB (mudo) a +6 dB, aplicado depois dos efeitos globais; o limitador de saída continua protegendo contra clipping. Duplo clique volta pra 0 dB</td></tr>
         </table>
       </div>
-      <p>Abaixo da barra, abas: <strong>Parte A</strong> a <strong>Parte D</strong> (os 4 timbres independentes) e <strong>FX Globais</strong> (chorus/delay/reverb aplicados na mixagem final).</p>
+      <p>Abaixo da barra, abas: <strong>Parte A</strong> a <strong>Parte D</strong> (os 4 timbres independentes) e <strong>FX Globais</strong> (cadeia de efeitos aplicada na mixagem final).</p>
     </section>
 
     <section id="tocando">
@@ -508,7 +509,8 @@ cmake --build dx7fm/build -j$(nproc)</code></pre>
       <p>O app cria uma porta ALSA sequencer de entrada chamada <span class="kbd">dx7fm:input</span>. Conecte seu controlador com:</p>
       <pre><code>aconnect -l                 # lista as portas disponíveis
 aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
-      <p>Depois de conectado, cada parte habilitada recebe as notas de acordo com o <strong>canal MIDI</strong> configurado nela (0 = omni, recebe de qualquer canal; 1–16 = só daquele canal). CC1 (mod wheel), CC64 (sustain), CC66 (sostenuto), pitch bend e aftertouch de canal também são traduzidos automaticamente.</p>
+      <p>Por padrão <strong>só a Parte A vem habilitada</strong>. B, C e D começam desligadas: marque <strong>Habilitada</strong> na aba delas pra empilhar camadas (layer) ou, com faixas de teclas diferentes, dividir o teclado (split).</p>
+      <p>Depois de conectado, cada parte habilitada recebe as notas de acordo com o <strong>canal MIDI</strong> configurado nela (0 = omni, recebe de qualquer canal; 1–16 = só daquele canal). CC1 (mod wheel), CC64 (sustain), CC66 (sostenuto), CC120/CC123 (all sound/notes off), CC121 (reset controllers), pitch bend, aftertouch de canal e aftertouch polifônico também são traduzidos automaticamente.</p>
 
       <h3>Teclado do computador</h3>
       <p>Sem controlador MIDI? O teclado do PC vira um piano — mapeamento por <em>posição física</em> da tecla, então funciona igual em qualquer layout de idioma.</p>
@@ -535,7 +537,7 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
           <div class="pkey white"><span class="k">;</span><span class="n">E</span></div>
         </div>
       </div>
-      <p><span class="kbd">Z</span> desce uma oitava, <span class="kbd">X</span> sobe uma oitava (a barra de status mostra a nota base atual). Só a parte selecionada na aba ativa recebe as notas do teclado.</p>
+      <p><span class="kbd">Z</span> desce uma oitava, <span class="kbd">X</span> sobe uma oitava (a barra de status mostra a nota base atual). O teclado do PC funciona <strong>igual a um controlador MIDI</strong>: toca todas as partes habilitadas que estão em omni (canal 0) ou no canal escolhido na barra de status (padrão 1) — não importa qual aba está aberta.</p>
       <div class="callout">
         <strong>Dica</strong>
         <p>O teclado do PC não envia velocity real — toda nota sai com velocity fixa (100). Pra dinâmica de verdade, use um controlador MIDI.</p>
@@ -553,7 +555,7 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
 
       <div class="panel">
         <div class="panel-label">Patch</div>
-        <p>Campo de caminho de arquivo + botões <strong>Salvar patch</strong> / <strong>Carregar patch</strong> (formato JSON próprio) e <strong>Pânico</strong> (all notes off da parte).</p>
+        <p>No topo de cada aba: nome do patch, <strong>Salvar</strong>, <strong>Init</strong>, indicador de alterações não salvas e a lista de patches da pasta <code>patches/</code> (com filtro, <strong>Carregar</strong> e <strong>Excluir</strong>) — ver <a href="#salvando">Salvando e carregando</a>. O botão <strong>Pânico</strong> (all notes off da parte) fica logo abaixo, junto dos controles da parte.</p>
       </div>
 
       <div class="panel">
@@ -577,7 +579,21 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
       </div>
 
       <h3>Aba FX Globais</h3>
-      <p>Chorus, delay e reverb aplicados uma única vez na soma das 4 partes — não por operador. Cada um tem seu próprio liga/desliga e parâmetros (chorus: taxa, profundidade, vozes; delay: tempo esquerdo/direito independentes, feedback, cross-feed; reverb: tamanho de sala, damping, largura estéreo).</p>
+      <p>Sete efeitos aplicados uma única vez na soma das 4 partes (não por operador), cada um baseado num efeito open source de referência. No topo da aba fica a <strong>cadeia</strong>: a ordem em que o sinal passa por eles, com setas ▲▼ pra reordenar, a caixa pra ligar/desligar cada um e o botão <strong>Ordem padrão</strong>. Abaixo, um painel por efeito, na mesma ordem (passe o mouse no nome pra ver a origem e a licença).</p>
+      <ul>
+        <li><strong>Chorus (ensemble)</strong> — baseado no Ensemble do Mutable Instruments Rings: chorus de "string machine", denso e largo. Taxa, profundidade, mix.</li>
+        <li><strong>Phaser</strong> — baseado no phaser do Faust (Julius O. Smith): 1 a 8 notches varridos por LFO, faixa de frequência, largura, feedback, profundidade (2 = vibrato).</li>
+        <li><strong>Flanger</strong> — baseado no flanger do Faust: atraso mínimo, varredura, feedback (negativo dá o som "oco"), inverter.</li>
+        <li><strong>Delay (fita)</strong> — tempos L/R, feedback, ping-pong; corte de graves e agudos e saturação <em>dentro</em> do loop (cada repetição fica mais escura/suja) e wow &amp; flutter.</li>
+        <li><strong>Reverb</strong> — três algoritmos: <strong>Room</strong> (Freeverb, com <em>freeze</em> pra cauda infinita), <strong>Hall</strong> (reverb do Mutable Instruments Clouds) e <strong>Plate</strong> (MVerb). Tamanho/decaimento, amortecimento, mix, largura e pre-delay.</li>
+        <li><strong>EQ 3 bandas</strong> — graves e agudos em prateleira e médios em sino (Q ajustável), ±18 dB.</li>
+        <li><strong>Compressor</strong> — baseado no ZamComp: threshold, ratio, attack, release, knee e makeup, com medidor de redução de ganho.</li>
+      </ul>
+      <p>Depois da cadeia vem o <strong>Volume geral</strong> e o limitador de saída. Os ajustes de efeitos globais não são salvos nos arquivos de patch (os patches guardam o som das partes).</p>
+      <div class="callout">
+        <strong>Licença</strong>
+        <p>O reverb Plate (MVerb) e o compressor (ZamComp) são GPL, então o dx7fm é distribuído sob a <strong>GNU GPL v3</strong>. Origem e licença de cada componente em <code>THIRD_PARTY_NOTICES.md</code>.</p>
+      </div>
     </section>
 
     <section id="conceitos">
@@ -650,7 +666,7 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
         <li><strong>Toque uma nota e ouça o cru</strong>Pressione <span class="kbd">A</span> no teclado (nota C). Vai soar denso — é o feedback default (0.3) em todo mundo.</li>
         <li><strong>Ajuste os moduladores</strong>Na tabela de operadores, baixe o <strong>Feedback</strong> dos operadores de topo pra algo como 0.1, e mude o <strong>Ratio</strong> de um dos moduladores pra um valor não-inteiro (tipo 1.41 ou 3.5) — proporções não-inteiras entre portadora e modulador são o que dá o caráter metálico/de sino em FM.</li>
         <li><strong>Modele o envelope</strong>Clique na linha do operador portador (o que tem <em>Output mix</em> alto) pra abrir o painel de detalhe, e ajuste o <strong>Amp EG</strong>: ataque rápido (rate alto), decaimento longo (rate baixo no estágio de release) — é o formato clássico de sino, ataque instantâneo e cauda longa.</li>
-        <li><strong>Salve</strong>Dê um nome ao arquivo no campo de patch (ex.: <code>patches/sino.json</code>) e clique <strong>Salvar patch</strong>.</li>
+        <li><strong>Salve</strong>Digite um nome no campo <strong>Nome</strong> da seção Patch (ex.: <code>Sino</code>) e clique <strong>Salvar</strong> — vira <code>patches/Sino.json</code> e aparece na lista.</li>
       </ol>
       <div class="callout">
         <strong>Por que a edição funciona com a nota ainda soando</strong>
@@ -660,27 +676,45 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
 
     <section id="salvando">
       <h2><span class="num">08</span>Salvando e carregando</h2>
-      <p>Cada parte tem seu próprio campo de caminho (padrão: <code>patches/part_a.json</code> a <code>patches/part_d.json</code>). O formato é um JSON legível — dá pra abrir num editor de texto, versionar num repositório git, ou compartilhar. <strong>Salvar patch</strong> grava o timbre completo daquela parte (todos os 8 operadores, matriz, envelopes, LFOs); <strong>Carregar patch</strong> lê de volta e aplica na hora.</p>
-      <div class="callout warn">
-        <strong>Atenção</strong>
-        <p>Carregar um patch <em>substitui</em> tudo na parte atual — não tem confirmação nem desfazer. Se estava editando algo bom, salve antes de carregar outra coisa por cima.</p>
+      <p>Os patches ficam na pasta <code>patches/</code> (relativa a onde o app foi aberto; o caminho completo aparece ao lado da lista), um arquivo JSON legível por patch — dá pra abrir num editor de texto, versionar num repositório git ou compartilhar. A lista é compartilhada pelas 4 partes: qualquer patch pode ser carregado em qualquer parte.</p>
+      <ul>
+        <li><strong>Salvar</strong> — grava o som da parte em <code>patches/&lt;nome&gt;.json</code>, usando o campo <strong>Nome</strong>. Salvar de novo sobre o próprio arquivo é direto; se já existir <em>outro</em> patch com esse nome, o app pergunta antes de substituir.</li>
+        <li><strong>Carregar</strong> — selecione na lista e clique <strong>Carregar</strong>, ou dê duplo clique. O filtro acima da lista ajuda quando há muitos patches. O patch em uso aparece marcado com <em>(atual)</em>.</li>
+        <li><strong>Excluir...</strong> — apaga o arquivo selecionado, sempre com confirmação.</li>
+        <li><strong>Init</strong> — volta o som da parte pro patch inicial.</li>
+        <li>Ao lado dos botões, <span style="color:var(--accent)">* alterações não salvas</span> avisa quando o som mudou desde o último salvar/carregar (desfazer uma edição tira o aviso). Com alterações pendentes, carregar outro patch ou clicar Init pede confirmação antes de descartar.</li>
+        <li>Mensagens de sucesso ou erro (arquivo inválido, sem permissão…) aparecem logo abaixo da lista.</li>
+      </ul>
+      <div class="callout">
+        <strong>O que um patch guarda</strong>
+        <p>O <em>som</em> da parte: os 8 operadores, matriz, envelopes, LFOs, matriz de modulação, modo de voz, glide, unison, bend range, transpose e o nome. Carregar <strong>não muda o roteamento</strong> da parte — habilitada, canal MIDI, faixas de tecla/velocity, vozes reservadas, nível e pan ficam como estão. Assim dá pra carregar o mesmo patch em partes diferentes de um split sem desmontar o split.</p>
       </div>
     </section>
 
     <section id="referencia">
       <h2><span class="num">09</span>Referência rápida</h2>
 
-      <h3>Formas de onda (12)</h3>
+      <h3>Formas de onda (13)</h3>
       <div class="chiplist">
         <span class="chip">Sine</span><span class="chip">Triangle</span><span class="chip">Saw</span><span class="chip">Square</span><span class="chip">Noise</span>
         <span class="chip">HalfSine</span><span class="chip">AbsSine</span><span class="chip">QuarterSine</span><span class="chip">AlternatingSine</span><span class="chip">CamelSine</span><span class="chip">SquaredSine</span><span class="chip">LogSaw</span>
+        <span class="chip">Additive</span>
       </div>
-      <p style="font-size:13.5px;color:var(--text-muted)">As 7 últimas são uma reconstrução própria inspirada nas formas de onda extras do motor AFM da Yamaha SY77/TX81Z — não uma cópia bit-exata da ROM original.</p>
+      <p style="font-size:13.5px;color:var(--text-muted)">HalfSine…LogSaw são uma reconstrução própria inspirada nas formas de onda extras do motor AFM da Yamaha SY77/TX81Z — não uma cópia bit-exata da ROM original.</p>
+      <p><strong>Additive</strong> (síntese aditiva): o operador vira a soma de <strong>8 osciladores senoidais</strong>, cada um com sua <strong>amplitude</strong> e sua <strong>razão de frequência</strong> (× a frequência do operador). Razões inteiras (1, 2, 3…) dão harmônicos; razões fracionárias (2,76, 5,40…) dão parciais inarmônicos — sinos, barras, tambores. Ao escolher Additive, o painel de detalhe do operador mostra o editor:</p>
+      <ul>
+        <li><strong>8 sliders verticais</strong> (amplitude de cada parcial) com o campo da <strong>razão</strong> embaixo (arraste, ou Ctrl+clique pra digitar).</li>
+        <li>Dois espectros, <strong>A</strong> e <strong>B</strong> (escolha qual editar). O <strong>Morph A→B</strong> define quanto o <em>envelope de FX</em> leva de A até B — ex.: ataque metálico (B) que assenta num som mais puro (A). O morph interpola amplitudes <em>e</em> razões, então um parcial pode deslizar de frequência durante a nota. Na matriz de modulação, o destino <strong>OperatorMorph</strong> também move o morph (ex.: mod wheel).</li>
+        <li><strong>Presets</strong> aplicados no espectro em edição: Seno, Serra, Ímpares, Órgão, Sino, Tambor. <strong>Copiar A→B</strong> e <strong>Trocar A↔B</strong> ajudam a montar a transição.</li>
+        <li>Parciais acima da metade da taxa de amostragem são desligados automaticamente (sem aliasing). Um operador aditivo continua podendo modular ou ser modulado em FM, e passar pelo efeito de FX.</li>
+        <li>Custo: cada operador aditivo usa cerca do dobro da CPU de um senoidal; com muitas vozes, prefira poucos operadores aditivos por patch.</li>
+      </ul>
 
-      <h3>Efeitos por operador (9)</h3>
+      <h3>Efeitos por operador (10)</h3>
       <div class="chiplist">
-        <span class="chip">Bypass</span><span class="chip">LowPass</span><span class="chip">BandPass</span><span class="chip">HighPass</span><span class="chip">RingMod</span><span class="chip">Saturate</span><span class="chip">Crush</span><span class="chip">FreqShift</span><span class="chip">Comb</span>
+        <span class="chip">Bypass</span><span class="chip">LowPass</span><span class="chip">BandPass</span><span class="chip">HighPass</span><span class="chip">RingMod</span><span class="chip">Saturate</span><span class="chip">Crush</span><span class="chip">FreqShift</span><span class="chip">Comb</span><span class="chip">Fold</span>
       </div>
+      <p style="font-size:13.5px;color:var(--text-muted)"><strong>Fold</strong> (wavefolder): quando o sinal passa do limite ele “rebate” pra dentro em vez de ser cortado, criando harmônicos novos — timbre metálico/brilhante estilo Buchla. <strong>FX1 = drive</strong> (1 = sem dobra, até 16), controlado também pelo envelope de FX, então o brilho pode abrir no ataque e fechar no release. <strong>FX Param2 = simetria</strong> (0–1): em 0 só harmônicos ímpares; acima disso entram os pares. Em notas agudas com drive alto pode gerar aliasing.</p>
 
       <h3>32 algoritmos — famílias</h3>
       <div class="tablewrap">
@@ -726,7 +760,7 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
       <ul>
         <li>Sem seletor de dispositivo de áudio na interface — usa sempre <code>default</code> do ALSA.</li>
         <li>Sem seletor de oversampling na interface (o motor suporta 2×/4× anti-aliasing, fixo em 1× no app).</li>
-        <li>Salvar/carregar patch usa um campo de texto pro caminho, não um seletor de arquivos gráfico.</li>
+        <li>Os patches ficam só na pasta <code>patches/</code>; não há seletor de arquivos pra abrir de outro lugar (copie o arquivo pra essa pasta).</li>
         <li>As curvas de envelope, escala por tecla e velocidade são aproximações próprias — não as tabelas exatas da ROM do hardware original.</li>
         <li>Ainda não testado numa distro Linux verdadeiramente minimal — validado até aqui num desktop Arch/EndeavourOS com as bibliotecas já instaladas.</li>
       </ul>
