@@ -13,6 +13,9 @@
 #include "alsa_midi.h"
 #include "event_queue.h"
 #include "keyboard_piano.h"
+#include "ui_widgets.h"
+#include "envelope_graph.h"
+#include "viz.h"
 #include "patch_browser.h"
 
 #include <SDL.h>
@@ -59,6 +62,9 @@ struct AppState {
 
     std::atomic<float> meterL{0.0f};
     std::atomic<float> meterR{0.0f};
+    AudioTap tap;               // saida de audio pros visualizadores (audio thread escreve, UI le)
+    ui::ScopeState scope;       // estado do osciloscopio (so UI thread)
+    ui::SpectrogramState spectro; // historico do espectrograma (so UI thread)
 
     KeyboardPiano piano;
     // O teclado do PC se comporta como um teclado MIDI: manda as notas num
@@ -85,6 +91,7 @@ struct AppState {
         bool statusOk = true;
     } patchUi[kNumParts];
     std::vector<PatchEntry> patchList;     // compartilhada pelas 4 partes
+    ui::EnvelopeGraphState envGraph[kNumParts]; // visibilidade das curvas / arrasto, por parte
     double lastPatchScan = -1e9;
 };
 
@@ -140,6 +147,7 @@ void audioRenderCallback(AppState& app, float* interleaved, int frames) {
     }
     app.meterL.store(peakL, std::memory_order_relaxed);
     app.meterR.store(peakR, std::memory_order_relaxed);
+    app.tap.push(interleaved, frames);
 }
 
 // --- entrada MIDI (thread separada: so EMPILHA eventos) ------------------
@@ -195,43 +203,41 @@ void onMidiEvent(AppState& app, const MidiEvent& ev) {
 
 // --- widgets de UI reutilizaveis ------------------------------------------
 
-bool DrawEG(const char* label, EGParams& eg, const char* levelDomain) {
+// Rates e levels de um EG de 4 estagios em knobs. twoRows: rates numa
+// linha, levels na outra (pra colunas estreitas).
+bool DrawEGKnobs(const char* id, uint8_t (&rate)[4], uint8_t (&level)[4], ImU32 color, bool twoRows = false,
+                 const uint8_t* defRate = nullptr, const uint8_t* defLevel = nullptr) {
+    static const uint8_t kDefRate[4] = {99, 99, 99, 50}, kDefLevel[4] = {99, 99, 99, 0};
+    if (!defRate) defRate = kDefRate;
+    if (!defLevel) defLevel = kDefLevel;
+    static const char* kRate[4] = {"Rate 1", "Rate 2", "Rate 3", "Rate 4"};
+    static const char* kLevel[4] = {"Level 1", "Level 2", "Level 3", "Level 4"};
     bool changed = false;
-    ImGui::PushID(label);
-    ImGui::TextUnformatted(label);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(%s)", levelDomain);
-    static const char* kStage[4] = {"Ataque", "Decai1", "Sustain", "Release"};
-    if (ImGui::BeginTable(label, 5, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
-        ImGui::TableSetupColumn("Estagio");
-        for (int i = 0; i < 4; ++i) ImGui::TableSetupColumn(kStage[i]);
-        ImGui::TableHeadersRow();
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Rate");
-        for (int i = 0; i < 4; ++i) {
-            ImGui::TableSetColumnIndex(i + 1);
-            ImGui::PushID(i);
-            int v = eg.rate[i];
-            ImGui::SetNextItemWidth(60);
-            if (ImGui::SliderInt("##rate", &v, 0, 99, "%d", ImGuiSliderFlags_AlwaysClamp)) { eg.rate[i] = static_cast<uint8_t>(v); changed = true; }
-            ImGui::PopID();
-        }
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("Level");
-        for (int i = 0; i < 4; ++i) {
-            ImGui::TableSetColumnIndex(i + 1);
-            ImGui::PushID(i + 10);
-            int v = eg.level[i];
-            ImGui::SetNextItemWidth(60);
-            if (ImGui::SliderInt("##level", &v, 0, 99, "%d", ImGuiSliderFlags_AlwaysClamp)) { eg.level[i] = static_cast<uint8_t>(v); changed = true; }
-            ImGui::PopID();
-        }
-        ImGui::EndTable();
+    ui::KnobStyle ks;
+    ks.size = 38.0f;
+    ks.color = color;
+    ImGui::PushID(id);
+    for (int i = 0; i < 4; ++i) {
+        if (i) ImGui::SameLine();
+        changed |= ui::KnobU8(kRate[i], &rate[i], 0, 99, defRate[i], "%d", ks);
+    }
+    if (!twoRows) {
+        ImGui::SameLine();
+        ImGui::Dummy(ImVec2(10, 0));
+        ImGui::SameLine();
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (i) ImGui::SameLine();
+        changed |= ui::KnobU8(kLevel[i], &level[i], 0, 99, defLevel[i], "%d", ks);
     }
     ImGui::PopID();
     return changed;
+}
+
+// SameLine se o proximo item de largura w ainda cabe na linha (layout fluido de knobs)
+void flowSameLine(float w) {
+    float x2 = ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + w;
+    if (x2 < ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x) ImGui::SameLine();
 }
 
 bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
@@ -246,7 +252,7 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
     static const char* kFx[] = {"Bypass", "LowPass", "BandPass", "HighPass", "RingMod",
                                  "Saturate", "Crush", "FreqShift", "Comb", "Fold"};
     bool changed = false;
-    if (ImGui::BeginTable("ops", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+    if (ImGui::BeginTable("ops", 8, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Op");
         ImGui::TableSetupColumn("Onda");
         ImGui::TableSetupColumn("Ratio/Hz");
@@ -266,10 +272,14 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
             // SpanAllColumns faz o Selectable cobrir a LINHA INTEIRA; sem
             // AllowOverlap ele "rouba" o hover de todos os widgets da linha
             // (combo, sliders, checkbox ficavam impossiveis de clicar).
-            if (ImGui::Selectable(std::to_string(i).c_str(), selectedOp == i,
+            ImGui::PushStyleColor(ImGuiCol_Text, ui::opColor(i));
+            ImGui::PushStyleColor(ImGuiCol_Header, ui::opColor(i, 45));
+            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ui::opColor(i, 30));
+            if (ImGui::Selectable(std::to_string(i + 1).c_str(), selectedOp == i,
                                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
                 selectedOp = i;
             }
+            ImGui::PopStyleColor(3);
 
             ImGui::TableSetColumnIndex(1);
             int wave = static_cast<int>(op.waveform);
@@ -348,7 +358,7 @@ const AdditivePreset kAdditivePresets[] = {
      {1, 0.8f, 0.6f, 0.55f, 0.45f, 0.4f, 0.3f, 0.25f}, {1, 1.594f, 2.136f, 2.296f, 2.653f, 2.918f, 3.156f, 3.501f}},
 };
 
-bool DrawAdditiveEditor(OperatorParams& op) {
+bool DrawAdditiveEditor(OperatorParams& op, ImU32 color) {
     bool changed = false;
     ImGui::SeparatorText("Aditiva: 8 osciladores (amplitude + razao de frequencia)");
     static int editB = 0; // espectro em edicao (estado so de UI)
@@ -369,7 +379,10 @@ bool DrawAdditiveEditor(OperatorParams& op) {
         ImGui::PushID(k);
         ImGui::BeginGroup();
         ImGui::Text(" P%d", k + 1);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, color);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, color);
         changed |= ImGui::VSliderFloat("##amp", ImVec2(46, 120), &set.amp[k], 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Parcial %d: amplitude", k + 1);
         ImGui::SetNextItemWidth(46);
         changed |= ImGui::DragFloat("##ratio", &set.ratio[k], 0.005f, 0.01f, 32.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
@@ -377,7 +390,15 @@ bool DrawAdditiveEditor(OperatorParams& op) {
             ImGui::SetTooltip("Parcial %d: razao de frequencia (x f do operador)\narraste ou ctrl+clique pra digitar", k + 1);
         ImGui::EndGroup();
         ImGui::PopID();
-        if (k + 1 < kNumPartials) ImGui::SameLine();
+        ImGui::SameLine();
+    }
+    // morph ao lado das barras
+    ImGui::Dummy(ImVec2(6, 0));
+    ImGui::SameLine();
+    {
+        ui::KnobStyle ks;
+        ks.color = color;
+        changed |= ui::Knob("Morph A->B", &op.morphDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
     }
 
     ImGui::TextUnformatted("Preset em");
@@ -396,109 +417,90 @@ bool DrawAdditiveEditor(OperatorParams& op) {
     ImGui::SameLine();
     if (ImGui::SmallButton("Trocar A <-> B")) { std::swap(op.additiveA, op.additiveB); changed = true; }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(160);
-    changed |= ImGui::SliderFloat("Morph A->B", &op.morphDepth, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Posicao do morph = profundidade x (FX EG / 99) + mod matrix (OperatorMorph).\n"
-                          "0 = so A. Com o FX EG padrao (99 durante a nota), 1 = so B.\n"
-                          "O FX EG e o mesmo que controla o efeito de FX do operador.");
+    ImGui::TextDisabled("Morph = profundidade x (FX EG/99) + mod matrix (OperatorMorph)");
     return changed;
 }
 
-bool DrawOperatorDetail(OperatorParams& op) {
+bool DrawOperatorDetail(OperatorParams& op, int opIndex) {
     bool changed = false;
-    ImGui::SeparatorText("Detalhe do operador selecionado");
+    ui::KnobStyle ks;
+    ks.color = ui::opColor(opIndex);
+    const float kw = 62.0f; // largura de um knob (pro layout fluido)
 
-    changed |= ImGui::DragFloat("Fine (cents)", &op.fineCents, 1.0f, -100.0f, 100.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-    changed |= ImGui::DragFloat("Detune (cents)", &op.detuneCents, 1.0f, -100.0f, 100.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-    if (op.fxType == FxType::Fold)
-        changed |= ImGui::SliderFloat("FX Param2 (simetria)", &op.fxParam2, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-    else
-        changed |= ImGui::SliderFloat("FX Param2", &op.fxParam2, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-    changed |= ImGui::SliderFloat("Phase distortion", &op.phaseDistortion, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::TextDisabled("afinacao e modulacao");
+    changed |= ui::Knob("Fine", &op.fineCents, -100.0f, 100.0f, 0.0f, "%.1f c", ks);
+    flowSameLine(kw); changed |= ui::Knob("Detune", &op.detuneCents, -100.0f, 100.0f, 0.0f, "%.1f c", ks);
+    flowSameLine(kw); changed |= ui::Knob("Phase dist", &op.phaseDistortion, 0.0f, 1.0f, 0.0f, "%.2f", ks);
+    flowSameLine(kw); changed |= ui::Knob("PEG depth", &op.pegDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
+    flowSameLine(kw); changed |= ui::KnobU8("Vel sens", &op.velocitySens, 0, 7, 0, "%d", ks);
+    flowSameLine(kw); changed |= ui::KnobU8("Rate scal", &op.rateScaling, 0, 7, 0, "%d", ks);
+    flowSameLine(kw); changed |= ui::KnobU8("LFO pitch", &op.lfoPitchModSens, 0, 7, 0, "%d", ks);
+    flowSameLine(kw); changed |= ui::KnobU8("LFO amp", &op.lfoAmpModSens, 0, 3, 0, "%d", ks);
+    flowSameLine(kw);
+    if (op.fxType == FxType::Fold) changed |= ui::Knob("Simetria", &op.fxParam2, 0.0f, 1.0f, 0.0f, "%.2f", ks);
+    else changed |= ui::Knob("FX P2", &op.fxParam2, 0.0f, 16.0f, 0.5f, "%.2f", ks);
+
+    // key scaling: knobs + as opcoes de curva ao lado
+    ImGui::TextDisabled("key scaling (nivel por nota, em volta do breakpoint)");
+    changed |= ui::KnobU8("Breakpt", &op.levelScaling.breakpoint, 0, 127, 60, "%d", ks);
+    {
+        int ld = op.levelScaling.leftDepth, rd = op.levelScaling.rightDepth;
+        ImGui::SameLine();
+        if (ui::KnobInt("Esq dB/oit", &ld, -12, 12, 0, "%d", ks)) { op.levelScaling.leftDepth = static_cast<int8_t>(ld); changed = true; }
+        ImGui::SameLine();
+        if (ui::KnobInt("Dir dB/oit", &rd, -12, 12, 0, "%d", ks)) { op.levelScaling.rightDepth = static_cast<int8_t>(rd); changed = true; }
+    }
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    changed |= ImGui::Checkbox("Esquerda exponencial##lsL", &op.levelScaling.leftExp);
+    changed |= ImGui::Checkbox("Direita exponencial##lsR", &op.levelScaling.rightExp);
+    changed |= ImGui::Checkbox("PEG afeta freq fixa", &op.pegAffectsFixed);
+    ImGui::EndGroup();
+    changed |= ImGui::Checkbox("FX EG acompanha o release do Amp EG", &op.fxEGReleaseWithAmp);
+    ImGui::SameLine();
     {
         int rm = op.ringModSource;
-        if (ImGui::SliderInt("Ring mod source (op)", &rm, -1, kNumOps - 1, "%d", ImGuiSliderFlags_AlwaysClamp)) { op.ringModSource = rm; changed = true; }
+        ImGui::SetNextItemWidth(120);
+        if (ImGui::SliderInt("Ring mod: op fonte", &rm, -1, kNumOps - 1, rm < 0 ? "nenhum" : "%d", ImGuiSliderFlags_AlwaysClamp)) { op.ringModSource = rm; changed = true; }
     }
-    {
-        int rs = op.rateScaling;
-        if (ImGui::SliderInt("Rate scaling", &rs, 0, 7, "%d", ImGuiSliderFlags_AlwaysClamp)) { op.rateScaling = static_cast<uint8_t>(rs); changed = true; }
-    }
-    {
-        int vs = op.velocitySens;
-        if (ImGui::SliderInt("Velocity sens", &vs, 0, 7, "%d", ImGuiSliderFlags_AlwaysClamp)) { op.velocitySens = static_cast<uint8_t>(vs); changed = true; }
-    }
-    {
-        int la = op.lfoAmpModSens;
-        if (ImGui::SliderInt("LFO amp sens", &la, 0, 3, "%d", ImGuiSliderFlags_AlwaysClamp)) { op.lfoAmpModSens = static_cast<uint8_t>(la); changed = true; }
-    }
-    {
-        int lp = op.lfoPitchModSens;
-        if (ImGui::SliderInt("LFO pitch sens", &lp, 0, 7, "%d", ImGuiSliderFlags_AlwaysClamp)) { op.lfoPitchModSens = static_cast<uint8_t>(lp); changed = true; }
-    }
-    changed |= ImGui::SliderFloat("PEG depth", &op.pegDepth, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-    changed |= ImGui::Checkbox("PEG afeta freq fixa", &op.pegAffectsFixed);
-    changed |= ImGui::Checkbox("fxEG acompanha release do ampEG", &op.fxEGReleaseWithAmp);
+
+    if (op.waveform == Waveform::Additive) changed |= DrawAdditiveEditor(op, ui::opColor(opIndex));
 
     ImGui::Spacing();
-    {
-        int bp = op.levelScaling.breakpoint;
-        if (ImGui::SliderInt("Level scaling: breakpoint", &bp, 0, 127, "%d", ImGuiSliderFlags_AlwaysClamp)) {
-            op.levelScaling.breakpoint = static_cast<uint8_t>(bp);
-            changed = true;
-        }
-    }
-    {
-        int ld = op.levelScaling.leftDepth;
-        if (ImGui::SliderInt("  esquerda (dB/oitava)", &ld, -12, 12, "%d", ImGuiSliderFlags_AlwaysClamp)) {
-            op.levelScaling.leftDepth = static_cast<int8_t>(ld);
-            changed = true;
-        }
-    }
-    changed |= ImGui::Checkbox("  esquerda exp##lsL", &op.levelScaling.leftExp);
-    {
-        int rd = op.levelScaling.rightDepth;
-        if (ImGui::SliderInt("  direita (dB/oitava)", &rd, -12, 12, "%d", ImGuiSliderFlags_AlwaysClamp)) {
-            op.levelScaling.rightDepth = static_cast<int8_t>(rd);
-            changed = true;
-        }
-    }
-    changed |= ImGui::Checkbox("  direita exp##lsR", &op.levelScaling.rightExp);
-
-    if (op.waveform == Waveform::Additive) changed |= DrawAdditiveEditor(op);
-
-    changed |= DrawEG("Amp EG", op.ampEG, "0-99");
-    changed |= DrawEG("FX EG", op.fxEG, "0-99, modula FX1");
+    ImGui::TextDisabled("FX EG (modula o FX1 e o morph da Additive)");
+    changed |= DrawEGKnobs("fxeg", op.fxEG.rate, op.fxEG.level, ui::opColor(opIndex, 200));
     return changed;
 }
-
 // [ADICIONADO em 2026-09-21] Desenha a topologia de roteamento como um
 // grafo de caixas+setas, generico o bastante pra visualizar QUALQUER
 // AlgorithmMatrix (preset ou editada a mao na grade 8x8 acima) -- nao
 // depende de layout topologico dinamico (que teria que lidar com ciclos
 // de feedback arbitrarios): as 8 caixas ficam em posicoes FIXAS (grade
 // 4x2), so as setas entre elas mudam. Ver ARQUITETURA.txt secao 13/14.
-void DrawAlgorithmDiagram(const VoiceParams& v) {
+void DrawAlgorithmDiagram(const VoiceParams& v, int& selectedOp) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 origin = ImGui::GetCursorScreenPos();
-    const float boxW = 70.0f, boxH = 40.0f, gapX = 40.0f, gapY = 55.0f;
     const int cols = 4;
+    const float gapX = 26.0f, gapY = 46.0f, boxH = 34.0f;
+    const float boxW = std::min(70.0f, (ImGui::GetContentRegionAvail().x - 24.0f - (cols - 1) * gapX) / cols);
 
     ImVec2 boxPos[kNumOps];
     for (int i = 0; i < kNumOps; ++i) {
-        int col = i % cols, row = i / cols;
-        boxPos[i] = ImVec2(origin.x + 20.0f + col * (boxW + gapX), origin.y + 20.0f + row * (boxH + gapY));
+        int c = i % cols, row = i / cols;
+        boxPos[i] = ImVec2(origin.x + 12.0f + c * (boxW + gapX), origin.y + 14.0f + row * (boxH + gapY));
     }
-    float canvasW = cols * (boxW + gapX) + 20.0f;
-    float canvasH = 2.0f * (boxH + gapY) + 40.0f;
-    float outputY = origin.y + canvasH - 15.0f;
+    float canvasW = cols * (boxW + gapX) + 4.0f;
+    float canvasH = 2.0f * (boxH + gapY) + 22.0f;
+    float outputY = origin.y + canvasH - 10.0f;
 
-    ImGui::Dummy(ImVec2(canvasW, canvasH));
+    ImGui::InvisibleButton("##algodiagram", ImVec2(canvasW, canvasH));
+    bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    ImVec2 m = ImGui::GetIO().MousePos;
 
-    dl->AddLine(ImVec2(origin.x, outputY), ImVec2(origin.x + canvasW, outputY), IM_COL32(90, 160, 230, 160), 2.0f);
-    dl->AddText(ImVec2(origin.x + canvasW - 55.0f, outputY + 4.0f), IM_COL32(140, 190, 240, 255), "saida");
+    dl->AddLine(ImVec2(origin.x + 4, outputY), ImVec2(origin.x + canvasW, outputY), ui::col::kAccent, 2.0f);
+    dl->AddText(ImVec2(origin.x + canvasW - 38.0f, outputY - 16.0f), ui::col::kAccent, "saida");
 
-    // arestas (setas) primeiro, pra ficarem atras das caixas
+    // arestas (setas) primeiro, pra ficarem atras das caixas; na cor do operador que MODULA
     for (int i = 0; i < kNumOps; ++i) {
         for (int j = 0; j < kNumOps; ++j) {
             if (i == j) continue;
@@ -507,8 +509,8 @@ void DrawAlgorithmDiagram(const VoiceParams& v) {
             if (!hasMod && !hasRing) continue;
             ImVec2 from(boxPos[j].x + boxW * 0.5f, boxPos[j].y + boxH * 0.5f);
             ImVec2 to(boxPos[i].x + boxW * 0.5f, boxPos[i].y + boxH * 0.5f);
-            ImU32 color = hasRing ? IM_COL32(255, 170, 70, 210) : IM_COL32(190, 190, 200, 170);
-            dl->AddLine(from, to, color, hasRing ? 2.5f : 1.5f);
+            ImU32 color = hasRing ? ui::col::kAccent2 : ui::opColor(j, 190);
+            dl->AddLine(from, to, color, hasRing ? 2.5f : 1.8f);
             float dx = to.x - from.x, dy = to.y - from.y;
             float len = std::sqrt(dx * dx + dy * dy);
             if (len > 1.0f) {
@@ -526,38 +528,37 @@ void DrawAlgorithmDiagram(const VoiceParams& v) {
         bool hasFeedback = (v.matrix.mod[i][i] != 0.0f) || (v.op[i].feedback > 0.0f);
         ImVec2 p0 = boxPos[i];
         ImVec2 p1(p0.x + boxW, p0.y + boxH);
-        ImU32 fill = isCarrier ? IM_COL32(55, 95, 155, 255) : IM_COL32(65, 65, 75, 255);
-        ImU32 border = hasFeedback ? IM_COL32(255, 150, 70, 255) : IM_COL32(170, 170, 180, 255);
-        dl->AddRectFilled(p0, p1, fill, 4.0f);
-        dl->AddRect(p0, p1, border, 4.0f, 0, hasFeedback ? 2.5f : 1.0f);
+        bool hot = m.x >= p0.x && m.x <= p1.x && m.y >= p0.y && m.y <= p1.y;
+        if (clicked && hot) selectedOp = i;
+        dl->AddRectFilled(p0, p1, ui::opColor(i, isCarrier ? 90 : 40), 6.0f);
+        dl->AddRect(p0, p1, ui::opColor(i, hot || i == selectedOp ? 255 : 160), 6.0f, 0, i == selectedOp ? 2.5f : 1.2f);
 
         char label[8];
         std::snprintf(label, sizeof(label), "Op%d", i + 1);
         ImVec2 ts = ImGui::CalcTextSize(label);
-        dl->AddText(ImVec2(p0.x + (boxW - ts.x) * 0.5f, p0.y + (boxH - ts.y) * 0.5f), IM_COL32(255, 255, 255, 255), label);
+        dl->AddText(ImVec2(p0.x + (boxW - ts.x) * 0.5f, p0.y + (boxH - ts.y) * 0.5f), ui::col::kText, label);
 
-        if (isCarrier) dl->AddLine(ImVec2(p0.x + boxW * 0.5f, p1.y), ImVec2(p0.x + boxW * 0.5f, outputY),
-                                    IM_COL32(90, 160, 230, 150), 1.5f);
-        if (hasFeedback) dl->AddCircle(ImVec2(p1.x, p0.y), 8.0f, IM_COL32(255, 150, 70, 255), 12, 1.5f);
+        if (isCarrier) dl->AddLine(ImVec2(p0.x + boxW * 0.5f, p1.y), ImVec2(p0.x + boxW * 0.5f, outputY), ui::opColor(i, 150), 1.5f);
+        if (hasFeedback) dl->AddCircle(ImVec2(p1.x, p0.y), 6.0f, ui::col::kAccent2, 12, 1.5f);
     }
-    ImGui::TextDisabled("Azul = vai pro output (portadora) | Cinza = so modula | Laranja = tem feedback | Linha laranja = ring mod");
+    if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Clique num operador pra seleciona-lo");
+    ImGui::TextDisabled("Preenchido = portadora | setas = modulacao | circulo laranja = feedback | laranja = ring mod");
 }
-
 bool DrawMatrix(AlgorithmMatrix& m) {
     bool changed = false;
-    ImGui::SeparatorText("Matriz de algoritmo (mod[i][j]: quanto op j modula op i; diagonal = feedback)");
-    if (ImGui::BeginTable("matrix", kNumOps + 1, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
+    ImGui::TextDisabled("mod[i][j]: quanto op j modula op i; diagonal = feedback; caixa = ring mod");
+    if (ImGui::BeginTable("matrix", kNumOps + 1, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("i \\ j");
-        for (int j = 0; j < kNumOps; ++j) ImGui::TableSetupColumn(("op" + std::to_string(j)).c_str());
+        for (int j = 0; j < kNumOps; ++j) ImGui::TableSetupColumn(("Op" + std::to_string(j + 1)).c_str());
         ImGui::TableHeadersRow();
         for (int i = 0; i < kNumOps; ++i) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::Text("op%d", i);
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::opColor(i)), "Op%d", i + 1);
             for (int j = 0; j < kNumOps; ++j) {
                 ImGui::TableSetColumnIndex(j + 1);
                 ImGui::PushID(i * kNumOps + j);
-                ImGui::SetNextItemWidth(50);
+                ImGui::SetNextItemWidth(44);
                 changed |= ImGui::DragFloat("##m", &m.mod[i][j], 0.01f, -1.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
                 ImGui::SameLine();
                 bool ring = m.ring[i][j];
@@ -567,14 +568,17 @@ bool DrawMatrix(AlgorithmMatrix& m) {
         }
         ImGui::EndTable();
     }
-    ImGui::TextDisabled("Numero = quantidade de modulacao de fase; caixa = tambem multiplica (ring mod)");
-
-    ImGui::SeparatorText("Output mix (quanto de cada operador vai pro bus de saida)");
+    ImGui::Spacing();
+    ImGui::TextDisabled("Output mix: quanto de cada operador vai pra saida (> 0 = portadora)");
     for (int i = 0; i < kNumOps; ++i) {
         ImGui::PushID(100 + i);
-        ImGui::SetNextItemWidth(60);
-        changed |= ImGui::SliderFloat(("op" + std::to_string(i)).c_str(), &m.outputMix[i], 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-        if (i < kNumOps - 1) ImGui::SameLine();
+        ui::KnobStyle ks;
+        ks.size = 36.0f;
+        ks.color = ui::opColor(i);
+        char label[16];
+        std::snprintf(label, sizeof label, "Mix Op%d", i + 1);
+        if (i) ImGui::SameLine();
+        changed |= ui::Knob(label, &m.outputMix[i], 0.0f, 1.0f, 0.0f, "%.2f", ks);
         ImGui::PopID();
     }
     return changed;
@@ -584,38 +588,40 @@ bool DrawLfo(const char* label, LFOParams& lfo) {
     bool changed = false;
     static const char* kWave[] = {"Triangle", "SawUp", "SawDown", "Square", "Sine", "SampleHold"};
     ImGui::PushID(label);
-    ImGui::SeparatorText(label);
-    changed |= ImGui::DragFloat("Rate (Hz)", &lfo.rate, 0.05f, 0.01f, 50.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
     int wave = static_cast<int>(lfo.wave);
-    if (ImGui::Combo("Forma", &wave, kWave, 6)) { lfo.wave = static_cast<LfoWave>(wave); changed = true; }
-    changed |= ImGui::DragFloat("Delay (s)", &lfo.delaySec, 0.01f, 0.0f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetNextItemWidth(110);
+    if (ImGui::Combo("##forma", &wave, kWave, IM_ARRAYSIZE(kWave))) { lfo.wave = static_cast<LfoWave>(wave); changed = true; }
+    ImGui::SetItemTooltip("Forma de onda do LFO");
+    ImGui::SameLine();
     changed |= ImGui::Checkbox("Key sync", &lfo.keySync);
-    changed |= ImGui::SliderFloat("Pitch depth", &lfo.pitchDepth, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-    changed |= ImGui::SliderFloat("Amp depth", &lfo.ampDepth, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    ui::KnobStyle ks;
+    ks.color = ui::col::kAccent2;
+    ks.size = 38.0f;
+    ks.cellWidth = 56.0f; // 4 knobs em meia coluna
+    ui::KnobStyle ksLog = ks;
+    ksLog.logarithmic = true;
+    changed |= ui::Knob("Rate", &lfo.rate, 0.01f, 50.0f, 5.0f, "%.2f Hz", ksLog);
+    ImGui::SameLine(); changed |= ui::Knob("Delay", &lfo.delaySec, 0.0f, 10.0f, 0.0f, "%.2f s", ks);
+    ImGui::SameLine(); changed |= ui::Knob("Pitch", &lfo.pitchDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
+    ImGui::SameLine(); changed |= ui::Knob("Amp", &lfo.ampDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
     ImGui::PopID();
     return changed;
 }
-
 bool DrawPeg(PEGParams& peg) {
-    // PEGParams e EGParams tem o mesmo formato (rate[4]/level[4]) mas sao
-    // tipos DIFERENTES -- reinterpret_cast entre eles seria UB. Copia pra
-    // um EGParams temporario, reusa o widget, e copia de volta so se mudou.
-    EGParams tmp;
-    for (int i = 0; i < 4; ++i) { tmp.rate[i] = peg.rate[i]; tmp.level[i] = peg.level[i]; }
-    bool changed = DrawEG("Pitch EG", tmp, "0-99, 50=centro");
-    if (changed) {
-        for (int i = 0; i < 4; ++i) { peg.rate[i] = tmp.rate[i]; peg.level[i] = tmp.level[i]; }
-    }
-    changed |= ImGui::DragFloat("Range (oitavas)", &peg.rangeOctaves, 0.1f, 0.1f, 8.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+    static const uint8_t kDefRate[4] = {99, 99, 99, 99}, kDefLevel[4] = {50, 50, 50, 50};
+    bool changed = DrawEGKnobs("peg", peg.rate, peg.level, ui::col::kAccent2, true, kDefRate, kDefLevel);
+    ImGui::SameLine();
+    ui::KnobStyle ks;
+    ks.color = ui::col::kAccent2;
+    changed |= ui::Knob("Range", &peg.rangeOctaves, 0.1f, 8.0f, 4.0f, "%.1f oit", ks);
     return changed;
 }
-
 bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
     bool changed = false;
     static const char* kSrc[] = {"None", "LFO1", "LFO2", "ModWheel", "ChannelAT", "PolyAT", "PitchBend"};
     static const char* kDst[] = {"None", "OperatorLevel", "OperatorFx1", "OperatorFeedback", "VoicePitch", "OperatorMorph"};
-    ImGui::SeparatorText("Matriz de modulacao (LFO/aftertouch/mod wheel -> parametros)");
-    if (ImGui::BeginTable("modmatrix", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
+    ImGui::TextDisabled("LFO/aftertouch/mod wheel -> parametros");
+    if (ImGui::BeginTable("modmatrix", 5, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("#");
         ImGui::TableSetupColumn("Fonte");
         ImGui::TableSetupColumn("Destino");
@@ -627,7 +633,7 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
             ImGui::PushID(i);
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::Text("%d", i);
+            ImGui::TextDisabled("%d", i + 1);
             ImGui::TableSetColumnIndex(1);
             int src = static_cast<int>(r.src);
             ImGui::SetNextItemWidth(110);
@@ -637,11 +643,16 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
             ImGui::SetNextItemWidth(140);
             if (ImGui::Combo("##dst", &dst, kDst, IM_ARRAYSIZE(kDst))) { r.dest = static_cast<ModDest>(dst); changed = true; }
             ImGui::TableSetColumnIndex(3);
-            ImGui::SetNextItemWidth(50);
-            changed |= ImGui::SliderInt("##op", &r.opIndex, 0, kNumOps - 1, "%d", ImGuiSliderFlags_AlwaysClamp);
+            static const char* kOps[] = {"Op1", "Op2", "Op3", "Op4", "Op5", "Op6", "Op7", "Op8"};
+            ImGui::SetNextItemWidth(62);
+            bool perOp = r.dest != ModDest::VoicePitch && r.dest != ModDest::None;
+            ImGui::BeginDisabled(!perOp);
+            if (ImGui::Combo("##op", &r.opIndex, kOps, kNumOps)) changed = true;
+            ImGui::EndDisabled();
             ImGui::TableSetColumnIndex(4);
-            ImGui::SetNextItemWidth(80);
-            changed |= ImGui::SliderFloat("##depth", &r.depth, -1.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetNextItemWidth(70);
+            changed |= ImGui::DragFloat("##depth", &r.depth, 0.005f, -1.0f, 1.0f, "%+.2f", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetItemTooltip("Arraste (ou Ctrl+clique pra digitar), -1..1");
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -825,9 +836,7 @@ void DrawPatchSection(AppState& app, int part) {
     // re-varre a pasta de vez em quando: pega arquivos copiados/apagados por fora do app
     if (ImGui::GetTime() - app.lastPatchScan > 2.0) rescanPatches(app);
 
-    ImGui::SeparatorText("Patch");
-
-    ImGui::SetNextItemWidth(260);
+    ImGui::SetNextItemWidth(190);
     if (ImGui::InputText("Nome", ui.name, sizeof(ui.name))) {
         pp.name = ui.name;
         ui.dirty = patchFingerprint(pp) != ui.baseline;
@@ -842,21 +851,21 @@ void DrawPatchSection(AppState& app, int part) {
         else doInitPatch(app, part);
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volta o som desta parte pro patch inicial (Init)");
-    ImGui::SameLine();
     if (ui.dirty) ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "* alteracoes nao salvas");
     else if (!ui.currentFile.empty()) ImGui::TextDisabled("salvo (%s)", ui.currentFile.filename().string().c_str());
     else ImGui::TextDisabled("nao salvo em arquivo");
 
     // lista de patches da pasta
-    ImGui::SetNextItemWidth(260);
+    ImGui::SetNextItemWidth(220);
     ImGui::InputTextWithHint("##filtro", "filtrar patches...", ui.filter, sizeof(ui.filter));
     ImGui::SameLine();
     if (ImGui::Button("Atualizar lista")) rescanPatches(app);
     ImGui::SameLine();
-    ImGui::TextDisabled("pasta: %s", std::filesystem::absolute(kPatchDir).string().c_str());
+    ImGui::TextDisabled("pasta: %s/", kPatchDir.string().c_str());
+    ImGui::SetItemTooltip("%s", std::filesystem::absolute(kPatchDir).string().c_str());
 
     std::filesystem::path doubleClicked; // COPIA: o load pode re-varrer (e realocar) patchList
-    if (ImGui::BeginListBox("##patchlist", ImVec2(260, 6.5f * ImGui::GetTextLineHeightWithSpacing()))) {
+    if (ImGui::BeginListBox("##patchlist", ImVec2(220, 6.5f * ImGui::GetTextLineHeightWithSpacing()))) {
         int shown = 0;
         for (const auto& e : app.patchList) {
             if (ui.filter[0] && !containsCaseInsensitive(e.stem, ui.filter)) continue;
@@ -901,108 +910,173 @@ void DrawPatchSection(AppState& app, int part) {
     DrawPatchConfirmPopup(app, part);
 }
 
-void DrawPartPanel(AppState& app, int partIndex) {
+// Coluna direita: patch, parte (roteamento/modo de voz), algoritmo, pitch EG,
+// LFOs e matriz de modulacao.
+bool DrawPartRightColumn(AppState& app, int partIndex) {
     auto& pp = app.synth.part(partIndex);
     bool changed = false;
+    const float kw = 62.0f;
 
-    DrawPatchSection(app, partIndex);
-    ImGui::SeparatorText("Parte");
+    if (ui::BeginCard("##card_patch", "PATCH")) DrawPatchSection(app, partIndex);
+    ui::EndCard();
 
-    changed |= ImGui::Checkbox("Habilitada", &pp.enabled);
-    ImGui::SameLine();
-    {
-        int ch = pp.midiChannel;
-        ImGui::SetNextItemWidth(120);
-        if (ImGui::SliderInt("Canal MIDI (0=omni)", &ch, 0, 16, "%d", ImGuiSliderFlags_AlwaysClamp)) { pp.midiChannel = ch; changed = true; }
-    }
-
-    static const char* kMode[] = {"Poly", "Mono", "Unison"};
-    int mode = static_cast<int>(pp.voiceMode);
-    ImGui::SetNextItemWidth(120);
-    if (ImGui::Combo("Modo de voz", &mode, kMode, 3)) { pp.voiceMode = static_cast<VoiceMode>(mode); changed = true; }
-
-    {
-        int tr = pp.transpose;
+    if (ui::BeginCard("##card_part", "PARTE")) {
+        changed |= ImGui::Checkbox("Habilitada", &pp.enabled);
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(100);
-        if (ImGui::SliderInt("Transpose", &tr, -24, 24, "%d", ImGuiSliderFlags_AlwaysClamp)) { pp.transpose = static_cast<int8_t>(tr); changed = true; }
-    }
-
-    // largura explicita: com a largura padrao (65% da janela) o "Pan" na
-    // mesma linha ficava metade fora da janela, sem dar pra clicar
-    ImGui::SetNextItemWidth(200);
-    changed |= ImGui::SliderFloat("Nivel", &pp.level, 0.0f, 1.5f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(200);
-    changed |= ImGui::SliderFloat("Pan", &pp.pan, -1.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-    changed |= ImGui::SliderFloat("Bend range (semitons)", &pp.bendRangeSemis, 0.0f, 24.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-
-    {
-        int lo = pp.loKey, hi = pp.hiKey;
-        if (ImGui::SliderInt("Key range low", &lo, 0, 127, "%d", ImGuiSliderFlags_AlwaysClamp)) { pp.loKey = static_cast<uint8_t>(lo); changed = true; }
-        if (ImGui::SliderInt("Key range high", &hi, 0, 127, "%d", ImGuiSliderFlags_AlwaysClamp)) { pp.hiKey = static_cast<uint8_t>(hi); changed = true; }
-    }
-
-    if (pp.voiceMode == VoiceMode::Mono || pp.voiceMode == VoiceMode::Unison) {
-        changed |= ImGui::Checkbox("Glide", &pp.glideEnabled);
+        {
+            int ch = pp.midiChannel;
+            ImGui::SetNextItemWidth(110);
+            if (ImGui::SliderInt("Canal MIDI", &ch, 0, 16, ch == 0 ? "omni" : "%d", ImGuiSliderFlags_AlwaysClamp)) { pp.midiChannel = ch; changed = true; }
+        }
+        static const char* kMode[] = {"Poly", "Mono", "Unison"};
+        int mode = static_cast<int>(pp.voiceMode);
+        ImGui::SetNextItemWidth(110);
+        if (ImGui::Combo("Modo de voz", &mode, kMode, 3)) { pp.voiceMode = static_cast<VoiceMode>(mode); changed = true; }
         ImGui::SameLine();
-        changed |= ImGui::DragFloat("Glide (s)", &pp.glideTimeSec, 0.01f, 0.0f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-        changed |= ImGui::Checkbox("Glide so em legato", &pp.glideLegatoOnly);
-        changed |= ImGui::Checkbox("Reusa envelope em legato", &pp.monoLegatoEnvReuse);
-    }
-    if (pp.voiceMode == VoiceMode::Unison) {
-        int uc = pp.unisonCount;
-        if (ImGui::SliderInt("Unison: vozes", &uc, 1, 8, "%d", ImGuiSliderFlags_AlwaysClamp)) { pp.unisonCount = uc; changed = true; }
-        changed |= ImGui::DragFloat("Unison: detune (cents)", &pp.unisonDetuneCents, 0.5f, 0.0f, 50.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
-        changed |= ImGui::SliderFloat("Unison: espalhamento", &pp.unisonSpread, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-    }
+        if (ImGui::Button("Panico")) {
+            AppEvent e;
+            e.kind = AppEvent::Kind::AllNotesOff;
+            e.part = partIndex;
+            app.eventQueue.push(e);
+        }
+        ImGui::SetItemTooltip("All notes off desta parte");
 
-    {
-        int rv = pp.reservedVoices;
-        if (ImGui::SliderInt("Vozes reservadas", &rv, 0, kMaxVoices, "%d", ImGuiSliderFlags_AlwaysClamp)) { pp.reservedVoices = rv; changed = true; }
+        changed |= ui::Knob("Nivel", &pp.level, 0.0f, 1.5f, 1.0f, "%.2f");
+        flowSameLine(kw); changed |= ui::Knob("Pan", &pp.pan, -1.0f, 1.0f, 0.0f, "%.2f");
+        {
+            int tr = pp.transpose;
+            flowSameLine(kw);
+            if (ui::KnobInt("Transpose", &tr, -24, 24, 0, "%d st")) { pp.transpose = static_cast<int8_t>(tr); changed = true; }
+        }
+        flowSameLine(kw); changed |= ui::Knob("Bend range", &pp.bendRangeSemis, 0.0f, 24.0f, 2.0f, "%.1f st");
+        if (pp.voiceMode != VoiceMode::Poly) {
+            ui::KnobStyle ksLog;
+            ksLog.logarithmic = true;
+            float glide = std::max(pp.glideTimeSec, 0.001f);
+            flowSameLine(kw);
+            if (ui::Knob("Glide", &glide, 0.001f, 10.0f, 0.05f, "%.3f s", ksLog)) { pp.glideTimeSec = glide; changed = true; }
+        }
+        if (pp.voiceMode == VoiceMode::Unison) {
+            int uc = pp.unisonCount;
+            flowSameLine(kw);
+            if (ui::KnobInt("Vozes", &uc, 1, 8, 1)) { pp.unisonCount = uc; changed = true; }
+            flowSameLine(kw); changed |= ui::Knob("Detune", &pp.unisonDetuneCents, 0.0f, 50.0f, 10.0f, "%.1f c");
+            flowSameLine(kw); changed |= ui::Knob("Espalham.", &pp.unisonSpread, 0.0f, 1.0f, 0.0f, "%.2f");
+        }
+        if (pp.voiceMode != VoiceMode::Poly) {
+            changed |= ImGui::Checkbox("Glide", &pp.glideEnabled);
+            ImGui::SameLine();
+            changed |= ImGui::Checkbox("so em legato", &pp.glideLegatoOnly);
+            ImGui::SameLine();
+            changed |= ImGui::Checkbox("Reusa envelope em legato", &pp.monoLegatoEnvReuse);
+        }
+        {
+            int lo = pp.loKey, hi = pp.hiKey, rv = pp.reservedVoices;
+            ImGui::SetNextItemWidth(100);
+            if (ImGui::SliderInt("##lo", &lo, 0, 127, "de %d", ImGuiSliderFlags_AlwaysClamp)) { pp.loKey = static_cast<uint8_t>(lo); changed = true; }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100);
+            if (ImGui::SliderInt("Key range", &hi, 0, 127, "ate %d", ImGuiSliderFlags_AlwaysClamp)) { pp.hiKey = static_cast<uint8_t>(hi); changed = true; }
+            ImGui::SetNextItemWidth(100);
+            if (ImGui::SliderInt("Vozes reservadas", &rv, 0, kMaxVoices, "%d", ImGuiSliderFlags_AlwaysClamp)) { pp.reservedVoices = rv; changed = true; }
+        }
     }
+    ui::EndCard();
 
-    ImGui::Spacing();
-    if (ImGui::Button("Panico (all notes off)")) {
-        AppEvent e;
-        e.kind = AppEvent::Kind::AllNotesOff;
-        e.part = partIndex;
-        app.eventQueue.push(e);
-    }
-
-    ImGui::Spacing();
-    ImGui::SeparatorText("Operadores");
-    changed |= DrawOperatorTable(pp.voice, app.selectedOp);
-    changed |= DrawOperatorDetail(pp.voice.op[app.selectedOp]);
-
-    ImGui::SeparatorText("Algoritmo (preset de roteamento)");
-    {
+    if (ui::BeginCard("##card_algo", "ALGORITMO")) {
         static std::vector<std::string> names;
         static std::vector<const char*> namePtrs;
         if (names.empty()) {
-            for (int n = 1; n <= kNumAlgorithms; ++n) {
-                names.push_back(std::to_string(n) + ": " + algorithmName(n));
-            }
-            for (auto& s : names) namePtrs.push_back(s.c_str());
+            for (int n = 1; n <= kNumAlgorithms; ++n) names.push_back(std::to_string(n) + ": " + algorithmName(n));
+            for (auto& str : names) namePtrs.push_back(str.c_str());
         }
-        ImGui::SetNextItemWidth(500);
+        ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 80.0f));
         ImGui::Combo("##algo", &app.selectedAlgo, namePtrs.data(), static_cast<int>(namePtrs.size()));
+        ImGui::SetItemTooltip("Design proprio de 32 algoritmos p/ 8 operadores (nao e a lista oficial do DX7\n"
+                              "nem do Montage) -- ver ARQUITETURA.txt secao 14.");
         ImGui::SameLine();
-        if (ImGui::Button("Aplicar algoritmo")) {
+        if (ImGui::Button("Aplicar")) {
             applyAlgorithm(pp.voice, app.selectedAlgo + 1);
             changed = true;
         }
-        ImGui::TextDisabled("Design proprio de 32 algoritmos p/ 8 operadores (nao e a lista oficial do DX7 "
-                             "nem do Montage) -- ver ARQUITETURA.txt secao 14. Aplicar sobrescreve a matriz "
-                             "e o feedback de todos os operadores.");
+        ImGui::SetItemTooltip("Sobrescreve a matriz e o feedback de todos os operadores");
+        DrawAlgorithmDiagram(pp.voice, app.selectedOp);
     }
-    DrawAlgorithmDiagram(pp.voice);
+    ui::EndCard();
 
-    changed |= DrawMatrix(pp.voice.matrix);
-    changed |= DrawPeg(pp.voice.peg);
-    changed |= DrawLfo("LFO 1", pp.voice.lfo1);
-    changed |= DrawLfo("LFO 2", pp.voice.lfo2);
-    changed |= DrawModMatrix(pp.voice.modMatrix);
+    if (ui::BeginCard("##card_lfo", "LFOs", 0.0f, ui::col::kAccent2)) {
+        if (ImGui::BeginTable("##lfos", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV)) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextDisabled("LFO 1");
+            changed |= DrawLfo("LFO 1", pp.voice.lfo1);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextDisabled("LFO 2");
+            changed |= DrawLfo("LFO 2", pp.voice.lfo2);
+            ImGui::EndTable();
+        }
+    }
+    ui::EndCard();
+    if (ui::BeginCard("##card_modm", "MATRIZ DE MODULACAO", 0.0f, ui::col::kAccent2)) changed |= DrawModMatrix(pp.voice.modMatrix);
+    ui::EndCard();
+    return changed;
+}
+
+// Coluna esquerda: operadores, envelopes, detalhe do operador selecionado e
+// matriz de algoritmo.
+bool DrawPartLeftColumn(AppState& app, int partIndex) {
+    auto& pp = app.synth.part(partIndex);
+    bool changed = false;
+    int& sel = app.selectedOp;
+
+    if (ui::BeginCard("##card_ops", "OPERADORES")) changed |= DrawOperatorTable(pp.voice, sel);
+    ui::EndCard();
+
+    if (ui::BeginCard("##card_env", "ENVELOPES DE AMPLITUDE")) {
+        changed |= ui::EnvelopeGraph("##envgraph", pp.voice, sel, app.envGraph[partIndex], 210.0f);
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, ui::opColor(sel));
+        ImGui::Text("Op%d", sel + 1);
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::TextDisabled("Amp EG (arraste os pontos no grafico ou gire os knobs)");
+        changed |= DrawEGKnobs("ampeg", pp.voice.op[sel].ampEG.rate, pp.voice.op[sel].ampEG.level, ui::opColor(sel));
+    }
+    ui::EndCard();
+
+    char title[32];
+    std::snprintf(title, sizeof title, "OPERADOR %d", sel + 1);
+    if (ui::BeginCard("##card_opdetail", title, 0.0f, ui::opColor(sel))) changed |= DrawOperatorDetail(pp.voice.op[sel], sel);
+    ui::EndCard();
+
+    if (ui::BeginCard("##card_peg", "PITCH EG", 0.0f, ui::col::kAccent2)) changed |= DrawPeg(pp.voice.peg);
+    ui::EndCard();
+
+    if (ui::BeginCard("##card_matrix", nullptr)) {
+        if (ImGui::CollapsingHeader("MATRIZ DE ALGORITMO (avancado)")) changed |= DrawMatrix(pp.voice.matrix);
+        else ImGui::TextDisabled("Roteamento livre entre os 8 operadores e output mix -- os presets do card Algoritmo ja preenchem isto.");
+    }
+    ui::EndCard();
+    return changed;
+}
+
+void DrawPartPanel(AppState& app, int partIndex) {
+    auto& pp = app.synth.part(partIndex);
+    bool changed = false;
+    float avail = ImGui::GetContentRegionAvail().x;
+    if (avail >= 1000.0f && ImGui::BeginTable("##partcols", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("esq", ImGuiTableColumnFlags_WidthStretch, 0.6f);
+        ImGui::TableSetupColumn("dir", ImGuiTableColumnFlags_WidthStretch, 0.4f);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        changed |= DrawPartLeftColumn(app, partIndex);
+        ImGui::TableSetColumnIndex(1);
+        changed |= DrawPartRightColumn(app, partIndex);
+        ImGui::EndTable();
+    } else { // janela estreita: uma coluna so
+        changed |= DrawPartRightColumn(app, partIndex);
+        changed |= DrawPartLeftColumn(app, partIndex);
+    }
 
     if (changed) {
         publishPart(app, partIndex);
@@ -1010,7 +1084,6 @@ void DrawPartPanel(AppState& app, int partIndex) {
         ui.dirty = patchFingerprint(pp) != ui.baseline; // desfazer uma edicao volta a "nao modificado"
     }
 }
-
 // [REESCRITO em 2026-10-18] Efeitos globais: cadeia reordenavel + painel
 // por efeito (ver src/dx7_globalfx.h para a origem/licenca de cada um).
 struct GlobalFxInfo { GlobalFxType type; const char* name; const char* origin; };
@@ -1043,189 +1116,258 @@ constexpr ImGuiSliderFlags kClamp = ImGuiSliderFlags_AlwaysClamp;
 constexpr ImGuiSliderFlags kLog = ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic;
 
 void DrawGlobalFxParams(AppState& app, GlobalFxParams& fx, GlobalFxType t) {
+    static const GlobalFxParams kDef; // valores padrao (duplo clique no knob)
+    ui::KnobStyle ks;
+    ks.cellWidth = 58.0f;
+    ui::KnobStyle ksLog = ks;
+    ksLog.logarithmic = true;
+    bool first = true;
+    auto K = [&](const char* label, float* v, float lo, float hi, float def, const char* fmt, bool log = false) {
+        if (!first) flowSameLine(58.0f);
+        first = false;
+        ui::Knob(label, v, lo, hi, def, fmt, log ? ksLog : ks);
+    };
+    auto KI = [&](const char* label, int* v, int lo, int hi, int def, const char* fmt) {
+        if (!first) flowSameLine(58.0f);
+        first = false;
+        ui::KnobInt(label, v, lo, hi, def, fmt, ks);
+    };
     switch (t) {
         case GlobalFxType::Chorus: {
             auto& c = fx.chorus;
-            ImGui::SliderFloat("Rate (Hz)", &c.rateHz, 0.05f, 5.0f, "%.2f", kLog);
-            ImGui::SliderFloat("Profundidade", &c.depth, 0.0f, 1.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Mix", &c.mix, 0.0f, 1.0f, "%.2f", kClamp);
+            K("Rate", &c.rateHz, 0.05f, 5.0f, kDef.chorus.rateHz, "%.2f Hz", true);
+            K("Profund.", &c.depth, 0.0f, 1.0f, kDef.chorus.depth, "%.2f");
+            K("Mix", &c.mix, 0.0f, 1.0f, kDef.chorus.mix, "%.2f");
             break;
         }
         case GlobalFxType::Phaser: {
             auto& ph = fx.phaser;
-            ImGui::SliderInt("Notches", &ph.notches, 1, 8, "%d", kClamp);
-            ImGui::SliderFloat("Rate (Hz)", &ph.rateHz, 0.0f, 5.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Freq. minima (Hz)", &ph.freqMinHz, 20.0f, 5000.0f, "%.0f", kLog);
-            ImGui::SliderFloat("Freq. maxima (Hz)", &ph.freqMaxHz, 20.0f, 10000.0f, "%.0f", kLog);
-            ImGui::SliderFloat("Razao entre notches", &ph.freqRatio, 1.0f, 4.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Largura do notch (Hz)", &ph.notchWidthHz, 10.0f, 5000.0f, "%.0f", kLog);
-            ImGui::SliderFloat("Profundidade", &ph.depth, 0.0f, 2.0f, "%.2f", kClamp);
+            KI("Notches", &ph.notches, 1, 8, kDef.phaser.notches, "%d");
+            K("Rate", &ph.rateHz, 0.0f, 5.0f, kDef.phaser.rateHz, "%.2f Hz");
+            K("Freq min", &ph.freqMinHz, 20.0f, 5000.0f, kDef.phaser.freqMinHz, "%.0f Hz", true);
+            K("Freq max", &ph.freqMaxHz, 20.0f, 10000.0f, kDef.phaser.freqMaxHz, "%.0f Hz", true);
+            K("Razao", &ph.freqRatio, 1.0f, 4.0f, kDef.phaser.freqRatio, "%.2f");
+            K("Largura", &ph.notchWidthHz, 10.0f, 5000.0f, kDef.phaser.notchWidthHz, "%.0f Hz", true);
+            K("Profund.", &ph.depth, 0.0f, 2.0f, kDef.phaser.depth, "%.2f");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = seco, 1 = phaser, 2 = vibrato (so a cadeia all-pass)");
-            ImGui::SliderFloat("Feedback", &ph.feedback, -0.99f, 0.99f, "%.2f", kClamp);
+            K("Feedback", &ph.feedback, -0.99f, 0.99f, kDef.phaser.feedback, "%.2f");
             ImGui::Checkbox("Inverter", &ph.invert);
             break;
         }
         case GlobalFxType::Flanger: {
             auto& f = fx.flanger;
-            ImGui::SliderFloat("Rate (Hz)", &f.rateHz, 0.0f, 5.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Atraso minimo (ms)", &f.delayMs, 0.05f, 10.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Varredura (ms)", &f.sweepMs, 0.0f, 10.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Profundidade", &f.depth, 0.0f, 1.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Feedback", &f.feedback, -0.95f, 0.95f, "%.2f", kClamp);
+            K("Rate", &f.rateHz, 0.0f, 5.0f, kDef.flanger.rateHz, "%.2f Hz");
+            K("Atraso", &f.delayMs, 0.05f, 10.0f, kDef.flanger.delayMs, "%.2f ms");
+            K("Varredura", &f.sweepMs, 0.0f, 10.0f, kDef.flanger.sweepMs, "%.2f ms");
+            K("Profund.", &f.depth, 0.0f, 1.0f, kDef.flanger.depth, "%.2f");
+            K("Feedback", &f.feedback, -0.95f, 0.95f, kDef.flanger.feedback, "%.2f");
             ImGui::Checkbox("Inverter", &f.invert);
             break;
         }
         case GlobalFxType::Delay: {
             auto& d = fx.delay;
-            ImGui::SliderFloat("Tempo esquerdo (s)", &d.timeLeftSec, 0.01f, 2.0f, "%.3f", kClamp);
-            ImGui::SliderFloat("Tempo direito (s)", &d.timeRightSec, 0.01f, 2.0f, "%.3f", kClamp);
-            ImGui::SliderFloat("Feedback", &d.feedback, 0.0f, 0.95f, "%.2f", kClamp);
-            ImGui::SliderFloat("Cross-feed (ping-pong)", &d.crossFeed, 0.0f, 1.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Mix", &d.mix, 0.0f, 1.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Corte de graves no loop (Hz)", &d.lowCutHz, 10.0f, 2000.0f, "%.0f", kLog);
-            ImGui::SliderFloat("Corte de agudos no loop (Hz)", &d.highCutHz, 200.0f, 20000.0f, "%.0f", kLog);
-            ImGui::SliderFloat("Drive (saturacao no loop)", &d.drive, 0.0f, 1.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Wow & flutter", &d.wow, 0.0f, 1.0f, "%.2f", kClamp);
+            K("Tempo L", &d.timeLeftSec, 0.01f, 2.0f, kDef.delay.timeLeftSec, "%.3f s", true);
+            K("Tempo R", &d.timeRightSec, 0.01f, 2.0f, kDef.delay.timeRightSec, "%.3f s", true);
+            K("Feedback", &d.feedback, 0.0f, 0.95f, kDef.delay.feedback, "%.2f");
+            K("Ping-pong", &d.crossFeed, 0.0f, 1.0f, kDef.delay.crossFeed, "%.2f");
+            K("Mix", &d.mix, 0.0f, 1.0f, kDef.delay.mix, "%.2f");
+            K("Low cut", &d.lowCutHz, 10.0f, 2000.0f, kDef.delay.lowCutHz, "%.0f Hz", true);
+            K("High cut", &d.highCutHz, 200.0f, 20000.0f, kDef.delay.highCutHz, "%.0f Hz", true);
+            K("Drive", &d.drive, 0.0f, 1.0f, kDef.delay.drive, "%.2f");
+            K("Wow", &d.wow, 0.0f, 1.0f, kDef.delay.wow, "%.2f");
             break;
         }
         case GlobalFxType::Reverb: {
             auto& r = fx.reverb;
             static const char* kTypes[] = {"Room (Freeverb)", "Hall (Clouds)", "Plate (MVerb)"};
             int type = static_cast<int>(r.type);
+            ImGui::SetNextItemWidth(170);
             if (ImGui::Combo("Algoritmo", &type, kTypes, IM_ARRAYSIZE(kTypes))) r.type = static_cast<ReverbType>(type);
-            ImGui::SliderFloat("Tamanho / decaimento", &r.roomSize, 0.0f, 1.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Amortecimento", &r.damping, 0.0f, 1.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Mix", &r.mix, 0.0f, 1.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Largura", &r.width, 0.0f, 1.0f, "%.2f", kClamp);
-            ImGui::SliderFloat("Pre-delay (ms)", &r.predelayMs, 0.0f, 250.0f, "%.0f", kClamp);
+            ImGui::SameLine();
             ImGui::BeginDisabled(r.type != ReverbType::Room);
-            ImGui::Checkbox("Freeze (cauda infinita)", &r.freeze);
+            ImGui::Checkbox("Freeze", &r.freeze);
             ImGui::EndDisabled();
-            if (r.type != ReverbType::Room && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("So no algoritmo Room (modo freeze do Freeverb)");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip(r.type == ReverbType::Room ? "Cauda infinita (modo freeze do Freeverb)" : "So no algoritmo Room");
+            K("Tamanho", &r.roomSize, 0.0f, 1.0f, kDef.reverb.roomSize, "%.2f");
+            K("Amortec.", &r.damping, 0.0f, 1.0f, kDef.reverb.damping, "%.2f");
+            K("Mix", &r.mix, 0.0f, 1.0f, kDef.reverb.mix, "%.2f");
+            K("Largura", &r.width, 0.0f, 1.0f, kDef.reverb.width, "%.2f");
+            K("Pre-delay", &r.predelayMs, 0.0f, 250.0f, kDef.reverb.predelayMs, "%.0f ms");
             break;
         }
         case GlobalFxType::Eq: {
             auto& e = fx.eq;
-            ImGui::SliderFloat("Graves: freq. (Hz)", &e.lowFreqHz, 20.0f, 1000.0f, "%.0f", kLog);
-            ImGui::SliderFloat("Graves: ganho (dB)", &e.lowGainDb, -18.0f, 18.0f, "%.1f", kClamp);
-            ImGui::SliderFloat("Medios: freq. (Hz)", &e.midFreqHz, 100.0f, 10000.0f, "%.0f", kLog);
-            ImGui::SliderFloat("Medios: ganho (dB)", &e.midGainDb, -18.0f, 18.0f, "%.1f", kClamp);
-            ImGui::SliderFloat("Medios: Q", &e.midQ, 0.1f, 10.0f, "%.2f", kLog);
-            ImGui::SliderFloat("Agudos: freq. (Hz)", &e.highFreqHz, 1000.0f, 20000.0f, "%.0f", kLog);
-            ImGui::SliderFloat("Agudos: ganho (dB)", &e.highGainDb, -18.0f, 18.0f, "%.1f", kClamp);
+            K("Grave Hz", &e.lowFreqHz, 20.0f, 1000.0f, kDef.eq.lowFreqHz, "%.0f", true);
+            K("Grave dB", &e.lowGainDb, -18.0f, 18.0f, 0.0f, "%+.1f");
+            K("Medio Hz", &e.midFreqHz, 100.0f, 10000.0f, kDef.eq.midFreqHz, "%.0f", true);
+            K("Medio dB", &e.midGainDb, -18.0f, 18.0f, 0.0f, "%+.1f");
+            K("Medio Q", &e.midQ, 0.1f, 10.0f, kDef.eq.midQ, "%.2f", true);
+            K("Agudo Hz", &e.highFreqHz, 1000.0f, 20000.0f, kDef.eq.highFreqHz, "%.0f", true);
+            K("Agudo dB", &e.highGainDb, -18.0f, 18.0f, 0.0f, "%+.1f");
             if (ImGui::SmallButton("Zerar ganhos")) e.lowGainDb = e.midGainDb = e.highGainDb = 0.0f;
             break;
         }
         case GlobalFxType::Compressor: {
             auto& c = fx.compressor;
-            ImGui::SliderFloat("Threshold (dB)", &c.thresholdDb, -60.0f, 0.0f, "%.1f", kClamp);
-            ImGui::SliderFloat("Ratio", &c.ratio, 1.0f, 20.0f, "%.1f:1", kLog);
-            ImGui::SliderFloat("Attack (ms)", &c.attackMs, 0.1f, 100.0f, "%.1f", kLog);
-            ImGui::SliderFloat("Release (ms)", &c.releaseMs, 1.0f, 500.0f, "%.0f", kLog);
-            ImGui::SliderFloat("Knee (dB)", &c.kneeDb, 0.0f, 8.0f, "%.1f", kClamp);
-            ImGui::SliderFloat("Makeup (dB)", &c.makeupDb, 0.0f, 30.0f, "%.1f", kClamp);
+            K("Threshold", &c.thresholdDb, -60.0f, 0.0f, kDef.compressor.thresholdDb, "%.1f dB");
+            K("Ratio", &c.ratio, 1.0f, 20.0f, kDef.compressor.ratio, "%.1f:1", true);
+            K("Attack", &c.attackMs, 0.1f, 100.0f, kDef.compressor.attackMs, "%.1f ms", true);
+            K("Release", &c.releaseMs, 1.0f, 500.0f, kDef.compressor.releaseMs, "%.0f ms", true);
+            K("Knee", &c.kneeDb, 0.0f, 8.0f, kDef.compressor.kneeDb, "%.1f dB");
+            K("Makeup", &c.makeupDb, 0.0f, 30.0f, kDef.compressor.makeupDb, "%.1f dB");
             float gr = c.enabled ? app.synth.compressorGainReductionDb() : 0.0f;
             char text[32];
             std::snprintf(text, sizeof text, "-%.1f dB", gr);
-            ImGui::ProgressBar(std::clamp(gr / 24.0f, 0.0f, 1.0f), ImVec2(220, 0), text);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ui::col::kAccent2);
+            ImGui::ProgressBar(std::clamp(gr / 24.0f, 0.0f, 1.0f), ImVec2(200, 0), text);
+            ImGui::PopStyleColor();
             ImGui::SameLine();
-            ImGui::TextUnformatted("reducao de ganho");
+            ImGui::TextDisabled("reducao de ganho");
             break;
         }
     }
 }
-
 void DrawGlobalFxPanel(AppState& app) {
     auto& fx = app.synth.globalFx();
+    if (!ImGui::BeginTable("##fxcols", 2, ImGuiTableFlags_SizingStretchProp)) return;
+    ImGui::TableSetupColumn("cadeia", ImGuiTableColumnFlags_WidthFixed, 270.0f);
+    ImGui::TableSetupColumn("efeitos", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableNextRow();
 
-    ImGui::SeparatorText("Cadeia de efeitos (ordem de processamento)");
-    ImGui::TextDisabled("O sinal passa de cima pra baixo; use as setas pra reordenar. Depois da cadeia vem o volume geral e o limitador.");
-    for (int i = 0; i < kNumGlobalFx; ++i) {
-        GlobalFxType t = fx.order[i];
-        const auto& info = globalFxInfo(t);
-        ImGui::PushID(i);
-        ImGui::Text("%d.", i + 1);
-        ImGui::SameLine();
-        ImGui::BeginDisabled(i == 0);
-        if (ImGui::ArrowButton("##up", ImGuiDir_Up)) std::swap(fx.order[i], fx.order[i - 1]);
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(i == kNumGlobalFx - 1);
-        if (ImGui::ArrowButton("##down", ImGuiDir_Down)) std::swap(fx.order[i], fx.order[i + 1]);
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::Checkbox(info.name, &globalFxEnabled(fx, t));
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", info.origin);
-        ImGui::PopID();
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Ordem padrao")) std::copy(std::begin(kDefaultGlobalFxOrder), std::end(kDefaultGlobalFxOrder), fx.order);
-
-    for (int i = 0; i < kNumGlobalFx; ++i) {
-        GlobalFxType t = fx.order[i];
-        const auto& info = globalFxInfo(t);
-        bool on = globalFxEnabled(fx, t);
-        char header[64];
-        std::snprintf(header, sizeof header, "%d. %s%s###fxhdr%d", i + 1, info.name, on ? "" : "  (desligado)", static_cast<int>(t));
-        if (ImGui::CollapsingHeader(header, on ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
-            ImGui::PushID(static_cast<int>(t) + 100);
-            ImGui::TextDisabled("%s", info.origin);
-            ImGui::Checkbox("Ligado", &globalFxEnabled(fx, t));
-            ImGui::PushItemWidth(260);
-            DrawGlobalFxParams(app, fx, t);
-            ImGui::PopItemWidth();
+    // cadeia: ordem + liga/desliga
+    ImGui::TableSetColumnIndex(0);
+    if (ui::BeginCard("##card_chain", "CADEIA DE EFEITOS")) {
+        ImGui::TextDisabled("O sinal passa de cima pra baixo.");
+        for (int i = 0; i < kNumGlobalFx; ++i) {
+            GlobalFxType t = fx.order[i];
+            const auto& info = globalFxInfo(t);
+            ImGui::PushID(i);
+            ImGui::TextDisabled("%d", i + 1);
+            ImGui::SameLine();
+            ImGui::BeginDisabled(i == 0);
+            if (ImGui::ArrowButton("##up", ImGuiDir_Up)) std::swap(fx.order[i], fx.order[i - 1]);
+            ImGui::EndDisabled();
+            ImGui::SameLine(0, 2);
+            ImGui::BeginDisabled(i == kNumGlobalFx - 1);
+            if (ImGui::ArrowButton("##down", ImGuiDir_Down)) std::swap(fx.order[i], fx.order[i + 1]);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::Checkbox(info.name, &globalFxEnabled(fx, t));
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", info.origin);
             ImGui::PopID();
         }
+        if (ImGui::SmallButton("Ordem padrao")) std::copy(std::begin(kDefaultGlobalFxOrder), std::end(kDefaultGlobalFxOrder), fx.order);
+        ImGui::Spacing();
+        ImGui::TextDisabled("Depois da cadeia: volume geral\ne limitador de saida.");
     }
+    ui::EndCard();
+
+    // um card por efeito, na ordem da cadeia, em 2 colunas empilhadas de
+    // forma independente (1,3,5,7 | 2,4,6): sem buracos entre cards de
+    // alturas diferentes
+    ImGui::TableSetColumnIndex(1);
+    if (ImGui::BeginTable("##fxgrid", 2, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextRow();
+        // coluna 0 inteira (1,3,5,7) e depois a 1 (2,4,6): voltar pra uma
+        // celula ja usada com TableSetColumnIndex poe o cursor no topo dela
+        for (int k = 0; k < kNumGlobalFx; ++k) {
+            int i = k < (kNumGlobalFx + 1) / 2 ? k * 2 : (k - (kNumGlobalFx + 1) / 2) * 2 + 1;
+            if (k == 0 || k == (kNumGlobalFx + 1) / 2) ImGui::TableSetColumnIndex(i % 2);
+            GlobalFxType t = fx.order[i];
+            const auto& info = globalFxInfo(t);
+            bool on = globalFxEnabled(fx, t);
+            char id[24], title[64];
+            std::snprintf(id, sizeof id, "##fxcard%d", static_cast<int>(t));
+            std::snprintf(title, sizeof title, "%d. %s", i + 1, info.name);
+            ImGui::PushID(static_cast<int>(t) + 100);
+            if (ui::BeginCard(id, title, 0.0f, on ? ui::col::kAccent : ui::col::kTextDim)) {
+                ImGui::Checkbox("Ligado", &globalFxEnabled(fx, t));
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", info.origin);
+                if (!on) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.55f); // desligado: esmaecido, mas editavel
+                DrawGlobalFxParams(app, fx, t);
+                if (!on) ImGui::PopStyleVar();
+            }
+            ui::EndCard();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::EndTable();
+}
+// Ponto colorido + texto (status do audio/MIDI na barra superior)
+void StatusChip(bool ok, const char* text) {
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float h = ImGui::GetTextLineHeight();
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + 5, p.y + h * 0.5f), 4.0f, ok ? ui::rgb(79, 209, 140) : ui::rgb(252, 100, 100));
+    ImGui::Dummy(ImVec2(12, h));
+    ImGui::SameLine(0, 2);
+    ImGui::TextUnformatted(text);
 }
 
 void DrawTopBar(AppState& app) {
-    ImGui::Text("Audio: %s | %u Hz | period %u | formato %s | xruns %ld",
-                app.audioOut.isRunning() ? "ativo" : "PARADO",
-                app.audioOut.sampleRate(), app.audioOut.periodFrames(),
-                app.audioOut.deviceFormatName(), app.audioOut.underruns());
-    if (!app.audioOut.isRunning() && !app.audioOut.lastError().empty()) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::rgb(24, 27, 35));
+    ImGui::BeginChild("##header", ImVec2(0, 92), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
+    if (ImGui::BeginTable("##hdr", 3, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("logo", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+        ImGui::TableSetupColumn("status", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupColumn("saida", ImGuiTableColumnFlags_WidthFixed, 300.0f);
+        ImGui::TableNextRow();
+
+        // logo
+        ImGui::TableSetColumnIndex(0);
+        ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, ui::col::kAccent);
+        ImGui::TextUnformatted("dx7fm");
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+        ImGui::TextDisabled("8-OP FM SYNTH");
+
+        // status
+        ImGui::TableSetColumnIndex(1);
+        char buf[160];
+        std::snprintf(buf, sizeof buf, "Audio %s  %u Hz  buffer %u  %s  xruns %ld", app.audioOut.isRunning() ? "ativo" : "PARADO",
+                      app.audioOut.sampleRate(), app.audioOut.periodFrames(), app.audioOut.deviceFormatName(), app.audioOut.underruns());
+        StatusChip(app.audioOut.isRunning(), buf);
+        if (!app.audioOut.isRunning() && !app.audioOut.lastError().empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "(%s)", app.audioOut.lastError().c_str());
+        }
+        ImGui::SameLine(0, 18);
+        StatusChip(app.midiIn.isOpen(), app.midiIn.isOpen() ? "MIDI: porta ALSA dx7fm:input" : "MIDI indisponivel");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Conecte seu controlador com 'aconnect' ou no seu patchbay");
+        ImGui::TextDisabled("Teclado do PC: base nota %d (Z/X oitava)  canal", app.piano.baseNote());
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "(%s)", app.audioOut.lastError().c_str());
+        ImGui::SetNextItemWidth(80);
+        ImGui::SliderInt("##pcch", &app.pcKeyboardChannel, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Toca todas as partes habilitadas em omni (canal 0) ou neste canal,\n"
+                              "igual a um controlador MIDI ligado nesse canal.");
+        ImGui::SameLine(0, 18);
+        ImGui::TextDisabled("Vozes %d / %d", app.synth.activeVoiceCount(), kMaxVoices);
+
+        // medidores + volume geral
+        ImGui::TableSetColumnIndex(2);
+        ImGui::BeginGroup();
+        ImGui::Dummy(ImVec2(0, 6));
+        ui::LevelMeter("L", app.meterL.load(std::memory_order_relaxed), ImVec2(200, 14));
+        ui::LevelMeter("R", app.meterR.load(std::memory_order_relaxed), ImVec2(200, 14));
+        ImGui::EndGroup();
+        ImGui::SameLine();
+        // Volume geral em dB (-60..+6); o minimo (-60) e mudo de verdade.
+        // Estado so da UI: o motor guarda ganho linear (Synth::setMasterVolume).
+        static float volumeDb = 0.0f;
+        ui::KnobStyle ks;
+        ks.size = 34.0f;
+        if (ui::Knob("Volume", &volumeDb, -60.0f, 6.0f, 0.0f, volumeDb <= -60.0f ? "mudo" : "%.1f dB", ks))
+            app.synth.setMasterVolume(volumeDb <= -60.0f ? 0.0f : dbToLinear(volumeDb));
+        ImGui::EndTable();
     }
-
-    ImGui::Text("MIDI: %s", app.midiIn.isOpen()
-                                ? "porta ALSA aberta (conecte seu controlador com 'aconnect' ou no seu patchbay)"
-                                : "indisponivel (so teclado do PC)");
-
-    ImGui::Text("Teclado do PC: oitava base nota %d (Z/X descem/sobem) | toca como teclado MIDI no canal",
-                app.piano.baseNote());
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(90);
-    ImGui::SliderInt("##pcch", &app.pcKeyboardChannel, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Toca todas as partes habilitadas em omni (canal 0) ou neste canal,\n"
-                          "igual a um controlador MIDI ligado nesse canal.");
-    ImGui::Text("Vozes ativas: %d / %d", app.synth.activeVoiceCount(), kMaxVoices);
-
-    float l = app.meterL.load(std::memory_order_relaxed);
-    float r = app.meterR.load(std::memory_order_relaxed);
-    ImGui::Text("Nivel:");
-    ImGui::SameLine();
-    ImGui::ProgressBar(std::clamp(l, 0.0f, 1.0f), ImVec2(150, 0), "L");
-    ImGui::SameLine();
-    ImGui::ProgressBar(std::clamp(r, 0.0f, 1.0f), ImVec2(150, 0), "R");
-
-    // Volume geral em dB (-60..+6); o minimo (-60) e mudo de verdade.
-    // Estado so da UI: o motor guarda ganho linear (Synth::setMasterVolume).
-    static float volumeDb = 0.0f;
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(220);
-    const char* fmt = volumeDb <= -60.0f ? "mudo" : "%.1f dB";
-    if (ImGui::SliderFloat("Volume geral", &volumeDb, -60.0f, 6.0f, fmt, ImGuiSliderFlags_AlwaysClamp))
-        app.synth.setMasterVolume(volumeDb <= -60.0f ? 0.0f : dbToLinear(volumeDb));
-    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { // duplo clique volta pra 0dB
-        volumeDb = 0.0f;
-        app.synth.setMasterVolume(1.0f);
-    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
 }
-
 // --- teclado do PC como piano ---------------------------------------------
 
 void handlePianoKeyDown(AppState& app, SDL_Scancode sc) {
@@ -1270,6 +1412,94 @@ void releaseAllPianoKeys(AppState& app) {
     app.heldPcNotes.clear();
 }
 
+// Tema e fontes do app (chamar 1x depois de ImGui::CreateContext()).
+void SetupAppStyle() {
+    ui::ApplyTheme();
+    // Roboto Medium (Apache 2.0, distribuida com o Dear ImGui em
+    // third_party/imgui/misc/fonts); se o arquivo nao existir, fica a fonte
+    // padrao embutida do ImGui.
+#ifdef DX7FM_FONT_DIR
+    ImGuiIO& io = ImGui::GetIO();
+    const std::string path = std::string(DX7FM_FONT_DIR) + "/Roboto-Medium.ttf";
+    if (std::filesystem::exists(path)) io.FontDefault = io.Fonts->AddFontFromFileTTF(path.c_str(), 15.0f);
+#endif
+    ImGui::GetStyle().FontSizeBase = 15.0f;
+}
+
+// Faixa com osciloscopio e espectrograma da saida (recolhivel).
+void DrawVisualizers(AppState& app) {
+    const double sr = app.audioOut.sampleRate();
+    ui::UpdateSpectrogram(app.spectro, app.tap, sr); // consome o audio novo mesmo com a faixa recolhida
+    if (!ImGui::CollapsingHeader("OSCILOSCOPIO / ESPECTROGRAMA", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    const float h = 140.0f;
+    if (ImGui::BeginTable("##viz", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("scope", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("spectro", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        ImGui::TableNextRow();
+
+        ImGui::TableSetColumnIndex(0);
+        {
+            static const char* kZoom[] = {"5 ms", "10 ms", "20 ms", "50 ms"};
+            ImGui::TextDisabled("Osciloscopio");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(70);
+            ImGui::Combo("##scopezoom", &app.scope.zoom, kZoom, IM_ARRAYSIZE(kZoom));
+            ImGui::SetItemTooltip("Janela de tempo mostrada");
+            ImGui::SameLine();
+            ImGui::Checkbox("Disparo", &app.scope.trigger);
+            ImGui::SetItemTooltip("Alinha a onda na subida do zero (fica parada na tela)");
+            ImGui::SameLine();
+            ImGui::Checkbox("Ganho auto", &app.scope.autoGain);
+            ImGui::SetItemTooltip("Amplia sinais baixos pra ver a forma de onda");
+            ui::Oscilloscope("##scope", app.tap, sr, app.scope, ImVec2(ImGui::GetContentRegionAvail().x, h));
+        }
+
+        ImGui::TableSetColumnIndex(1);
+        {
+            static const char* kRange[] = {"60 dB", "90 dB", "120 dB"};
+            ImGui::TextDisabled("Espectrograma (20 Hz - 20 kHz, ultimos %.1f s)",
+                                dx7fm_app::SpectrogramHistory::kCols * dx7fm_app::SpectrogramHistory::kHop / sr);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(80);
+            ImGui::Combo("##sprange", &app.spectro.range, kRange, IM_ARRAYSIZE(kRange));
+            ImGui::SetItemTooltip("Faixa dinamica: o que fica mais baixo que isso aparece como fundo");
+            ui::Spectrogram("##spectro", app.spectro, sr, ImVec2(ImGui::GetContentRegionAvail().x, h));
+        }
+        ImGui::EndTable();
+    }
+}
+
+// Desenha a janela inteira do app (1x por frame). forceTab >= 0 forca a aba
+// aberta (0..3 = partes, 4 = FX globais) -- usado pelo harness de screenshot.
+void DrawMainUi(AppState& app, int forceTab = -1) {
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+    ImGui::Begin("dx7fm", nullptr,
+                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
+
+    DrawTopBar(app);
+    DrawVisualizers(app);
+    ImGui::Spacing();
+
+    if (ImGui::BeginTabBar("parts")) {
+        for (int p = 0; p < kNumParts; ++p) {
+            char tabLabel[16];
+            std::snprintf(tabLabel, sizeof(tabLabel), "Parte %c", 'A' + p);
+            if (ImGui::BeginTabItem(tabLabel, nullptr, forceTab == p ? ImGuiTabItemFlags_SetSelected : 0)) {
+                DrawPartPanel(app, p);
+                ImGui::EndTabItem();
+            }
+        }
+        if (ImGui::BeginTabItem("FX Globais", nullptr, forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0)) {
+            DrawGlobalFxPanel(app);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+
+    ImGui::End();
+}
+
 } // namespace
 
 int main(int, char**) {
@@ -1279,7 +1509,7 @@ int main(int, char**) {
     }
 
     SDL_Window* window = SDL_CreateWindow("dx7fm standalone", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                           1280, 800, SDL_WINDOW_RESIZABLE);
+                                           1440, 900, SDL_WINDOW_RESIZABLE);
     if (!window) {
         std::fprintf(stderr, "SDL_CreateWindow falhou: %s\n", SDL_GetError());
         return 1;
@@ -1296,7 +1526,7 @@ int main(int, char**) {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::StyleColorsDark();
+    SetupAppStyle();
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
 
@@ -1354,34 +1584,10 @@ int main(int, char**) {
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
 
-        ImGui::SetNextWindowPos(ImVec2(0, 0));
-        ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-        ImGui::Begin("dx7fm", nullptr,
-                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
-
-        DrawTopBar(app);
-        ImGui::Separator();
-
-        if (ImGui::BeginTabBar("parts")) {
-            for (int p = 0; p < kNumParts; ++p) {
-                char tabLabel[16];
-                std::snprintf(tabLabel, sizeof(tabLabel), "Parte %c", 'A' + p);
-                if (ImGui::BeginTabItem(tabLabel)) {
-                    DrawPartPanel(app, p);
-                    ImGui::EndTabItem();
-                }
-            }
-            if (ImGui::BeginTabItem("FX Globais")) {
-                DrawGlobalFxPanel(app);
-                ImGui::EndTabItem();
-            }
-            ImGui::EndTabBar();
-        }
-
-        ImGui::End();
+        DrawMainUi(app);
 
         ImGui::Render();
-        SDL_SetRenderDrawColor(renderer, 20, 20, 24, 255);
+        SDL_SetRenderDrawColor(renderer, 18, 20, 26, 255);
         SDL_RenderClear(renderer);
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
         SDL_RenderPresent(renderer);

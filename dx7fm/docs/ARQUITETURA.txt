@@ -97,7 +97,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 180 checagens de sanidade em 91 funcoes de teste (nao
+    demo.cpp        - 193 checagens de sanidade em 95 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -166,8 +166,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     que incluem os headers do motor pelo nome)
     ./demo
 
-Isso deve imprimir 180 linhas "[PASS] ..." e no final:
-    == Resultado: 180 passaram, 0 falharam ==
+Isso deve imprimir 193 linhas "[PASS] ..." e no final:
+    == Resultado: 193 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -1805,7 +1805,7 @@ mudancas de cada porta estao no comentario de cabecalho do bloco.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 180 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 193 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
@@ -2078,26 +2078,73 @@ re-disparar a nota) e so processa KEYDOWN quando
 texto da UI, tipo o campo de caminho do arquivo de patch); KEYUP e
 sempre processado, e perder o foco da janela solta todas as teclas.
 
-13.5 UI (app/main.cpp)
+13.5 UI (app/main.cpp, app/ui_widgets.h, app/envelope_graph.h)
 
-Uma janela ImGui unica (sem docking -- vendorizamos a variante nao-
-docking do Dear ImGui) cobrindo a janela SDL inteira, com uma aba por
-parte (A-D) mais uma aba "FX Globais". Por parte: campos de PartParams
-(enabled, canal MIDI, modo de voz, transpose, nivel, pan, bend range, key
-range, unison/glide se aplicavel, vozes reservadas), campo de caminho +
-botoes Salvar/Carregar patch (usa savePartFile/loadPartFile de
-dx7_patch_io.h direto) e botao de panico (all notes off), uma TABELA com
-os 8 operadores (onda -- combo com as 12 opcoes de Waveform, incluindo as
-7 formas AFM da SY77/TX81Z adicionadas em 2026-09-21, ver secao 4 --,
-ratio/Hz, fixo, nivel, feedback, tipo de FX, FX1), um painel de DETALHE
-do operador selecionado (todos os campos que
-nao cabem na tabela: fine/detune, FX2, phase distortion, ring mod
-source, rate/velocity/LFO sens, PEG depth, fxEGReleaseWithAmp, key level
-scaling, e os EGs de amplitude e FX), a matriz de algoritmo 8x8 (drag
-float + checkbox de ring por celula) e output mix, o Pitch EG, os 2 LFOs,
-e a matriz de modulacao (8 rotas). QUALQUER edicao nesses widgets marca
-`changed=true`; ao fim do frame, se `changed`, chama synth.recompile()
-UMA vez (nao por widget) e sincroniza o PartRoutingCache.
+[REESCRITA em 2026-10-18, visual de "VST moderno".] Uma janela ImGui unica
+(sem docking) cobrindo a janela SDL inteira: cabecalho (logo, status de
+audio/MIDI com ponto verde/vermelho, canal do teclado do PC, vozes,
+medidores L/R em dB, knob de volume geral) e abas por parte (A-D) + "FX
+Globais". DrawMainUi() desenha o frame inteiro (usada pelo main() e pelos
+harnesses de teste/screenshot).
+
+  app/ui_widgets.h - tema (ui::ApplyTheme: escuro, acento verde-agua +
+      laranja, cantos arredondados), ui::opColor(op) -- UMA cor fixa por
+      operador, usada na tabela, no grafico de envelopes, nos knobs do
+      operador selecionado e no diagrama do algoritmo --, ui::Knob /
+      KnobInt / KnobU8 (arco de 270 graus; arrastar vertical, Shift fino,
+      roda do mouse sem rolar a janela via SetItemKeyOwner, duplo clique =
+      padrao, botao direito = digitar; faixa bipolar desenha o arco a partir
+      do centro), ui::BeginCard/EndCard (child com altura automatica) e
+      ui::LevelMeter. Fonte Roboto Medium 15px (DX7FM_FONT_DIR definido
+      pelo CMake; sem o arquivo, cai na fonte embutida).
+  app/envelope_graph.h - ui::EnvelopeGraph: Amp EG dos 8 operadores
+      sobrepostos (uma cor cada); o selecionado em destaque, com area
+      preenchida e 4 pontos arrastaveis (vertical = level, horizontal =
+      tempo convertido em rate; Shift = so level); clicar perto de outra
+      curva seleciona o operador; legenda com chips (clique seleciona,
+      botao direito esconde) + "Todos"/"So usados". Dois paineis (ate o
+      sustain | depois do note off), eixo de tempo comprimido (log perto de
+      0) com a escala congelada durante o arrasto.
+  app/audio_tap.h, app/spectrum.h, app/spectrogram_history.h, app/viz.h -
+      [ADICIONADO em 2026-10-18] osciloscopio e espectrograma da saida, numa
+      faixa recolhivel abaixo do cabecalho (DrawVisualizers). A audio thread
+      grava cada bloco no AudioTap (buffer circular de 32768 quadros, 1
+      escritor/1 leitor, contador atomico release/acquire); a UI le as
+      ultimas amostras. Osciloscopio: disparo na subida do zero, ganho
+      automatico, janela 5..50ms. Espectrograma: FFT 4096 (Hann, radix-2
+      propria) a cada 1024 amostras de AUDIO (rolagem independente do FPS),
+      56 faixas log 20Hz-20kHz, mapa de cores estilo "inferno", desenhado com
+      retangulos de gradiente do ImGui (sem textura; a API de textura de
+      usuario do ImGui 1.92 e experimental). Bug pego pelo screenshot e
+      corrigido: com a UI parada mais que ~0.7s, o historico pedia blocos que
+      ja tinham saido do tap e o indice circular devolvia audio RECENTE no
+      lugar do antigo -- agora essas colunas entram como silencio
+      (testSpectrogramHistory). Custo: ~3ms por quadro pro espectrograma.
+      Medido no renderer por SOFTWARE do SDL a UI inteira fica em ~62ms por
+      quadro (~16 FPS) a 1440x900 -- so afeta maquinas sem GPU (o app pede
+      renderer acelerado) e nao afeta o audio (thread separada).
+  app/envelope_math.h - a conta do grafico, sem ImGui: duracao de cada
+      estagio (|dLevel| / egRateToSpeed(rate)), o inverso tempo -> rate e o
+      eixo comprimido. Testada no demo.cpp contra o SegmentEG real
+      (testEnvelopeGraphMathMatchesEngine).
+
+Layout da aba de parte: 2 colunas de cards (1 coluna abaixo de ~1000px).
+Esquerda: OPERADORES (tabela: onda, ratio/Hz, fixo, nivel, feedback, FX,
+FX1; numero do operador na cor dele), ENVELOPES DE AMPLITUDE (grafico +
+knobs do Amp EG do selecionado), OPERADOR N (knobs de afinacao/modulacao,
+key scaling, editor da Additive, FX EG), PITCH EG e MATRIZ DE ALGORITMO
+(recolhida por padrao: grade 8x8 + knobs de output mix). Direita: PATCH
+(navegador, secao 13.6), PARTE (habilitada, canal, modo de voz, panico,
+knobs de nivel/pan/transpose/bend/glide/unison, key range, vozes
+reservadas), ALGORITMO (preset + diagrama colorido e clicavel), LFOs (os
+dois lado a lado) e MATRIZ DE MODULACAO. Aba FX Globais: card da cadeia
+(ordem com setas, liga/desliga) + um card por efeito com knobs, em 2
+colunas empilhadas independentemente; efeito desligado fica esmaecido mas
+editavel.
+
+QUALQUER edicao marca `changed=true`; ao fim do frame, se `changed`,
+chama synth.recompile() UMA vez (nao por widget) e sincroniza o
+PartRoutingCache.
 
 Depois de CADA edicao (nao so ao trocar a matriz) e necessario esperar o
 proximo recompile() pra ouvir o efeito -- isso e automatico aqui (a UI

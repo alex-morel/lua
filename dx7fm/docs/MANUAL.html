@@ -486,19 +486,24 @@ cmake --build dx7fm/build -j$(nproc)</code></pre>
     <section id="primeira-execucao">
       <h2><span class="num">03</span>Primeira execução</h2>
       <pre><code>./dx7fm/build/dx7fm_standalone</code></pre>
-      <p>Uma janela abre com uma barra de status no topo:</p>
+      <p>Uma janela abre com um cabeçalho no topo:</p>
       <div class="panel">
-        <div class="panel-label">Barra de status</div>
+        <div class="panel-label">Cabeçalho</div>
         <table>
-          <tr><td class="mono" style="width:1%;white-space:nowrap">Audio</td><td>dispositivo, taxa de amostra, tamanho do period, formato (float32 ou s16) e contador de xruns (falhas de buffer)</td></tr>
-          <tr><td class="mono">MIDI</td><td>se a porta ALSA sequencer abriu com sucesso — se não, o app continua funcionando só com o teclado do PC</td></tr>
+          <tr><td class="mono" style="width:1%;white-space:nowrap">Audio</td><td>ponto verde/vermelho + taxa de amostra, tamanho do buffer, formato (float32 ou s16) e contador de xruns (falhas de buffer)</td></tr>
+          <tr><td class="mono">MIDI</td><td>ponto verde se a porta ALSA sequencer abriu — se não, o app continua funcionando só com o teclado do PC</td></tr>
           <tr><td class="mono">Teclado do PC</td><td>oitava base atual e o <strong>canal MIDI</strong> (1–16, padrão 1) em que o teclado do computador toca</td></tr>
           <tr><td class="mono">Vozes ativas</td><td>quantas das 64 vozes do pool estão soando</td></tr>
-          <tr><td class="mono">Nível</td><td>dois medidores de pico, esquerdo e direito</td></tr>
-          <tr><td class="mono">Volume geral</td><td>volume master de −60 dB (mudo) a +6 dB, aplicado depois dos efeitos globais; o limitador de saída continua protegendo contra clipping. Duplo clique volta pra 0 dB</td></tr>
+          <tr><td class="mono">L / R</td><td>medidores de pico em dB (verde até −12 dB, amarelo até −3 dB, vermelho acima)</td></tr>
+          <tr><td class="mono">Volume</td><td>knob do volume master, de −60 dB (mudo) a +6 dB, aplicado depois dos efeitos globais; o limitador de saída continua protegendo contra clipping</td></tr>
         </table>
       </div>
-      <p>Abaixo da barra, abas: <strong>Parte A</strong> a <strong>Parte D</strong> (os 4 timbres independentes) e <strong>FX Globais</strong> (cadeia de efeitos aplicada na mixagem final).</p>
+      <p>Logo abaixo do cabeçalho fica a faixa <strong>Osciloscópio / Espectrograma</strong> (clique no título pra recolher), que mostra a saída de áudio final:</p>
+      <ul>
+        <li><strong>Osciloscópio</strong> — a forma de onda. Com <strong>Disparo</strong> ligado a onda fica parada na tela (alinhada na subida do zero); <strong>Ganho auto</strong> amplia sinais baixos (o fator aparece no canto, ex. <em>x4.0</em>); o combo escolhe a janela de tempo (5 a 50 ms).</li>
+        <li><strong>Espectrograma</strong> — as frequências ao longo do tempo (últimos ~3,4 s, mais recente à direita), de 20 Hz a 20 kHz em escala logarítmica; cores mais claras = mais forte. Passe o mouse pra ver a frequência, a nota mais próxima e o nível em dB naquele ponto. O combo ajusta a faixa dinâmica (60/90/120 dB).</li>
+      </ul>
+      <p>Abaixo disso, abas: <strong>Parte A</strong> a <strong>Parte D</strong> (os 4 timbres independentes) e <strong>FX Globais</strong> (cadeia de efeitos aplicada na mixagem final).</p>
     </section>
 
     <section id="tocando">
@@ -546,7 +551,23 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
 
     <section id="interface">
       <h2><span class="num">05</span>Anatomia da interface</h2>
-      <p class="lede">Cada aba de parte (A–D) tem a mesma estrutura, de cima pra baixo.</p>
+      <p class="lede">Cada aba de parte (A–D) é dividida em cards, em duas colunas: à esquerda o som dos operadores (tabela, envelopes, detalhe do operador, pitch EG, matriz), à direita patch, configuração da parte, algoritmo, LFOs e matriz de modulação. Em janelas estreitas (menos de ~1000 px) vira uma coluna só.</p>
+
+      <div class="panel">
+        <div class="panel-label">Knobs</div>
+        <p>Os parâmetros contínuos são knobs: <strong>arraste pra cima/baixo</strong> (com <span class="kbd">Shift</span> o ajuste fica fino), use a <strong>roda do mouse</strong> por cima deles, <strong>duplo clique</strong> volta ao valor padrão e o <strong>botão direito</strong> abre um campo pra digitar o valor exato. Cada operador tem uma cor fixa (Op1 verde-água, Op2 laranja, Op3 azul, Op4 rosa, Op5 verde, Op6 roxo, Op7 vermelho, Op8 amarelo), usada na tabela, no gráfico de envelopes, nos knobs do operador selecionado e no diagrama do algoritmo.</p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-label">Envelopes de amplitude</div>
+        <p>Um gráfico com o <strong>Amp EG dos 8 operadores sobrepostos</strong>, cada um na sua cor. À esquerda, do início da nota até o sustain; depois da linha tracejada <em>note off</em>, o release. O eixo de tempo é comprimido (10 ms, 100 ms, 1 s, 10 s), pra ataques de milissegundos e caudas de vários segundos caberem juntos.</p>
+        <ul>
+          <li>A curva do operador selecionado fica em destaque, com área preenchida e <strong>4 pontos arrastáveis</strong>: fim do ataque, do decai 1, do decai 2 (início do sustain) e do release. <strong>Vertical</strong> muda o level do estágio; <strong>horizontal</strong>, o tempo (o app converte em rate). Segure <span class="kbd">Shift</span> pra mudar só o level.</li>
+          <li>Clique perto de outra curva pra selecionar aquele operador.</li>
+          <li>Na legenda, clique num chip <strong>OpN</strong> pra selecionar, botão direito pra esconder/mostrar a curva; <strong>Todos</strong> e <strong>Só usados</strong> (só os operadores que chegam na saída).</li>
+          <li>Abaixo do gráfico, os 8 knobs (rates e levels) do Amp EG do operador selecionado, pra ajuste fino.</li>
+        </ul>
+      </div>
 
       <div class="panel">
         <div class="panel-label">Configuração da parte</div>
@@ -560,22 +581,22 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
 
       <div class="panel">
         <div class="panel-label">Operadores</div>
-        <p>Tabela com as 8 linhas (um operador por linha): forma de onda, ratio ou frequência fixa, nível de saída, feedback, tipo de efeito e seu primeiro parâmetro. Clique numa linha pra abrir o <strong>painel de detalhe</strong> logo abaixo, com tudo que não cabe na tabela — afinação fina/detune, segundo parâmetro do efeito, phase distortion, key/velocity/LFO scaling, profundidade do pitch envelope, e os dois envelopes do operador (amplitude e efeito).</p>
+        <p>Tabela com as 8 linhas (um operador por linha, número na cor do operador): forma de onda, ratio ou frequência fixa, nível de saída, feedback, tipo de efeito e seu primeiro parâmetro. Clique numa linha (ou numa curva do gráfico, ou numa caixa do diagrama) pra selecionar o operador: o card <strong>Operador N</strong> mostra em knobs tudo que não cabe na tabela — afinação fina/detune, phase distortion, profundidade do pitch envelope, sensibilidades (velocity, rate scaling, LFO), segundo parâmetro do efeito, key scaling — e o FX EG do operador.</p>
       </div>
 
       <div class="panel blue">
         <div class="panel-label">Algoritmo</div>
-        <p>Um combo com 32 topologias prontas (ver seção 6) + botão <strong>Aplicar algoritmo</strong>, e logo abaixo um <strong>diagrama ao vivo</strong> da matriz de roteamento atual — caixas azuis são portadoras (vão pro som final), cinzas só modulam outro operador, borda laranja indica feedback. O diagrama reflete qualquer edição, seja de um preset ou da grade numérica logo abaixo dele.</p>
+        <p>Um combo com 32 topologias prontas (ver seção 6) + botão <strong>Aplicar</strong>, e logo abaixo um <strong>diagrama ao vivo</strong> da matriz de roteamento atual: cada caixa na cor do operador (preenchida = portadora, vai pro som final), setas na cor de quem modula, círculo laranja = feedback. Clique numa caixa pra selecionar o operador. O diagrama reflete qualquer edição, seja de um preset ou da matriz avançada.</p>
       </div>
 
       <div class="panel">
-        <div class="panel-label">Matriz 8×8 + output mix</div>
-        <p>A representação numérica da mesma matriz do diagrama: uma célula por par de operadores (quanto <code>j</code> modula <code>i</code>, mais uma caixa pra ligar ring modulation), e 8 sliders de output mix — quanto de cada operador vai pro barramento de saída.</p>
+        <div class="panel-label">Matriz de algoritmo (avançado)</div>
+        <p>Recolhida por padrão (clique no título pra abrir). A representação numérica da mesma matriz do diagrama: uma célula por par de operadores (quanto <code>j</code> modula <code>i</code>, mais uma caixa pra ligar ring modulation), e 8 knobs de output mix — quanto de cada operador vai pro barramento de saída.</p>
       </div>
 
       <div class="panel">
         <div class="panel-label">Pitch EG, LFO 1, LFO 2, Matriz de modulação</div>
-        <p>O envelope de pitch da voz inteira; dois LFOs independentes (forma de onda, velocidade, delay, profundidade de pitch/amplitude); e 8 rotas de modulação configuráveis (fonte → destino → operador → profundidade) pra ligar, por exemplo, aftertouch no corte do filtro de um operador específico.</p>
+        <p>O envelope de pitch da voz inteira (knobs em laranja); os dois LFOs lado a lado (forma de onda, key sync, velocidade, delay, profundidade de pitch/amplitude); e 8 rotas de modulação configuráveis (fonte → destino → operador → profundidade) pra ligar, por exemplo, aftertouch no corte do filtro de um operador específico.</p>
       </div>
 
       <h3>Aba FX Globais</h3>
@@ -662,10 +683,10 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
       <p class="lede">Um sino FM simples, do zero, em 6 passos.</p>
       <ol class="steps">
         <li><strong>Escolha a parte</strong>Clique na aba <span class="kbd">Parte A</span> e confirme que <strong>Habilitada</strong> está marcado.</li>
-        <li><strong>Aplique um algoritmo de 2 portadoras</strong>No combo de algoritmo, escolha algo como <em>"2 cadeias: 4+4"</em> e clique <strong>Aplicar algoritmo</strong>. Isso monta duas cadeias de 4 operadores cada, com feedback no topo de cada uma.</li>
+        <li><strong>Aplique um algoritmo de 2 portadoras</strong>No card Algoritmo, escolha algo como <em>"2 cadeias: 4+4"</em> e clique <strong>Aplicar</strong>. Isso monta duas cadeias de 4 operadores cada, com feedback no topo de cada uma.</li>
         <li><strong>Toque uma nota e ouça o cru</strong>Pressione <span class="kbd">A</span> no teclado (nota C). Vai soar denso — é o feedback default (0.3) em todo mundo.</li>
         <li><strong>Ajuste os moduladores</strong>Na tabela de operadores, baixe o <strong>Feedback</strong> dos operadores de topo pra algo como 0.1, e mude o <strong>Ratio</strong> de um dos moduladores pra um valor não-inteiro (tipo 1.41 ou 3.5) — proporções não-inteiras entre portadora e modulador são o que dá o caráter metálico/de sino em FM.</li>
-        <li><strong>Modele o envelope</strong>Clique na linha do operador portador (o que tem <em>Output mix</em> alto) pra abrir o painel de detalhe, e ajuste o <strong>Amp EG</strong>: ataque rápido (rate alto), decaimento longo (rate baixo no estágio de release) — é o formato clássico de sino, ataque instantâneo e cauda longa.</li>
+        <li><strong>Modele o envelope</strong>No gráfico de envelopes, clique na curva do operador portador (a caixa preenchida no diagrama) e arraste os pontos: o do ataque bem pra esquerda (instantâneo) e o do release pra direita (cauda longa) — é o formato clássico de sino. Os knobs logo abaixo do gráfico fazem o mesmo com precisão.</li>
         <li><strong>Salve</strong>Digite um nome no campo <strong>Nome</strong> da seção Patch (ex.: <code>Sino</code>) e clique <strong>Salvar</strong> — vira <code>patches/Sino.json</code> e aparece na lista.</li>
       </ol>
       <div class="callout">

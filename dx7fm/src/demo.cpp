@@ -7,6 +7,10 @@
 #include "wav_writer.h"
 #include "../app/event_queue.h"
 #include "../app/patch_browser.h"
+#include "../app/envelope_math.h"
+#include "../app/audio_tap.h"
+#include "../app/spectrum.h"
+#include "../app/spectrogram_history.h"
 
 #include <algorithm>
 #include <atomic>
@@ -2520,6 +2524,156 @@ static void testDeadOperatorRevivedByLiveEdit() {
           "operador morto ligado ao vivo entra soando no ponto certo do envelope");
 }
 
+// --- [ADICIONADO em 2026-10-18] grafico de envelopes da UI ------------------
+
+static void testEnvelopeGraphMathMatchesEngine() {
+    // as duracoes que o grafico desenha tem que bater com o SegmentEG real
+    EGParams eg;
+    const uint8_t rate[4] = {70, 45, 30, 55}, level[4] = {99, 60, 40, 0};
+    for (int k = 0; k < 4; ++k) { eg.rate[k] = rate[k]; eg.level[k] = level[k]; }
+    dx7fm_app::EgTimes t = dx7fm_app::egTimes(eg);
+
+    SegmentEG seg;
+    seg.configure(eg.rate, eg.level);
+    seg.noteOn(0.0f);
+    const double sr = 48000.0;
+    int n = 0;
+    float v = 0.0f;
+    float reachedL3 = -1.0f;
+    for (; n < 48000 * 30; ++n) {
+        v = seg.process(sr);
+        if (reachedL3 < 0.0f && v == 40.0f) reachedL3 = (n + 1) / static_cast<float>(sr);
+        if (reachedL3 >= 0.0f) break;
+    }
+    seg.noteOff();
+    int r = 0;
+    for (; r < 48000 * 30 && !seg.isIdle(); ++r) seg.process(sr);
+    float releaseSec = r / static_cast<float>(sr);
+    std::printf("  (ate o sustain: grafico %.4fs, motor %.4fs | release: grafico %.4fs, motor %.4fs)\n",
+                t.untilSustain(), reachedL3, t.stage[3], releaseSec);
+    check(std::abs(t.untilSustain() - reachedL3) < 3.0f / 48000.0f + 1e-3f * t.untilSustain(),
+          "grafico de envelopes: tempo ate o sustain bate com o SegmentEG real");
+    check(std::abs(t.stage[3] - releaseSec) < 3.0f / 48000.0f + 1e-3f * t.stage[3],
+          "grafico de envelopes: tempo de release bate com o SegmentEG real");
+
+    // conta inversa (arrastar o ponto na horizontal): tempo -> rate devolve o rate
+    bool roundTrip = true;
+    for (int rr = 0; rr <= 99; ++rr) {
+        float sec = dx7fm_app::egStageSeconds(10.0f, 80.0f, static_cast<float>(rr));
+        float back = dx7fm_app::egRateForSeconds(10.0f, 80.0f, sec);
+        roundTrip &= std::abs(back - rr) < 0.01f;
+    }
+    check(roundTrip, "grafico de envelopes: tempo -> rate e o inverso exato de rate -> tempo (0..99)");
+    check(dx7fm_app::egRateForSeconds(50.0f, 50.0f, 1.0f) < 0.0f, "estagio sem variacao de level: tempo nao depende do rate (sinaliza -1)");
+
+    bool axis = true;
+    for (float tt : {0.0f, 0.004f, 0.05f, 0.7f, 3.0f, 19.9f})
+        axis &= std::abs(dx7fm_app::egXToTime(dx7fm_app::egTimeToX(tt, 20.0f), 20.0f) - tt) < 1e-4f + tt * 1e-4f;
+    check(axis, "eixo de tempo comprimido do grafico: x(t) e t(x) sao inversos");
+}
+
+// --- [ADICIONADO em 2026-10-18] visualizadores (osciloscopio/espectrograma) ---
+
+static void testSpectrumAnalyzer() {
+    const int n = 4096;
+    const double sr = 48000.0;
+    dx7fm_app::SpectrumAnalyzer an(n);
+    std::vector<float> x(n), db;
+    // seno de amplitude 0.5 exatamente no bin 100 (~1171.9 Hz): pico em -6.02 dB no bin 100
+    for (int i = 0; i < n; ++i) x[static_cast<size_t>(i)] = 0.5f * std::sin(2.0f * kPi * 100.0f * i / n);
+    an.magnitudeDb(x.data(), db);
+    int peakBin = static_cast<int>(std::max_element(db.begin(), db.end()) - db.begin());
+    std::printf("  (seno 0.5 no bin 100: pico no bin %d, %.2f dB; bin 140: %.1f dB)\n", peakBin, db[100], db[140]);
+    check(peakBin == 100 && std::abs(db[100] - 20.0f * std::log10(0.5f)) < 0.05f,
+          "FFT: seno de amplitude 0.5 aparece no bin certo com -6.02 dB (normalizacao da janela de Hann)");
+    check(db[140] < -80.0f, "FFT: longe do seno o espectro fica no piso (janela de Hann sem vazamento grande)");
+
+    // faixas log: 1kHz cai na faixa certa
+    std::vector<float> bands;
+    for (int i = 0; i < n; ++i) x[static_cast<size_t>(i)] = std::sin(2.0f * kPi * 1000.0f * i / static_cast<float>(sr));
+    an.magnitudeDb(x.data(), db);
+    dx7fm_app::logBands(db, sr, n, 56, 20.0f, 20000.0f, bands);
+    int bestBand = static_cast<int>(std::max_element(bands.begin(), bands.end()) - bands.begin());
+    int expected = static_cast<int>(56 * std::log(1000.0 / 20.0) / std::log(1000.0));
+    std::printf("  (1 kHz: faixa mais forte %d de 56, esperada %d)\n", bestBand, expected);
+    check(std::abs(bestBand - expected) <= 1, "espectrograma: 1 kHz cai na faixa certa da escala log (20 Hz - 20 kHz)");
+
+    char note[16];
+    dx7fm_app::noteName(440.0f, note, sizeof note);
+    bool ok = std::string(note) == "A4";
+    dx7fm_app::noteName(261.63f, note, sizeof note);
+    ok &= std::string(note) == "C4";
+    check(ok, "nome de nota: 440 Hz = A4, 261.6 Hz = C4");
+}
+
+static void testAudioTapWrapAround() {
+    dx7fm_app::AudioTap tap;
+    // escreve 3x o tamanho do buffer, em blocos de 256, com L = i e R = -i/2... mono = i/4
+    const int total = static_cast<int>(dx7fm_app::AudioTap::kSize) * 3 + 77;
+    std::vector<float> block(512);
+    int written = 0;
+    while (written < total) {
+        int frames = std::min(256, total - written);
+        for (int i = 0; i < frames; ++i) {
+            float v = static_cast<float>(written + i);
+            block[static_cast<size_t>(2 * i)] = v;
+            block[static_cast<size_t>(2 * i + 1)] = v * 0.5f;
+        }
+        tap.push(block.data(), frames);
+        written += frames;
+    }
+    std::vector<float> out(1000);
+    tap.readMono(tap.written(), 1000, out.data());
+    bool ok = tap.written() == static_cast<uint64_t>(total);
+    for (int i = 0; i < 1000; ++i) ok &= out[static_cast<size_t>(i)] == 0.75f * static_cast<float>(total - 1000 + i);
+    check(ok, "tap de audio: depois de dar a volta no buffer, le as ultimas amostras certas (mono = (L+R)/2)");
+    dx7fm_app::AudioTap empty;
+    std::vector<float> z(10, 1.0f);
+    empty.readMono(0, 10, z.data());
+    check(std::all_of(z.begin(), z.end(), [](float v) { return v == 0.0f; }), "tap de audio: antes do inicio le silencio");
+}
+
+static void testSpectrogramHistory() {
+    using H = dx7fm_app::SpectrogramHistory;
+    const double sr = 48000.0;
+    const float freqs[8] = {130.8f, 196.0f, 261.6f, 329.6f, 392.0f, 523.3f, 659.3f, 784.0f};
+    const int segment = 20160; // 0.42s por nota, 8 notas = 3.36s (mais que os 0.68s que o tap guarda)
+    auto bandOf = [](float hz) { return static_cast<int>(H::kBands * std::log(hz / H::kFMin) / std::log(H::kFMax / H::kFMin)); };
+    auto peakBand = [](const float* col) { return static_cast<int>(std::max_element(col, col + H::kBands) - col); };
+
+    // modo "UI travada": todo o audio entra antes da primeira atualizacao
+    dx7fm_app::AudioTap tap;
+    H stalled, live;
+    std::vector<float> block(512);
+    int frame = 0;
+    for (int k = 0; k < 8; ++k)
+        for (int i = 0; i < segment; i += 256) {
+            for (int j = 0; j < 256; ++j, ++frame) block[2 * j] = block[2 * j + 1] = 0.5f * std::sin(2.0f * kPi * freqs[k] * frame / static_cast<float>(sr));
+            tap.push(block.data(), 256);
+            live.update(tap, sr); // modo normal: atualiza a cada bloco
+        }
+    stalled.update(tap, sr);
+
+    // cada coluna termina em um quadro conhecido -> nota esperada
+    int wrongStalled = 0, staleRead = 0, silentStalled = 0, wrongLive = 0, checked = 0;
+    for (int c = 0; c < H::kCols; ++c) {
+        int64_t end = static_cast<int64_t>(tap.written()) - static_cast<int64_t>(H::kCols - 1 - c) * H::kHop;
+        int64_t start = end - H::kFft;
+        if (start < 0 || start / segment != (end - 1) / segment) continue; // bloco atravessa 2 notas: ambiguo
+        int expected = bandOf(freqs[start / segment]);
+        ++checked;
+        const float* sc = stalled.column(c);
+        bool silent = *std::max_element(sc, sc + H::kBands) <= H::kSilenceDb;
+        if (silent) ++silentStalled;
+        else if (std::abs(peakBand(sc) - expected) > 1) { ++wrongStalled; ++staleRead; }
+        if (std::abs(peakBand(live.column(c)) - expected) > 1) ++wrongLive;
+    }
+    std::printf("  (%d colunas checadas | UI travada: %d em silencio (audio ja saiu do tap), %d com frequencia ERRADA | UI normal: %d erradas)\n",
+                checked, silentStalled, wrongStalled, wrongLive);
+    check(staleRead == 0 && silentStalled > 0, "espectrograma: apos UI travada, colunas cujo audio saiu do tap ficam em silencio (nunca audio recente no lugar do antigo)");
+    check(wrongLive == 0 && checked > 100, "espectrograma: atualizando a cada bloco, cada coluna mostra a nota certa daquele momento");
+}
+
 int main() {
     std::filesystem::create_directories("output");
 
@@ -2614,6 +2768,10 @@ int main() {
     testGlobalFxOrder();
     testGlobalFxCost();
     testDeadOperatorRevivedByLiveEdit();
+    testEnvelopeGraphMathMatchesEngine();
+    testSpectrumAnalyzer();
+    testAudioTapWrapAround();
+    testSpectrogramHistory();
 
     std::printf("== Resultado: %d passaram, %d falharam ==\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

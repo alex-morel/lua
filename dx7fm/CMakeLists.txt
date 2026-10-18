@@ -42,6 +42,8 @@ if(SDL2_FOUND AND ALSA_FOUND)
         ${ALSA_INCLUDE_DIRS}
     )
     target_compile_options(dx7fm_standalone PRIVATE -Wall -Wextra ${SDL2_CFLAGS_OTHER})
+    # fonte da UI (Roboto Medium, distribuida com o Dear ImGui)
+    target_compile_definitions(dx7fm_standalone PRIVATE DX7FM_FONT_DIR="${IMGUI_DIR}/misc/fonts")
     target_link_directories(dx7fm_standalone PRIVATE ${SDL2_LIBRARY_DIRS} ${ALSA_LIBRARY_DIRS})
     target_link_libraries(dx7fm_standalone PRIVATE ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} Threads::Threads)
 else()

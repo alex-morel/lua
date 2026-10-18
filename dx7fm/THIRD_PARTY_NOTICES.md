@@ -16,6 +16,7 @@ completo sob a GPLv3.
 | Freeverb | reverb "Room" (`FreeverbRoom`) | Jezar at Dreampoint | domínio público | porta fiel |
 | Faust phaflangers.lib | phaser e flanger (`Phaser`, `Flanger`) | Julius O. Smith III | STK-4.3 (estilo MIT) | porta, com mudanças |
 | Audio EQ Cookbook | EQ de 3 bandas (`Eq3`) | Robert Bristow-Johnson | fórmulas publicadas | implementação própria |
+| Roboto Medium | fonte da interface (`third_party/imgui/misc/fonts/Roboto-Medium.ttf`) | Google (Christian Robertson) | Apache 2.0 | arquivo distribuído com o Dear ImGui, carregado em tempo de execução |
 
 As mudanças feitas em cada porta estão descritas no comentário de cabeçalho
 do bloco correspondente em `src/dx7_globalfx.h`.
@@ -129,3 +130,11 @@ Texto completo em `third_party/mverb/LICENSE` (idêntico a `LICENSE`).
 ### Dear ImGui — MIT
 
 Ver `third_party/imgui/LICENSE.txt`.
+
+### Roboto — Apache License 2.0
+
+A fonte Roboto (Copyright Google, desenhada por Christian Robertson) é
+licenciada sob a Apache License, Version 2.0
+(<https://www.apache.org/licenses/LICENSE-2.0>), compatível com a GPLv3. O app
+carrega o arquivo `Roboto-Medium.ttf` que vem com o Dear ImGui; sem ele, usa a
+fonte embutida do ImGui.
