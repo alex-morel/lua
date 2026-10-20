@@ -73,7 +73,18 @@ dx7fm/
     dx7_alloc.h     - O ALOCADOR/SYNTH: pool de 64 vozes fisicas, 4 partes,
                       logica de Poly/Mono/Unison, sustain/sostenuto,
                       dispatch de controladores MIDI (bend, mod wheel,
-                      aftertouch).
+                      aftertouch). Renderiza em blocos (renderBlock), com
+                      as vozes em paralelo (setWorkerThreads).
+    dx7_threads.h   - [ADICIONADO em 2026-10-20] WorkerPool: pool de
+                      threads sem trava que o Synth usa pra renderizar
+                      vozes em paralelo. Ver secao 7 (renderBlock).
+    dx7_resynth.h   - [ADICIONADO em 2026-10-20] Ressintese: analisa um som
+                      gravado e gera um operador Additive (espectros A/B,
+                      fxEG do morph, Amp EG). Ver secao 4 (Waveform).
+    dx7_fft.h       - FFT radix-2 (usada pela ressintese e pelo
+                      espectrograma da UI).
+    wav_reader.h    - [ADICIONADO em 2026-10-20] leitor de WAV (PCM 8/16/
+                      24/32, float 32/64, extensible), mixa em mono.
     dx7_patch_io.h  - [ADICIONADO em 2026-09-21] Persistencia de patch:
                       um JSON minimo proprio (classe JsonValue, parser +
                       writer, sem lib externa) mais as funcoes
@@ -97,7 +108,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 193 checagens de sanidade em 95 funcoes de teste (nao
+    demo.cpp        - 217 checagens de sanidade em 107 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -166,8 +177,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     que incluem os headers do motor pelo nome)
     ./demo
 
-Isso deve imprimir 193 linhas "[PASS] ..." e no final:
-    == Resultado: 193 passaram, 0 falharam ==
+Isso deve imprimir 217 linhas "[PASS] ..." e no final:
+    == Resultado: 217 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -217,7 +228,10 @@ Para usar o motor em outro programa, basta:
     synth.noteOn(0, 60, 100);           // parte, nota MIDI, velocity
     float l, r;
     synth.renderStereo(l, r);           // uma amostra estereo por chamada
+    float L[256], R[256];
+    synth.renderBlock(L, R, 256);       // ou um bloco (mais rapido; mesma saida)
     synth.noteOff(0, 60);
+    // opcional: synth.setWorkerThreads(3) -- vozes em 3 threads extras
 
 IMPORTANTE: [ATUALIZADO em 2026-09-21] `recompile(idx)` precisa ser chamado
 sempre que QUALQUER campo de `part(idx).voice` for alterado -- nao so a
@@ -263,11 +277,12 @@ ou um leitor de arquivo preencheria.
                   HalfSine, AbsSine, QuarterSine, AlternatingSine,
                   CamelSine, SquaredSine, LogSaw, Additive }
       [Additive ADICIONADO em 2026-10-18, no FIM do enum] Sintese aditiva:
-      o operador soma kNumPartials (8) osciladores senoidais REAIS, cada
-      um com amplitude (0..1) e razao de frequencia (0.01..32 x f do
-      operador) LIVRES -- razoes inteiras = harmonicos, fracionarias =
-      inarmonicos (sinos, tambores). Dois espectros, OperatorParams::
-      additiveA/additiveB (struct PartialSet {amp[8], ratio[8]}); a
+      o operador soma kNumPartials (64; [era 8 ate 2026-10-20])
+      osciladores senoidais REAIS, cada um com amplitude (0..1) e razao de
+      frequencia (0.01..kMaxPartialRatio=128 x f do operador) LIVRES --
+      razoes inteiras = harmonicos, fracionarias = inarmonicos (sinos,
+      tambores). Dois espectros, OperatorParams::additiveA/additiveB
+      (struct PartialSet {amp[64], ratio[64]}, alinhados em 32 bytes); a
       posicao do morph entre eles e morphDepth * fxEG/99 + ModDest::
       OperatorMorph (clampado 0..1) e o morph interpola amplitudes E
       razoes (um parcial pode deslizar de frequencia na nota). O fxEG e o
@@ -281,16 +296,64 @@ ou um leitor de arquivo preencheria.
           com oversampling) e desligado; a fase continua andando.
         - normalizacao: divide pela SOMA das amplitudes (pico <= 1); a soma
           inclui os desligados por Nyquist (volume nao sobe em nota aguda).
-        - seno por tabela (fastSin01: 4096 pontos + interpolacao, erro
-          ~3e-7), ~2x mais barato que std::sin.
+        - [2026-10-20] SIMD (namespace dx7fm::simd): o laco dos parciais
+          processa 8 por instrucao (AVX2+FMA) ou 4 (SSE2, todo x86-64),
+          escolhido em tempo de execucao (__builtin_cpu_supports; a variavel
+          de ambiente DX7FM_NO_AVX2 forca o SSE2). Vetores via extensoes do
+          GCC/Clang (vector_size), seno polinomial (Taylor ate t^11 depois
+          de dobrar a fase em +-1/4 de ciclo, erro ~1e-7). So entram os
+          grupos de 8 parciais ate o ultimo com amplitude > 0 em A ou B
+          (OpCache::partialGroups), entao um espectro de 8 parciais custa o
+          mesmo que antes. Com phase distortion > 0 usa o laco escalar
+          (fastSin01 + phaseDistort por parcial).
       Por que osciladores e nao wavetable: com razoes livres a soma nao e
       periodica no periodo do operador, entao nao cabe numa tabela de um
-      ciclo. Custo medido (depois da otimizacao, ver 7C): 16 vozes com os
-      8 operadores aditivos (8 parciais cada) ~27% de um nucleo, ~2x o
-      custo dos mesmos 8 operadores em Sine.
+      ciclo. Custo medido (16 vozes x 8 operadores aditivos com os 64
+      parciais ligados, 1 thread): escalar 158% de um nucleo -> SIMD AVX2
+      ~41% (SSE2 ~80%); ~3x o custo dos mesmos 8 operadores em Sine. Com
+      as threads de voz (secao 7, renderBlock) 64 vozes assim cabem em
+      tempo real (~27% de um nucleo de relogio com 7 threads extras).
       (Uma versao de 32 harmonicos fixos em wavetable chegou a ser
       prototipada e foi trocada por esta, a pedido do usuario, em troca
       dos parciais inarmonicos.)
+      RESSINTESE [ADICIONADO em 2026-10-20] (src/dx7_resynth.h, UI em
+      app/resynth_ui.h): monta um operador Additive a partir de um WAV.
+        - envelope RMS (quadros de 10ms, passo 5ms): onset (-50 dB do
+          pico), pico, fim (-60 dB);
+        - dois instantes, A (ataque; padrao = quadro comecando no onset) e
+          B (sustain; padrao = onset + 0.5s), arrastaveis na UI. Em cada um,
+          FFT com janela Blackman-Harris de 4 termos (lobulos laterais
+          -92 dB) de 2048..16384 amostras e zero-padding 4x; maximo local
+          em +-2 bins acima do limiar (padrao -60 dB do pico mais forte) =
+          parcial, frequencia e amplitude por interpolacao parabolica em dB.
+          Mede seno puro com erro < 0.1% em frequencia e < 3% em amplitude;
+        - referencia (o "1x"): candidatos f = pico/k (k 1..8, 10 picos mais
+          fortes), pontuacao = soma de sqrt(amp)/sqrt(harmonico) dos picos
+          que caem num harmonico de f (tolerancia 2% do harmonico + 2% de
+          f) -- o 1/sqrt(h) faz f/2 perder pra f e impede um f baixo de
+          "explicar" picos inarmonicos por acaso. Se o melhor explica < 60%
+          do peso total (sino), referencia = parcial forte mais grave.
+          Override manual na UI;
+        - pareamento A <-> B: o morph interpola o SLOT k de A com o slot k
+          de B, entao picos de A e B sao pareados por frequencia (guloso,
+          < 3%); sem par = mesma razao nos dois lados e amplitude 0 no que
+          falta (fade em vez de glissando). Mais de 64: ficam os mais
+          fortes; slots em ordem de frequencia. Amplitudes normalizadas por
+          espectro (max = 1; o motor normaliza pela soma de qualquer jeito);
+        - fxEG: L1 = 1 com o rate que leva o tempo do onset ate A (o EG nao
+          tem "espera"; morph 0.01 ~ A), L2 = L3 = L4 = 99 chegando no
+          instante B; morphDepth = 1;
+        - Amp EG (opcional): ataque ate o pico, decai ate o nivel de B, e
+          depois: se o som morre no arquivo ou cai > 6 dB/s, extrapola a
+          inclinacao ate 0 (sino, piano); senao sustenta no nivel do fim.
+          0.75 dB por unidade de level; rates quantizados (~1 dB/s de erro
+          no exemplo do teste: -22.5 dB contra -20 dB em 1s);
+        - opcional: operador em razao 1x sem fine/detune, pra a nota da
+          referencia soar na altura original (a UI mostra qual nota).
+      Limites: so dois instantes (nao ha envelope por parcial: parciais que
+      morrem em tempos diferentes viram um morph linear entre A e B); o
+      fxEG e o MESMO do efeito FX do operador (a UI avisa se FX != Bypass);
+      rate scaling do operador tambem acelera o fxEG em notas agudas.
       Forma de onda do oscilador de cada operador (DX7 original: so Sine).
       [ADICIONADO em 2026-09-21] As ultimas 7 (HalfSine..LogSaw) sao uma
       reconstrucao PROPRIA das 8 formas de onda do motor AFM da Yamaha
@@ -1002,7 +1065,34 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
       allNotesOff(part) - forca noteOff() em tudo da parte e limpa o
           tracking.
 
+      renderBlock(outL*, outR*, n) / setWorkerThreads(n)
+          [ADICIONADO em 2026-10-20] Gera n amostras, em pedacos de ate
+          kRenderChunk (256): (1) cada voz ativa renderiza o pedaco inteiro
+          num buffer proprio (amostra + loudness por amostra; voiceBuf_/
+          loudBuf_, alocados no init); (2) a mixagem soma as vozes NA ORDEM
+          DOS SLOTS, amostra por amostra, e aplica o mesmo pos-mix de
+          sempre (mixSample: polifonia, FX globais, volume, limitador).
+          Como a ordem das somas nao muda, a saida e BIT A BIT igual a
+          chamar renderStereo n vezes, com qualquer numero de threads
+          (testRenderBlockMatchesPerSample/ThreadsAreDeterministic). Unica
+          diferenca de tempo: rebind() (pegar um recompile() novo) e o
+          pan/level da parte sao lidos 1x por pedaco (<= ~5ms).
+          (1) roda em paralelo no WorkerPool (dx7_threads.h) quando
+          setWorkerThreads(n > 0) e o pedaco tem >= 32 amostras: a thread
+          que chama tambem pega vozes; ela distribui com um cursor atomico
+          de 64 bits [job | count | proximo] (uma thread atrasada do bloco
+          anterior nunca pega voz do bloco novo: o CAS falha porque o job
+          mudou), espera done == count com spin (_mm_pause) e os workers
+          dormem num futex (std::atomic::wait) entre blocos e tentam
+          SCHED_FIFO 70. Vozes nao compartilham estado (cada uma tem o
+          proprio RNG), so leem o snapshot do patch. Custo medido com 7
+          threads extras (16 threads de hardware): 64 vozes x 8 ops Sine
+          39% -> 7%; 64 vozes x 8 ops Additive (64 parciais) 163% -> 27%.
+          So o pos-mix (FX globais) continua serial.
+
       renderStereo(outL&, outR&)
+          [2026-10-20: agora = renderBlock(&outL, &outR, 1); a descricao
+          abaixo vale pra mixagem de cada amostra.]
           Itera TODOS os 64 slots (nao so os de uma parte — mixa as 4
           partes de uma vez), soma sample*level com pan (pr.params.pan +
           s.subPan, clampado -1..1), usando um pan LINEAR simples (nao
@@ -1328,8 +1418,11 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
     Additive 16 vozes 49% -> 27%. O que sobrou e o trabalho em si: numa
     cadeia de FM cada operador depende do anterior na mesma amostra, entao
     o custo e latencia dessa corrente (a leitura da tabela de seno domina
-    o perfil). Proximo passo, se precisar: SIMD entre vozes (layout SoA,
-    roteiro secao 11) ou processar vozes em mais de uma thread.
+    o perfil). [2026-10-20] Feito depois: renderizacao em blocos (~15% a
+    menos so por isso), vozes em varias threads (secao 7, renderBlock) e
+    SIMD no laco de parciais da Additive (secao 4). SIMD entre vozes
+    (layout SoA) nao foi feito: com as threads ja cobrindo as vozes, o
+    ganho nao paga a reescrita do motor.
     Nota do Crush: e um quantizador, entao diferencas de ~1e-7 na entrada
     podem cair num degrau de quantizacao vizinho (~2.6e-3 com 9.6 bits) --
     num cenario com Crush a diferenca chegou a 3e-4; sem ele, 2.7e-6.
@@ -1805,7 +1898,7 @@ mudancas de cada porta estao no comentario de cabecalho do bloco.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 193 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 217 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
@@ -1999,8 +2092,12 @@ Tres threads mexem com o Synth ao mesmo tempo:
   - UI thread (main): desenha a UI, edita synth.part(idx) (a copia de
     STAGING do timbre) e chama recompile() -- ja e seguro por construcao,
     ver secao 7 ("THREAD SAFETY").
-  - Audio thread (dentro de AlsaAudioOut): chama synth.renderStereo() um
-    period (256 frames) de cada vez.
+  - Audio thread (dentro de AlsaAudioOut): chama synth.renderBlock() um
+    period (256 frames) de cada vez. [2026-10-20] Tenta SCHED_FIFO 70 e
+    usa as threads de voz do Synth (setWorkerThreads: ~1 por nucleo fisico
+    menos 1, ate 7; DX7FM_THREADS=n forca, 0 = sem threads). Essas threads
+    so rodam DENTRO do renderBlock, entao nao mudam nada do que esta
+    abaixo (eventos continuam aplicados pela audio thread entre blocos).
   - MIDI thread (dentro de AlsaMidiIn): recebe eventos ALSA sequencer.
 
 O PROBLEMA: Synth::noteOn/noteOff/pitchBend/modWheel/etc mexem em
@@ -2105,6 +2202,27 @@ harnesses de teste/screenshot).
       botao direito esconde) + "Todos"/"So usados". Dois paineis (ate o
       sustain | depois do note off), eixo de tempo comprimido (log perto de
       0) com a escala congelada durante o arrasto.
+  app/additive_presets.h, app/additive_editor.h - [ADICIONADO em
+      2026-10-20] editor da onda Additive de 64 parciais. additive_presets.h
+      (sem ImGui, testado no demo.cpp): eixos (razao em escala log 0.25..
+      128x com encaixe em inteiros / 1/n; amplitude linear ou em dB -60..0),
+      paintStroke (arrastar rapido preenche todas as barras do caminho) e os
+      presets gerados por formula: Seno, Serra 1/k, Quadrada e Triangulo
+      (impares ate 127), Orgao (drawbars), Vogal (formantes), Sino (modos da
+      barra livre, raizes de cos(b)cosh(b)=1, 16 ate 128x) e Tambor (64
+      modos da membrana circular, zeros de Bessel via std::cyl_bessel_j).
+      additive_editor.h: grafico de barras pintavel (botao esquerdo pinta,
+      direito desliga o parcial / volta a razao pro harmonico, Shift
+      encaixa), 3 vistas (Amplitude, Amplitude dB, Razao), o outro espectro
+      (A/B) como marca branca, campos exatos do parcial selecionado,
+      Copiar/Trocar/Limpar/Razoes harmonicas e o knob de Morph.
+  app/resynth_ui.h - [ADICIONADO em 2026-10-20] dialogo "Ressintetizar
+      WAV..." (botao no editor da aditiva): navegador de pastas/.wav, forma
+      de onda com os instantes A e B arrastaveis (faixa sombreada = quadro
+      da FFT), grafico dos picos achados em A e B, janela/limiar/max
+      parciais, referencia detectada (nota) ou manual, opcoes de aplicar.
+      A analise roda na thread da UI a cada mudanca (~2ms por analise com
+      janela 8192).
   app/audio_tap.h, app/spectrum.h, app/spectrogram_history.h, app/viz.h -
       [ADICIONADO em 2026-10-18] osciloscopio e espectrograma da saida, numa
       faixa recolhivel abaixo do cabecalho (DrawVisualizers). A audio thread

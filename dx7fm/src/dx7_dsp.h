@@ -1,6 +1,7 @@
 #pragma once
 #include "dx7_params.h"
 #include <cmath>
+#include <cstdlib>
 #include <vector>
 #include <random>
 #include <algorithm>
@@ -235,7 +236,7 @@ inline float oscWave(float phase01, Waveform wf, std::mt19937& rng,
         case Waveform::CamelSine:       return afmCamelSine(phase01);
         case Waveform::SquaredSine:     return afmSquaredSine(phase01);
         case Waveform::LogSaw:          return afmLogSaw(phase01);
-        // Additive tem estado (fase de 8 osciladores) e e gerada pela Voice
+        // Additive tem estado (fase de kNumPartials osciladores) e e gerada pela Voice
         // via PartialOscillators; se chegar aqui, cai no seno do parcial 1
         case Waveform::Additive:        return fastSin01(phase01);
     }
@@ -250,45 +251,164 @@ inline float phaseDistort(float phase01, float amount) {
     return warped;
 }
 
-// [ADICIONADO em 2026-10-18] Os 8 osciladores senoidais de um operador
-// Additive (estado = fase de cada parcial). Cada parcial tem frequencia
-// propria (razao livre, nao precisa ser harmonica), entao nao da pra usar
-// uma wavetable: sao osciladores de verdade.
+// [ADICIONADO em 2026-10-18; SIMD e 8 -> 64 parciais em 2026-10-20]
+// Kernel dos osciladores da forma de onda Additive. Os kNumPartials
+// parciais sao independentes e fazem a MESMA conta, entao sao calculados 8
+// por vez com vetores de 8 floats (extensoes de vetor do GCC): numa CPU com
+// AVX2+FMA cada vetor e uma instrucao; sem AVX2 (qualquer x64 tem SSE2) o
+// compilador divide em 2 de 4. A versao AVX2 e escolhida em tempo de
+// execucao (cpuSupportsAvx2Fma), entao o binario roda em qualquer x64.
+//
+// Seno: polinomio (Taylor ate t^11 apos reduzir a fase a +-1/4 de ciclo,
+// erro ~6e-8) em vez da tabela de fastSin01 -- leitura de tabela com indice
+// diferente por lane nao vetoriza bem.
+// -Wpsabi ("vetor AVX sem AVX muda a ABI") desligado de proposito daqui em
+// diante (sem push/pop): os helpers que recebem/devolvem vetores de 32 bytes
+// sao always_inline, nunca viram chamada de verdade, entao a ABI nao entra em
+// jogo -- mas o GCC emite o aviso no PONTO DE USO (no .cpp que inclui este
+// header), depois de um eventual pop.
+#if defined(__GNUC__)
+#pragma GCC diagnostic ignored "-Wpsabi"
+#endif
+namespace simd {
+// Largura do vetor e parametro de template: 8 floats (AVX2, 256 bits) ou 4
+// (SSE2, 128 bits -- a largura nativa sem AVX; com 8 o GCC divide em 2
+// metades e faz as selecoes condicionais lane a lane, ficando MAIS LENTO
+// que o codigo escalar).
+typedef float f8 __attribute__((vector_size(32)));
+typedef int i8 __attribute__((vector_size(32)));
+typedef float f4 __attribute__((vector_size(16)));
+typedef int i4 __attribute__((vector_size(16)));
+
+#define DX7_SIMD_INLINE inline __attribute__((always_inline))
+template <typename F> DX7_SIMD_INLINE F loadv(const float* p) { F v; __builtin_memcpy(&v, p, sizeof v); return v; }
+template <typename F> DX7_SIMD_INLINE void storev(float* p, const F& v) { __builtin_memcpy(p, &v, sizeof v); }
+template <typename F, typename I> DX7_SIMD_INLINE F truncv(const F& x) { return __builtin_convertvector(__builtin_convertvector(x, I), F); } // |x| < 2^31
+
+// sin(2*pi*p) pra p em [0,1)
+template <typename F, typename I> DX7_SIMD_INLINE F sin2piv(const F& p) {
+    F x = p - 0.5f;                        // [-0.5, 0.5): sin(2pi p) = -sin(2pi x)
+    I hi = x > 0.25f, lo = x < -0.25f;     // reflete pra |x| <= 1/4 (sin(pi - a) = sin(a))
+    x = hi ? 0.5f - x : (lo ? -0.5f - x : x);
+    F t = x * 6.28318530717958647692f;
+    F t2 = t * t;
+    F poly = 1.0f + t2 * (-1.0f / 6.0f + t2 * (1.0f / 120.0f + t2 * (-1.0f / 5040.0f + t2 * (1.0f / 362880.0f + t2 * (-1.0f / 39916800.0f)))));
+    return -(t * poly);
+}
+
+template <typename F> DX7_SIMD_INLINE float hsum(const F& v) {
+    float s = 0.0f;
+    for (unsigned i = 0; i < sizeof(F) / sizeof(float); ++i) s += v[i];
+    return s;
+}
+
+// Uma amostra de `groups` grupos de 8 parciais. Devolve sum(amp*sen) e
+// escreve sum(amp) em ampSumOut. Parcial com amp 0 ou acima de Nyquist entra
+// so na soma das amplitudes (a fase anda igual, pra voltar sem descontinuidade).
+template <typename F, typename I, bool Morph>
+DX7_SIMD_INLINE float partialsKernel(float* phase, const float* aAmp, const float* aRatio, const float* bAmp, const float* bRatio,
+                                     float morph, float baseInc, float baseHz, float modIn, float nyquist, int groups, float& ampSumOut) {
+    constexpr int W = sizeof(F) / sizeof(float);
+    F sum = {}, ampSum = {};
+    const int n = groups * 8;
+    for (int o = 0; o < n; o += W) {
+        F amp = loadv<F>(aAmp + o), ratio = loadv<F>(aRatio + o);
+        if (Morph) {
+            amp += (loadv<F>(bAmp + o) - amp) * morph;
+            ratio += (loadv<F>(bRatio + o) - ratio) * morph;
+        }
+        F ph = loadv<F>(phase + o) + ratio * baseInc;  // >= 0
+        ph -= truncv<F, I>(ph);
+        storev<F>(phase + o, ph);
+        ampSum += amp;
+        F p = ph + ratio * modIn;                      // PM pode empurrar pra qualquer lado
+        p -= truncv<F, I>(p);
+        p = p < 0.0f ? p + 1.0f : p;
+        I audible = (amp > 0.0f) & (ratio * baseHz < nyquist);
+        F s = sin2piv<F, I>(p);
+        sum += audible ? amp * s : F{};
+    }
+    ampSumOut = hsum(ampSum);
+    return hsum(sum);
+}
+
+using KernelFn = float (*)(float*, const float*, const float*, const float*, const float*, float, float, float, float, float, int, float&);
+
+inline float kernelGeneric(float* ph, const float* aa, const float* ar, const float* ba, const float* br, float m, float inc, float hz,
+                           float mod, float nyq, int groups, float& ampSum) {
+    return m > 0.0f ? partialsKernel<f4, i4, true>(ph, aa, ar, ba, br, m, inc, hz, mod, nyq, groups, ampSum)
+                    : partialsKernel<f4, i4, false>(ph, aa, ar, ba, br, m, inc, hz, mod, nyq, groups, ampSum);
+}
+__attribute__((target("avx2,fma"))) inline float kernelAvx2(float* ph, const float* aa, const float* ar, const float* ba, const float* br,
+                                                            float m, float inc, float hz, float mod, float nyq, int groups, float& ampSum) {
+    return m > 0.0f ? partialsKernel<f8, i8, true>(ph, aa, ar, ba, br, m, inc, hz, mod, nyq, groups, ampSum)
+                    : partialsKernel<f8, i8, false>(ph, aa, ar, ba, br, m, inc, hz, mod, nyq, groups, ampSum);
+}
+
+inline bool cpuSupportsAvx2Fma() {
+    static const bool ok = [] {
+        __builtin_cpu_init();
+        return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
+    }();
+    return ok;
+}
+// DX7FM_NO_AVX2 no ambiente forca o caminho generico (usado pelos testes)
+inline KernelFn selectedKernel() {
+    static const KernelFn fn = (cpuSupportsAvx2Fma() && !std::getenv("DX7FM_NO_AVX2")) ? &kernelAvx2 : &kernelGeneric;
+    return fn;
+}
+#undef DX7_SIMD_INLINE
+} // namespace simd
+
+// Os osciladores de um operador Additive (estado = fase de cada parcial).
+// Cada parcial tem frequencia propria (razao livre, nao precisa ser
+// harmonica), entao nao da pra usar uma wavetable: sao osciladores de verdade.
 //  - morph (0..1) interpola amplitude E razao entre os espectros A e B.
 //  - PM: o parcial k recebe modIn * ratio_k ciclos de desvio de fase -- o
 //    mesmo que acontece com o harmonico k de uma onda periodica modulada em
 //    fase, entao com razoes harmonicas soa igual a modular a onda inteira.
-//  - Anti-aliasing: parcial com frequencia >= Nyquist e simplesmente
-//    desligado (a fase continua andando, pra voltar sem descontinuidade).
-//  - Normalizacao: divide pela SOMA das amplitudes (pico <= 1, como as
-//    outras formas de onda). A soma inclui os parciais desligados por
-//    Nyquist, entao o volume nao sobe quando uma nota aguda perde parciais.
-//    Todas as amplitudes em 0 = silencio.
+//  - Anti-aliasing: parcial com frequencia >= Nyquist e desligado (a fase
+//    continua andando, pra voltar sem descontinuidade).
+//  - Normalizacao: divide pela SOMA das amplitudes (pico <= 1). A soma inclui
+//    os parciais desligados por Nyquist, entao o volume nao sobe quando uma
+//    nota aguda perde parciais. Todas as amplitudes em 0 = silencio.
+//  - groups: quantos grupos de 8 parciais processar (ate o ultimo parcial com
+//    amplitude != 0 em A ou B, calculado pela Voice no cache do patch) --
+//    um seno puro processa 1 grupo, nao 8.
 struct PartialOscillators {
-    float phase[kNumPartials] = {};
+    alignas(32) float phase[kNumPartials] = {};
 
     void reset() { for (auto& p : phase) p = 0.0f; }
 
+    static int groupsFor(const OperatorParams::PartialSet& a, const OperatorParams::PartialSet& b) {
+        int last = -1;
+        for (int k = 0; k < kNumPartials; ++k) if (a.amp[k] != 0.0f || b.amp[k] != 0.0f) last = k;
+        return (last + 8) / 8; // last = -1 -> 0 grupos
+    }
+
     float process(const OperatorParams::PartialSet& a, const OperatorParams::PartialSet& b, float morph,
-                  float baseHz, float modIn, float phaseDistortion, float sampleRate) {
-        // laco quente (8 parciais x 8 ops x vozes x amostras): sem std::floor
-        // no caso comum (fase em [0,1) so precisa subtrair a parte inteira) e
-        // sem interpolar A/B quando o morph esta em 0
+                  float baseHz, float modIn, float phaseDistortion, float sampleRate, int groups = kNumPartials / 8) {
         const float nyquist = 0.5f * sampleRate;
         const float baseInc = baseHz / sampleRate;
+        if (phaseDistortion <= 0.0f) {
+            float ampSum = 0.0f;
+            float sum = simd::selectedKernel()(phase, a.amp, a.ratio, b.amp, b.ratio, morph, baseInc, baseHz, modIn, nyquist, groups, ampSum);
+            return ampSum > 0.0f ? sum / ampSum : 0.0f;
+        }
+        // phase distortion (rara): caminho escalar, um seno por parcial
         const bool morphing = morph > 0.0f;
         float sum = 0.0f, ampSum = 0.0f;
-        for (int k = 0; k < kNumPartials; ++k) {
+        for (int k = 0; k < groups * 8; ++k) {
             float amp = morphing ? a.amp[k] + (b.amp[k] - a.amp[k]) * morph : a.amp[k];
             float ratio = morphing ? a.ratio[k] + (b.ratio[k] - a.ratio[k]) * morph : a.ratio[k];
-            float ph = phase[k] + ratio * baseInc; // incremento > 0 (razao e baseHz positivos)
+            float ph = phase[k] + ratio * baseInc;
             if (ph >= 1.0f) ph -= static_cast<float>(static_cast<int>(ph));
             phase[k] = ph;
             ampSum += amp;
             if (amp <= 0.0f || ratio * baseHz >= nyquist) continue;
             float p = ph + ratio * modIn;
-            if (p >= 1.0f || p < 0.0f) p = wrap01(p); // PM pode empurrar pra qualquer lado
-            if (phaseDistortion > 0.0f) p = phaseDistort(p, phaseDistortion);
+            if (p >= 1.0f || p < 0.0f) p = wrap01(p);
+            p = phaseDistort(p, phaseDistortion);
             sum += amp * fastSin01(p);
         }
         return ampSum > 0.0f ? sum / ampSum : 0.0f;

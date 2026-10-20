@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <pthread.h>
+#include <sched.h>
 #include <string>
 #include <thread>
 #include <vector>
@@ -95,6 +97,12 @@ public:
 
 private:
     void threadLoop() {
+        // Tempo real (melhor esforco: precisa de rtprio nos limits do usuario;
+        // sem isso segue com prioridade normal). Mesma prioridade das threads
+        // de voz do synth (dx7_threads.h), que ela espera a cada bloco.
+        sched_param sp{};
+        sp.sched_priority = 70;
+        pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
         while (running_) {
             renderFn_(interleaved_.data(), static_cast<int>(periodFrames_));
 

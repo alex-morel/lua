@@ -1,4 +1,5 @@
 #pragma once
+#include "dx7_fft.h"
 #include <algorithm>
 #include <cmath>
 #include <complex>
@@ -11,29 +12,7 @@
 // escala logaritmica de frequencia, mapa de cores e nome de nota.
 namespace dx7fm_app {
 
-// FFT complexa in-place, iterativa (Cooley-Tukey radix-2). n potencia de 2.
-inline void fftInPlace(std::vector<std::complex<float>>& a) {
-    const size_t n = a.size();
-    for (size_t i = 1, j = 0; i < n; ++i) { // permutacao bit-reversa
-        size_t bit = n >> 1;
-        for (; j & bit; bit >>= 1) j ^= bit;
-        j ^= bit;
-        if (i < j) std::swap(a[i], a[j]);
-    }
-    for (size_t len = 2; len <= n; len <<= 1) {
-        double ang = -2.0 * 3.14159265358979323846 / static_cast<double>(len);
-        std::complex<float> wl(static_cast<float>(std::cos(ang)), static_cast<float>(std::sin(ang)));
-        for (size_t i = 0; i < n; i += len) {
-            std::complex<float> w(1.0f, 0.0f);
-            for (size_t k = 0; k < len / 2; ++k) {
-                std::complex<float> u = a[i + k], v = a[i + k + len / 2] * w;
-                a[i + k] = u + v;
-                a[i + k + len / 2] = u - v;
-                w *= wl;
-            }
-        }
-    }
-}
+using dx7fm::fftInPlace; // src/dx7_fft.h
 
 // Espectro de magnitude em dB de um bloco real, com janela de Hann.
 // Normalizado pra um seno de amplitude A (no centro de um bin) dar

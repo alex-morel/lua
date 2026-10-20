@@ -260,6 +260,7 @@ private:
     // cada amostra (pow de dB, pow de cents, varredura da matriz 8x8).
     struct OpCache {
         bool used = true;         // contribui pra saida (portadora ou modulador de alguem usado)
+        int partialGroups = 0;    // Additive: grupos de 8 parciais ate o ultimo com amplitude (ver PartialOscillators)
         bool fixed = false;
         float baseHz = 0.0f;      // fixo: fixedHz; senao: multiplicador (ratio * 2^(cents/1200))
         bool pegApplies = false;
@@ -297,6 +298,7 @@ private:
             const OperatorParams& o = v.op[i];
             OpCache& c = cache_[i];
             c.used = used[i];
+            c.partialGroups = o.waveform == Waveform::Additive ? PartialOscillators::groupsFor(o.additiveA, o.additiveB) : 0;
             c.fixed = o.fixedFreq;
             c.baseHz = o.fixedFreq ? o.fixedHz
                                    : o.coarseRatio * std::exp2((o.fineCents + o.detuneCents + extraDetuneCents_) / 1200.0f);
@@ -451,12 +453,12 @@ private:
             float fxEnv = op.fxEG.process(sampleRate_);
             float raw;
             if (opParams.waveform == Waveform::Additive) {
-                // 8 osciladores reais (dx7_dsp.h::PartialOscillators), cada um
+                // kNumPartials (64) osciladores reais (dx7_dsp.h::PartialOscillators), cada um
                 // na sua frequencia; recebem a MESMA PM (modIn) que o operador
                 // e sampleRate_ e a taxa INTERNA (com oversampling)
                 float morph = std::clamp(opParams.morphDepth * (fxEnv / 99.0f) + morphTrim[i], 0.0f, 1.0f);
                 raw = op.partials.process(opParams.additiveA, opParams.additiveB, morph, freqHz, modIn,
-                                          opParams.phaseDistortion, static_cast<float>(sampleRate_));
+                                          opParams.phaseDistortion, static_cast<float>(sampleRate_), c.partialGroups);
             } else {
                 raw = oscWave(ph, opParams.waveform, rng_, dist_);
             }

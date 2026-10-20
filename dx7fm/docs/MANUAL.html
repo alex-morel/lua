@@ -722,14 +722,27 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
         <span class="chip">Additive</span>
       </div>
       <p style="font-size:13.5px;color:var(--text-muted)">HalfSine…LogSaw são uma reconstrução própria inspirada nas formas de onda extras do motor AFM da Yamaha SY77/TX81Z — não uma cópia bit-exata da ROM original.</p>
-      <p><strong>Additive</strong> (síntese aditiva): o operador vira a soma de <strong>8 osciladores senoidais</strong>, cada um com sua <strong>amplitude</strong> e sua <strong>razão de frequência</strong> (× a frequência do operador). Razões inteiras (1, 2, 3…) dão harmônicos; razões fracionárias (2,76, 5,40…) dão parciais inarmônicos — sinos, barras, tambores. Ao escolher Additive, o painel de detalhe do operador mostra o editor:</p>
+      <p><strong>Additive</strong> (síntese aditiva): o operador vira a soma de <strong>64 osciladores senoidais</strong> (parciais), cada um com sua <strong>amplitude</strong> e sua <strong>razão de frequência</strong> (× a frequência do operador, de 0,01 a 128). Razões inteiras (1, 2, 3…) dão harmônicos; razões fracionárias (2,76, 5,40…) dão parciais inarmônicos — sinos, barras, tambores. Ao escolher Additive, o painel de detalhe do operador mostra o editor:</p>
       <ul>
-        <li><strong>8 sliders verticais</strong> (amplitude de cada parcial) com o campo da <strong>razão</strong> embaixo (arraste, ou Ctrl+clique pra digitar).</li>
-        <li>Dois espectros, <strong>A</strong> e <strong>B</strong> (escolha qual editar). O <strong>Morph A→B</strong> define quanto o <em>envelope de FX</em> leva de A até B — ex.: ataque metálico (B) que assenta num som mais puro (A). O morph interpola amplitudes <em>e</em> razões, então um parcial pode deslizar de frequência durante a nota. Na matriz de modulação, o destino <strong>OperatorMorph</strong> também move o morph (ex.: mod wheel).</li>
-        <li><strong>Presets</strong> aplicados no espectro em edição: Seno, Serra, Ímpares, Órgão, Sino, Tambor. <strong>Copiar A→B</strong> e <strong>Trocar A↔B</strong> ajudam a montar a transição.</li>
+        <li><strong>Gráfico de barras</strong>, uma barra por parcial: <strong>clique e arraste pra pintar</strong> o espectro (arrastar rápido preenche todas as barras do caminho). <strong>Botão direito</strong> desliga o parcial.</li>
+        <li>Três vistas: <strong>Amplitude</strong>, <strong>Amplitude dB</strong> (de −60 a 0 dB, bom pra mexer nos parciais fracos) e <strong>Razão</strong> (escala logarítmica; segure <strong>Shift</strong> pra encaixar em harmônicos inteiros; botão direito volta a barra pro harmônico da posição). Na vista de razão, parciais desligados aparecem em cinza.</li>
+        <li>Abaixo do gráfico, os <strong>valores exatos do parcial selecionado</strong> (o último clicado): amplitude, razão (Ctrl+clique pra digitar) e o botão <strong>= harmônico</strong>.</li>
+        <li>Dois espectros, <strong>A</strong> e <strong>B</strong> (escolha qual editar; o outro aparece como uma marca branca em cada barra). O knob <strong>Morph</strong> define quanto o <em>envelope de FX</em> leva de A até B — ex.: ataque metálico (B) que assenta num som mais puro (A). O morph interpola amplitudes <em>e</em> razões, então um parcial pode deslizar de frequência durante a nota. Na matriz de modulação, o destino <strong>OperatorMorph</strong> também move o morph (ex.: mod wheel).</li>
+        <li><strong>Presets</strong> aplicados no espectro em edição: Seno, Serra, Quadrada, Triângulo, Órgão (drawbars), Vogal (formantes do “a”), Sino (modos de uma barra livre) e Tambor (64 modos de uma membrana circular). <strong>Copiar A→B</strong>, <strong>Copiar B→A</strong>, <strong>Trocar A↔B</strong>, <strong>Razões harmônicas</strong> e <strong>Limpar</strong> ajudam a montar a transição.</li>
+        <li><strong>Ressintetizar WAV…</strong>: monta o operador a partir de um som gravado (veja abaixo).</li>
         <li>Parciais acima da metade da taxa de amostragem são desligados automaticamente (sem aliasing). Um operador aditivo continua podendo modular ou ser modulado em FM, e passar pelo efeito de FX.</li>
-        <li>Custo: cada operador aditivo usa cerca do dobro da CPU de um senoidal; com muitas vozes, prefira poucos operadores aditivos por patch.</li>
+        <li>Custo: o motor calcula os parciais em grupos de 8 com instruções vetoriais (AVX2) e só até o último parcial ligado — um espectro de 8 parciais custa bem menos que um de 64. As vozes são divididas entre os núcleos do processador, então dezenas de vozes aditivas cabem em tempo real num PC atual.</li>
       </ul>
+      <h3>Ressíntese (a partir de um WAV)</h3>
+      <p>No editor da forma de onda Additive, o botão <strong>Ressintetizar WAV…</strong> abre um diálogo que transforma um som gravado em parciais. Funciona melhor com <strong>uma nota só, isolada</strong> (sem reverb longo nem outras notas por cima).</p>
+      <ol>
+        <li>Escolha o arquivo na lista à esquerda (pastas e arquivos <span class="mono">.wav</span>) ou digite o caminho e clique em <strong>Abrir</strong>. Aceita mono ou estéreo, PCM de 8/16/24/32 bits ou float.</li>
+        <li>Na forma de onda aparecem dois instantes: <strong>A</strong> (ataque, em azul) e <strong>B</strong> (sustain, em laranja). Arraste-os. A faixa sombreada em volta de cada um é o trecho analisado. O gráfico abaixo mostra os parciais encontrados em A e B.</li>
+        <li>Ajuste se precisar: <strong>Janela FFT</strong> (maior separa melhor parciais próximos, útil em notas graves, mas borra o tempo); <strong>Limiar</strong> (ignora picos mais fracos que isso); <strong>Máx parciais</strong>; e a <strong>Referência</strong>, que é a frequência que vira a razão 1× (detectada automaticamente; marque <em>manual</em> pra digitar).</li>
+        <li>Opções: <strong>Morph A → B</strong> (o envelope de FX leva o timbre do ataque ao do sustain no mesmo tempo que no som original), <strong>Ajustar o Amp EG</strong> (copia o envelope de volume: ataque, decaimento e, se o som morre, o decaimento até o silêncio) e <strong>Operador em 1×</strong>.</li>
+        <li><strong>Aplicar no operador</strong>. Toque a nota indicada no diálogo (ex.: “Toque C4”) pra ouvir na altura original; outras notas transpõem o som.</li>
+      </ol>
+      <p style="font-size:13.5px;color:var(--text-muted)">Limites: só existem dois retratos do espectro (A e B) com uma transição linear entre eles, então sons cujos parciais morrem em tempos bem diferentes (piano, sino longo) ficam aproximados. O envelope de FX passa a ser usado pelo morph: se o operador tiver um efeito FX ligado, ele também segue essa curva.</p>
 
       <h3>Efeitos por operador (10)</h3>
       <div class="chiplist">
@@ -771,6 +784,7 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
 
       <h3>Estalos ou cortes no áudio (xruns)</h3>
       <p>O contador de <strong>xruns</strong> na barra de status sobe quando o buffer de áudio não é preenchido a tempo. Costuma indicar CPU sobrecarregada — feche outros programas pesados, ou reduza o número de vozes/partes ativas simultaneamente.</p>
+      <p>O áudio usa vários núcleos: as vozes são divididas entre algumas threads (cerca de uma por núcleo físico, até 7 além da thread de áudio). Pra mudar isso, abra o app com a variável <span class="mono">DX7FM_THREADS</span> (ex.: <span class="mono">DX7FM_THREADS=0 ./dx7fm_standalone</span> pra usar uma thread só). As threads de áudio tentam prioridade de tempo real; se o seu usuário não tiver permissão (<span class="mono">rtprio</span> em <span class="mono">/etc/security/limits.conf</span>, ou o grupo <span class="mono">audio</span>/<span class="mono">realtime</span>), elas rodam com prioridade normal — funciona, só fica mais sujeito a xruns com o PC carregado.</p>
 
       <h3>Nenhum som ao tocar uma nota</h3>
       <p>Confira: a parte está <strong>Habilitada</strong>? O <strong>output mix</strong> de pelo menos um operador está acima de zero (ele precisa ser uma portadora)? O <strong>nível</strong> da parte não está em zero?</p>

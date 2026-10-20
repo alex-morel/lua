@@ -2,6 +2,7 @@
 #include "dx7_params.h"
 #include "dx7_engine.h"
 #include "dx7_globalfx.h"
+#include "dx7_threads.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -88,6 +89,10 @@ public:
         polySmoothCoef_ = 1.0f - std::exp(-1.0f / (0.03f * static_cast<float>(sampleRate)));   // ~30ms
         volumeSmoothCoef_ = 1.0f - std::exp(-1.0f / (0.02f * static_cast<float>(sampleRate))); // ~20ms
         slots_.assign(static_cast<size_t>(maxVoices), VoiceSlot{});
+        jobs_.clear();
+        jobs_.reserve(static_cast<size_t>(maxVoices));
+        voiceBuf_.assign(static_cast<size_t>(maxVoices) * kRenderChunk, 0.0f);
+        loudBuf_.assign(static_cast<size_t>(maxVoices) * kRenderChunk, 0.0f);
         for (auto& s : slots_) {
             s.voice.setOversample(oversample);
             s.voice.setSampleRate(sampleRate);
@@ -246,68 +251,39 @@ public:
         pr.sostenutoCaptured.clear();
     }
 
-    void renderStereo(float& outL, float& outR) {
-        outL = 0.0f;
-        outR = 0.0f;
+    // Uma amostra estereo. Equivale a renderBlock(&outL, &outR, 1).
+    void renderStereo(float& outL, float& outR) { renderBlock(&outL, &outR, 1); }
 
-        // 1 load atomico (acquire) por parte, nao por voz -- barato mesmo
-        // com muitas vozes ativas da mesma parte.
-        const PatchSnapshot* live[kNumParts];
-        for (int p = 0; p < kNumParts; ++p) live[p] = parts_[p].live();
+    // [ADICIONADO em 2026-10-20] Renderizacao em blocos: gera n amostras em
+    // outL[0..n) e outR[0..n), em pedacos de ate kRenderChunk amostras:
+    //  1. cada voz ativa renderiza o pedaco INTEIRO no seu buffer (amostra e
+    //     loudness por amostra) -- vozes nao compartilham estado, entao isso
+    //     roda em paralelo no WorkerPool (setWorkerThreads);
+    //  2. a mixagem soma as vozes na ORDEM DOS SLOTS, amostra por amostra, e
+    //     aplica polifonia/FX/volume/limitador como antes.
+    // Por (2) a saida e bit a bit igual a renderizar amostra por amostra,
+    // com qualquer numero de threads. Unica diferenca de tempo: um
+    // recompile() publicado no meio do pedaco so vale no pedaco seguinte
+    // (<= 256 amostras, ~5ms).
+    static constexpr int kRenderChunk = 256;
 
-        float voiceLoad = 0.0f;
-        for (auto& s : slots_) {
-            if (s.ownerPart < 0 || !s.voice.isActive()) continue;
-            auto& pr = parts_[s.ownerPart];
-            const PatchSnapshot* snap = live[s.ownerPart];
-            s.voice.rebind(&snap->voice, &snap->compiled, snap->generation); // "ao vivo": pega qualquer recompile() publicado ate agora
-            float sample = s.voice.process();
-            voiceLoad += s.voice.loudness();
-            float pan = std::clamp(pr.params.pan + s.subPan, -1.0f, 1.0f);
-            float gL = 1.0f - std::max(0.0f, pan);
-            float gR = 1.0f + std::min(0.0f, pan);
-            float lvl = pr.params.level * sample;
-            outL += lvl * gL;
-            outR += lvl * gR;
+    void renderBlock(float* outL, float* outR, int n) {
+        for (int done = 0; done < n;) {
+            int len = std::min(kRenderChunk, n - done);
+            renderChunk(outL + done, outR + done, len);
+            done += len;
         }
-
-        // [ADICIONADO em 2026-09-21] Compensacao de polifonia: 1/sqrt(N) e a
-        // normalizacao classica pra somar N fontes de amplitude comparavel e
-        // NAO-correlacionadas entre si (fases/timbres diferentes) -- preserva
-        // a POTENCIA/RMS total aproximadamente CONSTANTE conforme N cresce,
-        // ao contrario de 1/N (que fica exagerado/fraco demais ja com 2-3
-        // vozes) ou de nao compensar nada (que e o que causava o clipping
-        // documentado no bug da secao 7B item 5). Com N=1 (nota unica),
-        // ganho=1.0 -- NADA muda em relacao ao comportamento de antes.
-        // Suavizada (~30ms, one-pole) pra nao dar "zipper noise"/degrau
-        // audivel quando uma nota entra ou sai de um acorde.
-        // N nao e a contagem crua de vozes, e a soma de Voice::loudness():
-        // vozes em release (ou presas no pedal com sustain 0) pesam menos,
-        // senao cada nota nova de um acorde com pedal saia mais baixa.
-        float targetGain = 1.0f / std::sqrt(std::max(1.0f, voiceLoad));
-        polyphonyGain_ += (targetGain - polyphonyGain_) * polySmoothCoef_;
-        outL *= polyphonyGain_;
-        outR *= polyphonyGain_;
-
-        // Efeitos globais pos-mix, na soma das 4 partes, na ordem de
-        // globalFx_.order (ver dx7_globalfx.h; bloco desligado = identidade).
-        fxChain_.process(globalFx_, outL, outR);
-
-        // Volume geral (ver setMasterVolume): depois dos FX, antes do limitador.
-        float volTarget = masterVolume_.load(std::memory_order_relaxed);
-        masterGain_ += (volTarget - masterGain_) * volumeSmoothCoef_;
-        if (std::fabs(masterGain_ - volTarget) < 1e-6f) masterGain_ = volTarget; // encaixa: volume 0 vira silencio EXATO
-        outL *= masterGain_;
-        outR *= masterGain_;
-
-        // Limitador de master bus, camada 2 (rede de seguranca): mesmo com a
-        // compensacao de polifonia acima, um patch com feedback pesado, um
-        // filtro ressonante, ou os efeitos globais ainda PODEM empurrar
-        // transientes pra alem de +-1.0 -- softLimit() garante que isso
-        // nunca vira clipping duro, so uma compressao suave (ver secao 5).
-        outL = softLimit(outL);
-        outR = softLimit(outR);
     }
+
+    // Threads de audio ALEM da que chama renderBlock() (0 = tudo serial, o
+    // padrao). Chamar fora da audio thread so com o audio parado.
+    void setWorkerThreads(int n) {
+        n = std::clamp(n, 0, 63);
+        if (n == pool_.workers()) return;
+        pool_.stop();
+        if (n > 0) pool_.start(n, &Synth::renderJob, this);
+    }
+    int workerThreads() const { return pool_.workers(); }
 
     int activeVoiceCount() const {
         int c = 0;
@@ -540,6 +516,107 @@ private:
         }
     }
 
+    struct RenderJob {
+        int slot;
+        float gL, gR, level;
+        int activeLen; // amostras do pedaco em que a voz estava ativa
+    };
+
+    static void renderJob(void* ctx, int index) {
+        auto* self = static_cast<Synth*>(ctx);
+        RenderJob& job = self->jobs_[static_cast<size_t>(index)];
+        Voice& v = self->slots_[static_cast<size_t>(job.slot)].voice;
+        float* smp = &self->voiceBuf_[static_cast<size_t>(index) * kRenderChunk];
+        float* loud = &self->loudBuf_[static_cast<size_t>(index) * kRenderChunk];
+        const int len = self->chunkLen_;
+        int i = 0;
+        // isActive() e checado ANTES de cada amostra, como no laco antigo:
+        // a voz que morre no meio do pedaco para ali (activeLen).
+        for (; i < len && v.isActive(); ++i) {
+            smp[i] = v.process();
+            loud[i] = v.loudness();
+        }
+        job.activeLen = i;
+    }
+
+    void renderChunk(float* outL, float* outR, int len) {
+        // 1 load atomico (acquire) por parte e por pedaco, nao por voz
+        const PatchSnapshot* live[kNumParts];
+        for (int p = 0; p < kNumParts; ++p) live[p] = parts_[p].live();
+
+        jobs_.clear();
+        for (size_t idx = 0; idx < slots_.size(); ++idx) {
+            auto& s = slots_[idx];
+            if (s.ownerPart < 0 || !s.voice.isActive()) continue;
+            auto& pr = parts_[s.ownerPart];
+            const PatchSnapshot* snap = live[s.ownerPart];
+            s.voice.rebind(&snap->voice, &snap->compiled, snap->generation); // "ao vivo": pega qualquer recompile() publicado ate agora
+            float pan = std::clamp(pr.params.pan + s.subPan, -1.0f, 1.0f);
+            jobs_.push_back({static_cast<int>(idx), 1.0f - std::max(0.0f, pan), 1.0f + std::min(0.0f, pan), pr.params.level, 0});
+        }
+        chunkLen_ = len;
+        const int count = static_cast<int>(jobs_.size());
+        // sem threads, ou bloco curto (renderStereo): acordar threads custaria mais que renderizar
+        if (pool_.workers() > 0 && len >= 32) pool_.run(count);
+        else for (int j = 0; j < count; ++j) renderJob(this, j);
+
+        for (int i = 0; i < len; ++i) {
+            float l = 0.0f, r = 0.0f, voiceLoad = 0.0f;
+            for (int j = 0; j < count; ++j) {
+                const RenderJob& job = jobs_[static_cast<size_t>(j)];
+                if (i >= job.activeLen) continue;
+                const size_t at = static_cast<size_t>(j) * kRenderChunk + static_cast<size_t>(i);
+                voiceLoad += loudBuf_[at];
+                float lvl = job.level * voiceBuf_[at];
+                l += lvl * job.gL;
+                r += lvl * job.gR;
+            }
+            mixSample(l, r, voiceLoad);
+            outL[i] = l;
+            outR[i] = r;
+        }
+    }
+
+    // Pos-mix de uma amostra: polifonia, FX globais, volume, limitador.
+    void mixSample(float& outL, float& outR, float voiceLoad) {
+        // [ADICIONADO em 2026-09-21] Compensacao de polifonia: 1/sqrt(N) e a
+        // normalizacao classica pra somar N fontes de amplitude comparavel e
+        // NAO-correlacionadas entre si (fases/timbres diferentes) -- preserva
+        // a POTENCIA/RMS total aproximadamente CONSTANTE conforme N cresce,
+        // ao contrario de 1/N (que fica exagerado/fraco demais ja com 2-3
+        // vozes) ou de nao compensar nada (que e o que causava o clipping
+        // documentado no bug da secao 7B item 5). Com N=1 (nota unica),
+        // ganho=1.0 -- NADA muda em relacao ao comportamento de antes.
+        // Suavizada (~30ms, one-pole) pra nao dar "zipper noise"/degrau
+        // audivel quando uma nota entra ou sai de um acorde.
+        // N nao e a contagem crua de vozes, e a soma de Voice::loudness():
+        // vozes em release (ou presas no pedal com sustain 0) pesam menos,
+        // senao cada nota nova de um acorde com pedal saia mais baixa.
+        float targetGain = 1.0f / std::sqrt(std::max(1.0f, voiceLoad));
+        polyphonyGain_ += (targetGain - polyphonyGain_) * polySmoothCoef_;
+        outL *= polyphonyGain_;
+        outR *= polyphonyGain_;
+
+        // Efeitos globais pos-mix, na soma das 4 partes, na ordem de
+        // globalFx_.order (ver dx7_globalfx.h; bloco desligado = identidade).
+        fxChain_.process(globalFx_, outL, outR);
+
+        // Volume geral (ver setMasterVolume): depois dos FX, antes do limitador.
+        float volTarget = masterVolume_.load(std::memory_order_relaxed);
+        masterGain_ += (volTarget - masterGain_) * volumeSmoothCoef_;
+        if (std::fabs(masterGain_ - volTarget) < 1e-6f) masterGain_ = volTarget; // encaixa: volume 0 vira silencio EXATO
+        outL *= masterGain_;
+        outR *= masterGain_;
+
+        // Limitador de master bus, camada 2 (rede de seguranca): mesmo com a
+        // compensacao de polifonia acima, um patch com feedback pesado, um
+        // filtro ressonante, ou os efeitos globais ainda PODEM empurrar
+        // transientes pra alem de +-1.0 -- softLimit() garante que isso
+        // nunca vira clipping duro, so uma compressao suave (ver secao 5).
+        outL = softLimit(outL);
+        outR = softLimit(outR);
+    }
+
     double sampleRate_ = 48000.0;
     std::vector<VoiceSlot> slots_;
     PartRuntime parts_[kNumParts];
@@ -551,6 +628,12 @@ private:
     float polySmoothCoef_ = 0.0f, volumeSmoothCoef_ = 0.0f;
     std::atomic<float> masterVolume_{1.0f}; // alvo, escrito pela UI (setMasterVolume)
     float masterGain_ = 1.0f;               // valor suavizado, so a audio thread toca
+
+    // renderBlock: buffers por voz (alocados em init, nunca na audio thread)
+    std::vector<RenderJob> jobs_;
+    std::vector<float> voiceBuf_, loudBuf_;
+    int chunkLen_ = 0;
+    WorkerPool pool_; // ultimo membro: destruido primeiro (para as threads antes do resto)
 };
 
 } // namespace dx7fm

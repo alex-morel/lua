@@ -5,12 +5,15 @@
 #include "dx7_patch_io.h"
 #include "dx7_algorithms.h"
 #include "wav_writer.h"
+#include "wav_reader.h"
+#include "dx7_resynth.h"
 #include "../app/event_queue.h"
 #include "../app/patch_browser.h"
 #include "../app/envelope_math.h"
 #include "../app/audio_tap.h"
 #include "../app/spectrum.h"
 #include "../app/spectrogram_history.h"
+#include "../app/additive_presets.h"
 
 #include <algorithm>
 #include <atomic>
@@ -2027,7 +2030,7 @@ static void testPatchFingerprintIgnoresRouting() {
     check(dx7fm_app::patchFingerprint(a) == dx7fm_app::patchFingerprint(b), "desfazer a edicao volta ao mesmo fingerprint");
 }
 
-// --- [ADICIONADO em 2026-10-18] forma de onda Additive (8 osciladores livres) ---
+// --- [ADICIONADO em 2026-10-18] forma de onda Additive (osciladores livres; 64 desde 2026-10-20) ---
 
 // Portadora isolada (op0) em 440Hz (nota 69), nivel 80 (pico ~0.2, abaixo do
 // limitador). `setup` ajusta o patch antes de publicar.
@@ -2158,6 +2161,336 @@ static void testAdditiveMorphFollowsFxEgAndModMatrix() {
     check(mag(wheel, 440.0) < mag(wheel, 880.0) * 0.01f, "mod wheel -> OperatorMorph leva o espectro ate B");
 }
 
+// [2026-10-20] Renderizacao em blocos + threads (Synth::renderBlock,
+// dx7_threads.h): a saida tem que ser IDENTICA bit a bit a renderizar
+// amostra por amostra, pra qualquer tamanho de bloco e numero de threads.
+// Cena: 3 partes (uma aditiva), notas entrando e saindo entre blocos, vozes
+// morrendo no meio de um pedaco (release curto), chorus + delay ligados.
+static std::vector<float> renderScene(int blockSize, int threads) {
+    Synth synth;
+    synth.init(48000.0, 24);
+    synth.setWorkerThreads(threads);
+    for (int p = 0; p < 3; ++p) {
+        VoiceParams v;
+        applyAlgorithm(v, 1 + p * 7);
+        for (auto& op : v.op) {
+            op.outputLevel = 85;
+            op.ampEG.rate[3] = p == 1 ? 99 : 70; // parte 1: release quase instantaneo
+        }
+        if (p == 2) {
+            v.op[0].waveform = Waveform::Additive;
+            for (int k = 0; k < kNumPartials; ++k) v.op[0].additiveA.amp[k] = 1.0f / (k + 1);
+        }
+        synth.part(p).voice = v;
+        synth.part(p).enabled = true;
+        synth.part(p).pan = -0.5f + 0.5f * p;
+        synth.recompile(p);
+    }
+    synth.globalFx().chorus.enabled = true;
+    synth.globalFx().delay.enabled = true;
+
+    // eventos em amostras "tortas" (nao alinhadas com nenhum bloco)
+    struct Ev { int at, part, note; bool on; };
+    std::vector<Ev> evs;
+    for (int k = 0; k < 30; ++k) {
+        int at = 97 + k * 1531, part = k % 3, note = 40 + (k * 7) % 36;
+        evs.push_back({at, part, note, true});
+        evs.push_back({at + 2311 + (k % 5) * 401, part, note, false});
+    }
+    std::sort(evs.begin(), evs.end(), [](const Ev& a, const Ev& b) { return a.at < b.at; });
+
+    const int total = 60000;
+    std::vector<float> out(2 * static_cast<size_t>(total));
+    std::vector<float> l(static_cast<size_t>(total)), r(static_cast<size_t>(total));
+    size_t e = 0;
+    for (int pos = 0; pos < total;) {
+        while (e < evs.size() && evs[e].at <= pos) {
+            if (evs[e].on) synth.noteOn(evs[e].part, evs[e].note, 100);
+            else synth.noteOff(evs[e].part, evs[e].note);
+            ++e;
+        }
+        int end = std::min(total, pos + blockSize);
+        if (e < evs.size()) end = std::min(end, evs[e].at);
+        if (blockSize == 1) synth.renderStereo(l[static_cast<size_t>(pos)], r[static_cast<size_t>(pos)]);
+        else synth.renderBlock(&l[static_cast<size_t>(pos)], &r[static_cast<size_t>(pos)], end - pos);
+        pos = blockSize == 1 ? pos + 1 : end;
+    }
+    for (int i = 0; i < total; ++i) { out[2 * static_cast<size_t>(i)] = l[static_cast<size_t>(i)]; out[2 * static_cast<size_t>(i) + 1] = r[static_cast<size_t>(i)]; }
+    return out;
+}
+
+static void testRenderBlockMatchesPerSample() {
+    auto ref = renderScene(1, 0);
+    double energy = 0.0;
+    for (float x : ref) energy += static_cast<double>(x) * x;
+    check(energy > 1.0, "cena de teste do renderBlock produz audio");
+    bool same = true;
+    for (int bs : {7, 64, 256, 1000}) same &= renderScene(bs, 0) == ref;
+    check(same, "renderBlock (blocos de 7, 64, 256 e 1000) e bit a bit igual a renderStereo amostra por amostra");
+}
+
+static void testRenderBlockThreadsAreDeterministic() {
+    auto ref = renderScene(256, 0);
+    bool same = true;
+    for (int t : {1, 3, 7}) same &= renderScene(256, t) == ref;
+    check(same, "renderBlock com 1, 3 e 7 threads extras e bit a bit igual ao serial");
+    // estresse: muitos blocos curtos + longos com threads (pega corrida entre blocos)
+    bool stress = true;
+    for (int rep = 0; rep < 3; ++rep) stress &= renderScene(37, 5) == renderScene(37, 0);
+    check(stress, "renderBlock com threads e blocos curtos repetido: sempre igual ao serial");
+}
+
+static void testWorkerPoolRunsEveryIndexOnce() {
+    struct Ctx { std::atomic<int> hits[200]; } ctx{};
+    WorkerPool pool;
+    pool.start(4, [](void* c, int i) { static_cast<Ctx*>(c)->hits[i].fetch_add(1, std::memory_order_relaxed); }, &ctx);
+    for (int round = 0; round < 2000; ++round) pool.run(1 + round % 200);
+    pool.stop();
+    long expected[200] = {};
+    for (int round = 0; round < 2000; ++round) for (int i = 0; i < 1 + round % 200; ++i) ++expected[i];
+    bool ok = true;
+    for (int i = 0; i < 200; ++i) ok &= ctx.hits[i].load() == expected[i];
+    check(ok, "WorkerPool: 2000 rodadas, cada indice executado exatamente uma vez por rodada");
+}
+
+// [2026-10-20] Editor de 64 parciais (app/additive_presets.h): eixos,
+// pintura com o mouse e presets.
+static void testAdditiveEditorAxes() {
+    using namespace dx7fm_app;
+    bool ok = true;
+    for (float r : {0.25f, 0.5f, 1.0f, 2.756f, 17.0f, 128.0f}) ok &= std::fabs(axisToRatio(ratioToAxis(r), false) - r) < 1e-3f * r;
+    check(ok, "editor aditivo: eixo de razao (log) ida e volta preserva a razao");
+    check(axisToRatio(ratioToAxis(6.7f), true) == 7.0f && axisToRatio(ratioToAxis(0.34f), true) == 1.0f / 3.0f &&
+              axisToRatio(1.0f, true) == kMaxPartialRatio,
+          "editor aditivo: Shift encaixa em harmonicos inteiros e subharmonicos 1/n");
+    ok = ampToAxis(0.0f, true) == 0.0f && axisToAmp(0.0f, true) == 0.0f && ampToAxis(1.0f, true) == 1.0f;
+    for (float a : {0.002f, 0.01f, 0.5f}) ok &= std::fabs(axisToAmp(ampToAxis(a, true), true) - a) < 1e-4f;
+    ok &= ampToAxis(0.0005f, true) == 0.0f; // abaixo de -60 dB: no pe do grafico
+    ok &= std::fabs(ampToAxis(0.1f, true) - (1.0f - 20.0f / 60.0f)) < 1e-5f; // -20 dB
+    check(ok, "editor aditivo: eixo em dB (-60..0) ida e volta, e o pe do grafico e amplitude 0");
+}
+
+static void testAdditivePaintStroke() {
+    using namespace dx7fm_app;
+    float v[kNumPartials] = {};
+    paintStroke(10, 0.0f, 20, 1.0f, [&](int k, float t) { v[k] = t; });
+    bool ok = v[9] == 0.0f && v[10] == 0.0f && v[20] == 1.0f && v[21] == 0.0f && std::fabs(v[15] - 0.5f) < 1e-6f;
+    float w[kNumPartials] = {};
+    paintStroke(20, 1.0f, 10, 0.0f, [&](int k, float t) { w[k] = t; }); // da direita pra esquerda
+    for (int k = 0; k < kNumPartials; ++k) ok &= std::fabs(v[k] - w[k]) < 1e-6f;
+    int calls = 0;
+    paintStroke(-5, 0.3f, 200, 0.3f, [&](int, float) { ++calls; }); // fora do grafico: so as 64 barras
+    check(ok && calls == kNumPartials, "editor aditivo: arrastar rapido pinta todas as barras do caminho, interpolando");
+}
+
+static void testAdditivePresetsAreValid() {
+    using namespace dx7fm_app;
+    bool ok = true;
+    for (const auto& p : kAdditivePresets) {
+        OperatorParams op;
+        p.make(op.additiveA);
+        OperatorParams san = op;
+        sanitize(san);
+        ok &= std::memcmp(&san.additiveA, &op.additiveA, sizeof op.additiveA) == 0; // nada fora da faixa
+        ok &= activePartials(op.additiveA) >= 1;
+        if (!ok) { std::printf("  preset invalido: %s\n", p.name); break; }
+    }
+    check(ok, "presets da aditiva: todos dentro das faixas do sanitize e com pelo menos 1 parcial");
+
+    PartialSet s;
+    presets::odd(s, 1.0f);
+    check(s.ratio[kNumPartials - 1] == 127.0f && std::fabs(s.amp[1] - 1.0f / 3.0f) < 1e-6f,
+          "preset Quadrada: 64 harmonicos impares (ate 127) com amplitude 1/k");
+    auto bar = presets::freeBarRatios();
+    auto mem = presets::membraneRatios();
+    check(bar.size() == 16 && std::fabs(bar[1] - 2.7565f) < 2e-3f && std::fabs(bar[2] - 5.4039f) < 2e-3f &&
+              std::fabs(bar[3] - 8.9330f) < 2e-3f && bar.back() <= kMaxPartialRatio,
+          "preset Sino: modos da barra livre 1, 2.757, 5.404, 8.933 (16 cabem ate 128x)");
+    check(mem.size() == static_cast<size_t>(kNumPartials) && std::fabs(mem[1] - 1.5933f) < 2e-3f &&
+              std::fabs(mem[2] - 2.1355f) < 2e-3f && std::fabs(mem[3] - 2.2954f) < 2e-3f && std::is_sorted(mem.begin(), mem.end()),
+          "preset Tambor: 64 modos da membrana circular em ordem (1, 1.593, 2.136, 2.295 ..)");
+}
+
+static void testAdditiveSquarePresetSounds() {
+    auto x = lastHalf(renderAdditive([](VoiceParams& v) { dx7fm_app::presets::odd(v.op[0].additiveA, 1.0f); }));
+    float h1 = mag(x, 440.0), h2 = mag(x, 880.0), h3 = mag(x, 1320.0), h5 = mag(x, 2200.0);
+    std::printf("  (Quadrada em 440Hz: h1=%.4f h2=%.5f h3=%.4f h5=%.4f)\n", h1, h2, h3, h5);
+    check(h2 < h1 * 0.01f && std::fabs(h3 / h1 - 1.0f / 3.0f) < 0.03f && std::fabs(h5 / h1 - 0.2f) < 0.03f,
+          "preset Quadrada soa so nos harmonicos impares, com amplitude 1/k");
+}
+
+// --- [ADICIONADO em 2026-10-20] ressintese (wav_reader.h + dx7_resynth.h) ---
+
+// WAV de teste em qualquer formato: code 1 = PCM, 3 = float; extensible
+// embrulha no WAVE_FORMAT_EXTENSIBLE; junk = um chunk LIST de tamanho impar
+// antes do data (o leitor tem que pular, com o byte de preenchimento).
+static void writeTestWav(const std::string& path, int code, int bits, int channels, const std::vector<double>& interleaved,
+                         bool extensible = false, bool junk = false) {
+    std::vector<uint8_t> d;
+    auto put = [&](const void* p, size_t n) { d.insert(d.end(), static_cast<const uint8_t*>(p), static_cast<const uint8_t*>(p) + n); };
+    auto u16 = [&](uint16_t v) { put(&v, 2); };
+    auto u32 = [&](uint32_t v) { put(&v, 4); };
+    const int bytesPer = bits / 8;
+    std::vector<uint8_t> data;
+    for (double v : interleaved) {
+        uint8_t b[8] = {};
+        if (code == 3 && bits == 32) { float f = static_cast<float>(v); std::memcpy(b, &f, 4); }
+        else if (code == 3) std::memcpy(b, &v, 8);
+        else if (bits == 8) b[0] = static_cast<uint8_t>(std::lround(v * 127.0 + 128.0));
+        else {
+            int64_t q = std::llround(v * (std::pow(2.0, bits - 1) - 1.0));
+            std::memcpy(b, &q, static_cast<size_t>(bytesPer)); // little-endian: os bytes baixos
+        }
+        data.insert(data.end(), b, b + bytesPer);
+    }
+    put("RIFF", 4); u32(0); put("WAVE", 4);
+    put("fmt ", 4); u32(extensible ? 40 : 16);
+    u16(static_cast<uint16_t>(extensible ? 0xFFFE : code)); u16(static_cast<uint16_t>(channels)); u32(44100);
+    u32(static_cast<uint32_t>(44100 * channels * bytesPer)); u16(static_cast<uint16_t>(channels * bytesPer)); u16(static_cast<uint16_t>(bits));
+    if (extensible) {
+        u16(22); u16(static_cast<uint16_t>(bits)); u32(0);
+        u16(static_cast<uint16_t>(code)); put("\x00\x00\x00\x00\x10\x00\x80\x00\x00\xAA\x00\x38\x9B\x71", 14);
+    }
+    if (junk) { put("LIST", 4); u32(3); put("abc", 3); d.push_back(0); }
+    put("data", 4); u32(static_cast<uint32_t>(data.size())); put(data.data(), data.size());
+    uint32_t riff = static_cast<uint32_t>(d.size() - 8);
+    std::memcpy(&d[4], &riff, 4);
+    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(d.data()), static_cast<std::streamsize>(d.size()));
+}
+
+static void testWavReaderFormats() {
+    const std::vector<double> stereo = {0.5, -0.5, 0.25, 0.75, -1.0, -1.0, 0.0, 0.5};
+    const float expected[4] = {0.0f, 0.5f, -1.0f, 0.25f}; // media L/R
+    struct Fmt { int code, bits; bool ext, junk; float tol; const char* name; };
+    const Fmt fmts[] = {{1, 8, false, false, 0.01f, "PCM 8"}, {1, 16, false, true, 1e-4f, "PCM 16"}, {1, 24, false, false, 1e-6f, "PCM 24"},
+                        {1, 32, true, false, 1e-6f, "PCM 32 extensible"}, {3, 32, false, true, 1e-7f, "float 32"},
+                        {3, 64, true, false, 1e-7f, "float 64 extensible"}};
+    bool ok = true;
+    for (const auto& f : fmts) {
+        writeTestWav("output/test_read.wav", f.code, f.bits, 2, stereo, f.ext, f.junk);
+        auto w = readWavMono("output/test_read.wav");
+        bool good = w.error.empty() && w.sampleRate == 44100 && w.channels == 2 && w.mono.size() == 4;
+        for (size_t i = 0; good && i < 4; ++i) good &= std::fabs(w.mono[i] - expected[i]) <= f.tol + 1.0f / 127.0f * (f.bits == 8);
+        if (!good) { std::printf("  falhou: %s (%s)\n", f.name, w.error.c_str()); ok = false; }
+    }
+    check(ok, "leitor de WAV: PCM 8/16/24/32, float 32/64, extensible e chunks extras (mixa em mono)");
+    std::ofstream("output/test_read.wav") << "isto nao e um wav";
+    auto bad = readWavMono("output/test_read.wav");
+    auto missing = readWavMono("output/nao_existe.wav");
+    check(!bad.error.empty() && bad.mono.empty() && !missing.error.empty(), "leitor de WAV: arquivo invalido ou inexistente da erro, sem amostras");
+    std::filesystem::remove("output/test_read.wav");
+}
+
+// som de teste: soma de senoides (hz, amp) a partir de `startSec`, com decaimento opcional em dB/s
+static std::vector<float> sines(const std::vector<std::pair<double, double>>& parts, double seconds, double startSec = 0.1,
+                                double decayDbPerSec = 0.0) {
+    std::vector<float> x(static_cast<size_t>(seconds * 48000.0));
+    for (size_t i = 0; i < x.size(); ++i) {
+        double t = i / 48000.0;
+        if (t < startSec) continue;
+        double g = std::pow(10.0, -decayDbPerSec * (t - startSec) / 20.0), v = 0.0;
+        for (const auto& [hz, a] : parts) v += a * std::sin(2.0 * M_PI * hz * (t - startSec));
+        x[i] = static_cast<float>(g * v);
+    }
+    return x;
+}
+
+static resynth::Result resynthDefault(const std::vector<float>& x, const resynth::Options& o = {}) {
+    auto env = resynth::analyzeEnvelope(x.data(), x.size(), 48000.0);
+    double a, b;
+    resynth::defaultTimes(env, x.size() / 48000.0, o, 48000.0, a, b);
+    return resynth::analyze(x.data(), x.size(), 48000.0, a, b, o);
+}
+
+static void testResynthFindsPartials() {
+    auto r = resynthDefault(sines({{220.0, 0.5}, {606.4, 0.25}, {1188.9, 0.125}, {3333.3, 0.05}}, 1.5));
+    bool ok = r.ok && r.peaksA.size() == 4;
+    const double hz[4] = {220.0, 606.4, 1188.9, 3333.3}, amp[4] = {0.5, 0.25, 0.125, 0.05};
+    for (size_t i = 0; ok && i < 4; ++i)
+        ok &= std::fabs(r.peaksA[i].hz - hz[i]) < 0.001 * hz[i] && std::fabs(r.peaksA[i].amp - amp[i]) < 0.03 * amp[i];
+    check(ok, "ressintese: acha os 4 parciais inarmonicos com frequencia (0.1%) e amplitude (3%) certas, e nada mais");
+    check(std::fabs(r.refHz - 220.0f) < 0.5f && std::fabs(r.a.ratio[1] - 606.4f / 220.0f) < 2e-3f && r.a.amp[0] == 1.0f &&
+              std::fabs(r.a.amp[1] - 0.5f) < 0.02f,
+          "ressintese inarmonica: referencia = parcial forte mais grave (220Hz), razoes e amplitudes normalizadas");
+}
+
+static void testResynthReferenceHarmonic() {
+    std::vector<std::pair<double, double>> saw;
+    for (int k = 2; k <= 40; ++k) saw.push_back({196.0 * k, 0.5 / k}); // sem a fundamental
+    auto r = resynthDefault(sines(saw, 1.0));
+    std::printf("  (serra sem fundamental: referencia %.3f Hz, %d parciais)\n", r.refHz, r.partialsA);
+    bool integer = true;
+    for (int k = 0; k < r.partialsA; ++k) integer &= std::fabs(r.a.ratio[k] - std::round(r.a.ratio[k])) < 0.002f;
+    check(std::fabs(r.refHz - 196.0f) < 0.2f && integer && r.partialsA == 39,
+          "ressintese: fundamental ausente (serra so com harmonicos 2..40) detectada em 196Hz, razoes inteiras");
+    auto r2 = resynthDefault(sines(saw, 1.0), resynth::Options{8192, -60.0f, 10, 20.0f});
+    check(r2.partialsA == 10 && r2.a.amp[0] == 1.0f, "ressintese: maxPartials limita aos parciais mais fortes");
+}
+
+static void testResynthPairsAB() {
+    // ataque com harmonicos 1,2,3 que viram 1,3,5 no sustain
+    auto x = sines({{200, 0.5}, {400, 0.3}, {600, 0.2}}, 1.2);
+    auto late = sines({{200, 0.5}, {600, 0.3}, {1000, 0.2}}, 1.2);
+    for (size_t i = 0; i < x.size(); ++i) {
+        double t = i / 48000.0, u = std::clamp((t - 0.35) / 0.1, 0.0, 1.0);
+        x[i] = static_cast<float>(x[i] * (1.0 - u) + late[i] * u);
+    }
+    auto r = resynth::analyze(x.data(), x.size(), 48000.0, 0.2, 0.8, resynth::Options{});
+    bool noGlide = true;
+    int onlyA = 0, onlyB = 0;
+    for (int k = 0; k < kNumPartials; ++k) {
+        bool a = r.a.amp[k] > 0.0f, b = r.b.amp[k] > 0.0f;
+        if (a && b) noGlide &= std::fabs(r.a.ratio[k] / r.b.ratio[k] - 1.0f) < 0.03f;
+        if (!a || !b) noGlide &= r.a.ratio[k] == r.b.ratio[k]; // slot de um lado so: mesma razao nos dois
+        if (a && !b) { ++onlyA; noGlide &= std::fabs(r.a.ratio[k] - 2.0f) < 0.01f; }
+        if (b && !a) { ++onlyB; noGlide &= std::fabs(r.b.ratio[k] - 5.0f) < 0.01f; }
+    }
+    std::printf("  (pareamento: %d em A e B, %d so em A, %d so em B)\n", r.paired, onlyA, onlyB);
+    check(noGlide && r.paired == 2 && onlyA == 1 && onlyB == 1,
+          "ressintese A->B: parciais pareados por frequencia; o que some (2x) e o que aparece (5x) fazem fade, nao deslizam");
+
+    // fxEG: morph ~0 ate A e chega em 99 (B) no instante B
+    auto t = dx7fm_app::egTimes(r.fxEG);
+    double tA = 0.2 - r.onsetSec, tB = 0.8 - r.onsetSec;
+    std::printf("  (fxEG: estagio 1 %.3fs (A em %.3fs), chega em B em %.3fs (B em %.3fs))\n", t.stage[0], tA, t.stage[0] + t.stage[1], tB);
+    check(std::fabs(t.stage[0] - tA) < 0.25 * tA && std::fabs(t.stage[0] + t.stage[1] - tB) < 0.1 * tB && r.fxEG.level[2] == 99,
+          "ressintese: fxEG leva o morph de A (no instante A) ate B (no instante B)");
+}
+
+static void testResynthEndToEnd() {
+    // sino sintetico: 220Hz (= nota 57) + parciais inarmonicos, decaindo 20 dB/s
+    auto x = sines({{220.0, 0.5}, {606.4, 0.25}, {1188.9, 0.15}}, 2.0, 0.1, 20.0);
+    auto r = resynthDefault(x);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.op[0].outputLevel = 99;
+    resynth::apply(v.op[0], r, resynth::ApplyOptions{});
+    Synth synth;
+    synth.init(48000.0, 4);
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.noteOn(0, 57, 127);
+    std::vector<float> y;
+    for (int i = 0; i < 96000; ++i) { float l, rr; synth.renderStereo(l, rr); y.push_back(l); }
+    auto win = [](const std::vector<float>& s, double from) {
+        return std::vector<float>(s.begin() + static_cast<long>(from * 48000), s.begin() + static_cast<long>((from + 0.2) * 48000));
+    };
+    auto xs = win(x, 0.4), ys = win(y, 0.3); // mesmo tempo desde o inicio do som (x comeca em 0.1s)
+    float rx = mag(xs, 606.4) / mag(xs, 220.0), ry = mag(ys, 606.4) / mag(ys, 220.0);
+    float rx3 = mag(xs, 1188.9) / mag(xs, 220.0), ry3 = mag(ys, 1188.9) / mag(ys, 220.0);
+    std::printf("  (original: p2/p1=%.3f p3/p1=%.3f; ressintetizado: %.3f %.3f)\n", rx, rx3, ry, ry3);
+    check(std::fabs(ry / rx - 1.0f) < 0.1f && std::fabs(ry3 / rx3 - 1.0f) < 0.1f,
+          "ressintese ponta a ponta: tocando a nota da referencia, o espectro bate com o original (10%)");
+    auto dropDb = [](const std::vector<float>& s, double t0, double t1) {
+        return 20.0f * std::log10(computeRms(s, static_cast<size_t>(t1 * 48000), 4800) / computeRms(s, static_cast<size_t>(t0 * 48000), 4800));
+    };
+    float dx = dropDb(x, 0.4, 1.4), dy = dropDb(y, 0.3, 1.3);
+    std::printf("  (queda em 1s: original %.1f dB, ressintetizado %.1f dB; ampEG r=%d,%d,%d l=%d,%d,%d)\n", dx, dy, r.ampEG.rate[0],
+                r.ampEG.rate[1], r.ampEG.rate[2], r.ampEG.level[0], r.ampEG.level[1], r.ampEG.level[2]);
+    check(std::fabs(dx - dy) < 3.0f, "ressintese ponta a ponta: o Amp EG ajustado reproduz o decaimento do som (3 dB)");
+}
+
 static void testAdditiveSilentWhenAllAmpsZero() {
     auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
     bool ok = true;
@@ -2186,8 +2519,8 @@ static void testAdditiveJson() {
     VoiceParams bad = voiceParamsFromJson(JsonValue::parse(
         R"({"op":[{"additive":{"a":{"amp":[5,-1],"ratio":[0,1e9]},"morph":7}}]})"));
     check(bad.op[0].additiveA.amp[0] == 1.0f && bad.op[0].additiveA.amp[1] == 0.0f &&
-          bad.op[0].additiveA.ratio[0] == 0.01f && bad.op[0].additiveA.ratio[1] == 32.0f && bad.op[0].morphDepth == 1.0f,
-          "valores fora da faixa no JSON da Additive sao saturados (amp 0..1, razao 0.01..32, morph 0..1)");
+          bad.op[0].additiveA.ratio[0] == 0.01f && bad.op[0].additiveA.ratio[1] == kMaxPartialRatio && bad.op[0].morphDepth == 1.0f,
+          "valores fora da faixa no JSON da Additive sao saturados (amp 0..1, razao 0.01..kMaxPartialRatio, morph 0..1)");
 }
 
 static void testAdditiveCost() {
@@ -2213,11 +2546,16 @@ static void testAdditiveCost() {
         return sink == 12345.0f ? 0.0 : sec;
     };
     double sine = timeIt(false), add = timeIt(true);
-    std::printf("  (16 vozes x 8 ops, 1s de audio: Sine=%.3fs, Additive 8 parciais=%.3fs, razao=%.2fx)\n", sine, add, add / sine);
-    // Limite 3x (era 2x): na otimizacao de 2026-10-18 o operador Sine ficou
-    // ~2.7x mais barato (seno por tabela, cache de nivel/afinacao), entao a
-    // RAZAO subiu mesmo com a Additive tambem mais rapida em termos absolutos.
-    check(add < sine * 3.0, "Additive (8 osciladores em todos os 8 ops) custa menos que 3x um operador Sine");
+    // [2026-10-20] 64 parciais com kernel SIMD (dx7_dsp.h): limite por caminho
+    // -- AVX2 processa 8 parciais por instrucao, SSE2 (CPU sem AVX2) 4.
+    const bool avx2 = simd::selectedKernel() == &simd::kernelAvx2;
+    const double limit = avx2 ? 5.0 : 10.0;
+    std::printf("  (16 vozes x 8 ops, 1s de audio: Sine=%.3fs, Additive %d parciais=%.3fs, razao=%.2fx, caminho %s)\n",
+                sine, kNumPartials, add, add / sine, avx2 ? "AVX2" : "SSE2");
+    char msg[160];
+    std::snprintf(msg, sizeof msg, "Additive (%d osciladores em todos os 8 ops, SIMD %s) custa menos que %.0fx um operador Sine",
+                  kNumPartials, avx2 ? "AVX2" : "SSE2", limit);
+    check(add < sine * limit, msg);
 }
 
 // --- [ADICIONADO em 2026-10-18] efeitos globais baseados em open source ---
@@ -2758,6 +3096,18 @@ int main() {
     testAdditiveSilentWhenAllAmpsZero();
     testAdditiveJson();
     testAdditiveCost();
+    testAdditiveEditorAxes();
+    testAdditivePaintStroke();
+    testAdditivePresetsAreValid();
+    testAdditiveSquarePresetSounds();
+    testWavReaderFormats();
+    testResynthFindsPartials();
+    testResynthReferenceHarmonic();
+    testResynthPairsAB();
+    testResynthEndToEnd();
+    testRenderBlockMatchesPerSample();
+    testRenderBlockThreadsAreDeterministic();
+    testWorkerPoolRunsEveryIndexOnce();
     testGlobalFxChainDisabledIsIdentity();
     testPhaserNotch();
     testFlangerImpulseResponse();

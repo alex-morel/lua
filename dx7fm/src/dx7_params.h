@@ -8,7 +8,8 @@ namespace dx7fm {
 
 constexpr int kNumOps = 8;
 constexpr int kNumModRoutes = 8;
-constexpr int kNumPartials = 8; // osciladores senoidais da forma de onda Additive
+constexpr int kNumPartials = 64; // osciladores senoidais da forma de onda Additive (multiplo de 8: kernel SIMD)
+constexpr float kMaxPartialRatio = 128.0f; // razao maxima de um parcial (64 harmonicos impares chegam a 127)
 
 struct EGParams {
     uint8_t rate[4]  = {99, 99, 99, 50};
@@ -91,16 +92,21 @@ struct OperatorParams {
     float pegDepth = 0.0f;      // 0..1
     bool pegAffectsFixed = false;
 
-    // [ADICIONADO em 2026-10-18] so usados com waveform == Additive: 8
-    // osciladores senoidais reais. Parcial k soa em ratio[k] * f do operador
+    // [ADICIONADO em 2026-10-18; 8 -> 64 parciais em 2026-10-20] so usados
+    // com waveform == Additive: kNumPartials osciladores senoidais reais. Parcial k soa em ratio[k] * f do operador
     // com amplitude amp[k]. A e B sao dois espectros; a posicao do morph
     // entre eles e morphDepth * fxEG/99 (+ ModDest::OperatorMorph) -- o MESMO
     // fxEG que modula o FX do operador -- e o morph interpola amplitudes E
     // razoes (um parcial pode deslizar de frequencia ao longo da nota).
     // Default: seno puro (so o parcial 1, razoes harmonicas 1..8).
     struct PartialSet {
-        float amp[kNumPartials] = {1.0f};
-        float ratio[kNumPartials] = {1, 2, 3, 4, 5, 6, 7, 8};
+        // alinhado a 32 bytes: o kernel SIMD (dx7_dsp.h) le 8 parciais por vez
+        alignas(32) float amp[kNumPartials];
+        alignas(32) float ratio[kNumPartials];
+        PartialSet() {
+            for (int k = 0; k < kNumPartials; ++k) { amp[k] = 0.0f; ratio[k] = static_cast<float>(k + 1); }
+            amp[0] = 1.0f;
+        }
     };
     PartialSet additiveA, additiveB;
     float morphDepth = 0.0f;    // 0..1
@@ -342,7 +348,7 @@ inline void sanitize(OperatorParams& o) {
     for (auto* set : {&o.additiveA, &o.additiveB}) {
         for (int k = 0; k < kNumPartials; ++k) {
             set->amp[k] = sanF(set->amp[k], 0.0f, 1.0f, 0.0f);
-            set->ratio[k] = sanF(set->ratio[k], 0.01f, 32.0f, static_cast<float>(k + 1));
+            set->ratio[k] = sanF(set->ratio[k], 0.01f, kMaxPartialRatio, static_cast<float>(k + 1));
         }
     }
     o.morphDepth = sanF(o.morphDepth, 0.0f, 1.0f, 0.0f);

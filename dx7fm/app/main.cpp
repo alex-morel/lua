@@ -15,6 +15,7 @@
 #include "keyboard_piano.h"
 #include "ui_widgets.h"
 #include "envelope_graph.h"
+#include "additive_editor.h"
 #include "viz.h"
 #include "patch_browser.h"
 
@@ -27,9 +28,11 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -107,6 +110,14 @@ void syncRoutingCache(AppState& app, int part) {
 // --- audio callback (roda na thread de audio -- UNICA thread que chama
 // synth.noteOn/noteOff/etc, ver event_queue.h) ---------------------------
 
+// Threads extras pra renderizar vozes: ~1 por nucleo FISICO (hw/2 com SMT),
+// menos o da audio thread, ate 7. DX7FM_THREADS=n forca (0 = sem threads).
+static int audioWorkerThreads() {
+    if (const char* env = std::getenv("DX7FM_THREADS")) return std::clamp(std::atoi(env), 0, 63);
+    int hw = static_cast<int>(std::thread::hardware_concurrency());
+    return std::clamp(hw / 2 - 1, hw > 1 ? 1 : 0, 7);
+}
+
 void audioRenderCallback(AppState& app, float* interleaved, int frames) {
     static std::vector<AppEvent> events;
     events.clear();
@@ -136,10 +147,14 @@ void audioRenderCallback(AppState& app, float* interleaved, int frames) {
         }
     }
 
+    // renderBlock: vozes em paralelo nas threads do synth (setWorkerThreads).
+    // Os buffers so alocam no primeiro bloco (ou se o period crescer).
+    static std::vector<float> bufL, bufR;
+    if (bufL.size() < static_cast<size_t>(frames)) { bufL.resize(static_cast<size_t>(frames)); bufR.resize(static_cast<size_t>(frames)); }
+    app.synth.renderBlock(bufL.data(), bufR.data(), frames);
     float peakL = 0.0f, peakR = 0.0f;
     for (int i = 0; i < frames; ++i) {
-        float l, r;
-        app.synth.renderStereo(l, r);
+        float l = bufL[static_cast<size_t>(i)], r = bufR[static_cast<size_t>(i)];
         interleaved[2 * i] = l;
         interleaved[2 * i + 1] = r;
         peakL = std::max(peakL, std::fabs(l));
@@ -334,93 +349,6 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
     return changed;
 }
 
-// [ADICIONADO em 2026-10-18] Editor da forma de onda Additive: 8
-// osciladores, cada um com amplitude (slider vertical) e razao de
-// frequencia (campo embaixo), nos espectros A e B.
-struct AdditivePreset {
-    const char* name;
-    const char* tip;
-    float amp[kNumPartials];
-    float ratio[kNumPartials];
-};
-const AdditivePreset kAdditivePresets[] = {
-    {"Seno", "so o parcial 1",
-     {1, 0, 0, 0, 0, 0, 0, 0}, {1, 2, 3, 4, 5, 6, 7, 8}},
-    {"Serra", "harmonicos 1..8 com amplitude 1/k",
-     {1, 1 / 2.f, 1 / 3.f, 1 / 4.f, 1 / 5.f, 1 / 6.f, 1 / 7.f, 1 / 8.f}, {1, 2, 3, 4, 5, 6, 7, 8}},
-    {"Impares", "harmonicos impares 1, 3 .. 15 com amplitude 1/k (quadrada)",
-     {1, 1 / 3.f, 1 / 5.f, 1 / 7.f, 1 / 9.f, 1 / 11.f, 1 / 13.f, 1 / 15.f}, {1, 3, 5, 7, 9, 11, 13, 15}},
-    {"Orgao", "drawbars: 16', 8', 5 1/3', 4', 2 2/3', 2', 1 3/5', 1 1/3'",
-     {0.8f, 1, 0.6f, 0.7f, 0.5f, 0.4f, 0.3f, 0.3f}, {0.5f, 1, 1.5f, 2, 3, 4, 5, 6}},
-    {"Sino", "modos de vibracao de uma barra livre (inarmonicos): 1, 2.76, 5.40, 8.93...",
-     {1, 0.7f, 0.5f, 0.35f, 0.25f, 0.18f, 0.12f, 0.08f}, {1, 2.756f, 5.404f, 8.933f, 13.34f, 18.64f, 24.81f, 31.87f}},
-    {"Tambor", "modos de uma membrana circular (inarmonicos): 1, 1.59, 2.14, 2.30...",
-     {1, 0.8f, 0.6f, 0.55f, 0.45f, 0.4f, 0.3f, 0.25f}, {1, 1.594f, 2.136f, 2.296f, 2.653f, 2.918f, 3.156f, 3.501f}},
-};
-
-bool DrawAdditiveEditor(OperatorParams& op, ImU32 color) {
-    bool changed = false;
-    ImGui::SeparatorText("Aditiva: 8 osciladores (amplitude + razao de frequencia)");
-    static int editB = 0; // espectro em edicao (estado so de UI)
-    ImGui::RadioButton("Editando A", &editB, 0);
-    ImGui::SameLine();
-    ImGui::RadioButton("Editando B", &editB, 1);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(?)");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Cada parcial e um oscilador senoidal: soa em (razao x frequencia do operador)\n"
-                          "com a amplitude do slider. Razoes inteiras = harmonicos; fracionarias =\n"
-                          "inarmonicos (sinos, tambores). A e B sao dois espectros: o envelope de FX\n"
-                          "leva de A ate B (x profundidade do morph), interpolando amplitudes E razoes.\n"
-                          "Parciais acima de Nyquist sao desligados (sem aliasing).");
-
-    OperatorParams::PartialSet& set = editB ? op.additiveB : op.additiveA;
-    for (int k = 0; k < kNumPartials; ++k) {
-        ImGui::PushID(k);
-        ImGui::BeginGroup();
-        ImGui::Text(" P%d", k + 1);
-        ImGui::PushStyleColor(ImGuiCol_SliderGrab, color);
-        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, color);
-        changed |= ImGui::VSliderFloat("##amp", ImVec2(46, 120), &set.amp[k], 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-        ImGui::PopStyleColor(2);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Parcial %d: amplitude", k + 1);
-        ImGui::SetNextItemWidth(46);
-        changed |= ImGui::DragFloat("##ratio", &set.ratio[k], 0.005f, 0.01f, 32.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Parcial %d: razao de frequencia (x f do operador)\narraste ou ctrl+clique pra digitar", k + 1);
-        ImGui::EndGroup();
-        ImGui::PopID();
-        ImGui::SameLine();
-    }
-    // morph ao lado das barras
-    ImGui::Dummy(ImVec2(6, 0));
-    ImGui::SameLine();
-    {
-        ui::KnobStyle ks;
-        ks.color = color;
-        changed |= ui::Knob("Morph A->B", &op.morphDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
-    }
-
-    ImGui::TextUnformatted("Preset em");
-    ImGui::SameLine();
-    ImGui::TextUnformatted(editB ? "B:" : "A:");
-    for (const auto& p : kAdditivePresets) {
-        ImGui::SameLine();
-        if (ImGui::SmallButton(p.name)) {
-            std::copy(std::begin(p.amp), std::end(p.amp), set.amp);
-            std::copy(std::begin(p.ratio), std::end(p.ratio), set.ratio);
-            changed = true;
-        }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", p.tip);
-    }
-    if (ImGui::SmallButton("Copiar A -> B")) { op.additiveB = op.additiveA; changed = true; }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Trocar A <-> B")) { std::swap(op.additiveA, op.additiveB); changed = true; }
-    ImGui::SameLine();
-    ImGui::TextDisabled("Morph = profundidade x (FX EG/99) + mod matrix (OperatorMorph)");
-    return changed;
-}
-
 bool DrawOperatorDetail(OperatorParams& op, int opIndex) {
     bool changed = false;
     ui::KnobStyle ks;
@@ -464,7 +392,10 @@ bool DrawOperatorDetail(OperatorParams& op, int opIndex) {
         if (ImGui::SliderInt("Ring mod: op fonte", &rm, -1, kNumOps - 1, rm < 0 ? "nenhum" : "%d", ImGuiSliderFlags_AlwaysClamp)) { op.ringModSource = rm; changed = true; }
     }
 
-    if (op.waveform == Waveform::Additive) changed |= DrawAdditiveEditor(op, ui::opColor(opIndex));
+    if (op.waveform == Waveform::Additive) {
+        static ui::AdditiveEditorState additiveUi; // estado so de UI (A/B, vista, parcial selecionado)
+        changed |= ui::AdditiveEditor(op, opIndex, ui::opColor(opIndex), additiveUi);
+    }
 
     ImGui::Spacing();
     ImGui::TextDisabled("FX EG (modula o FX1 e o morph da Additive)");
@@ -1533,6 +1464,7 @@ int main(int, char**) {
     AppState app;
 
     app.synth.init(kSampleRate, kMaxVoices, /*oversample=*/1);
+    app.synth.setWorkerThreads(audioWorkerThreads());
     // Por padrao so a parte A toca; B-D comecam desligadas (senao cada nota,
     // MIDI ou do teclado do PC, dispararia 4 camadas empilhadas -- todas em
     // omni). Liga-las e so marcar "Habilitada" na aba de cada uma.
