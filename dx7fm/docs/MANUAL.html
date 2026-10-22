@@ -596,7 +596,7 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
 
       <div class="panel">
         <div class="panel-label">Pitch EG, LFO 1, LFO 2, Matriz de modulação</div>
-        <p>O envelope de pitch da voz inteira (knobs em laranja); os dois LFOs lado a lado (forma de onda, key sync, velocidade, delay, profundidade de pitch/amplitude); e 8 rotas de modulação configuráveis (fonte → destino → operador → profundidade) pra ligar, por exemplo, aftertouch no corte do filtro de um operador específico.</p>
+        <p>O envelope de pitch da voz inteira (knobs em laranja); os dois LFOs lado a lado (forma de onda, key sync, velocidade, delay, profundidade de pitch/amplitude); e 8 rotas de modulação configuráveis (fonte → destino → operador → profundidade) pra ligar, por exemplo, aftertouch no corte do filtro de um operador específico. Além de LFOs, mod wheel, aftertouch e pitch bend, as fontes incluem <strong>Nota</strong> (0 no C4, +1 cinco oitavas acima, −1 cinco abaixo) e <strong>Velocity</strong> (0 a 1) — ex.: Velocity → OperatorFx1 abre o filtro quando você toca mais forte; Nota → OperatorLevel com profundidade negativa amansa um modulador nos agudos.</p>
       </div>
 
       <h3>Aba FX Globais</h3>
@@ -745,10 +745,21 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
       <p style="font-size:13.5px;color:var(--text-muted)">Limites: só existem dois retratos do espectro (A e B) com uma transição linear entre eles, então sons cujos parciais morrem em tempos bem diferentes (piano, sino longo) ficam aproximados. O envelope de FX passa a ser usado pelo morph: se o operador tiver um efeito FX ligado, ele também segue essa curva.</p>
 
       <h3>Efeitos por operador (10)</h3>
-      <div class="chiplist">
-        <span class="chip">Bypass</span><span class="chip">LowPass</span><span class="chip">BandPass</span><span class="chip">HighPass</span><span class="chip">RingMod</span><span class="chip">Saturate</span><span class="chip">Crush</span><span class="chip">FreqShift</span><span class="chip">Comb</span><span class="chip">Fold</span>
+      <p>Cada operador tem um efeito, ajustado no card <strong>EFEITO DO OPERADOR</strong> (abaixo do card do operador selecionado). Escolha o efeito nos botões; o gráfico mostra o que ele faz com os valores atuais, e os knobs têm o nome e a unidade de cada parâmetro. Na tabela de operadores, a coluna <em>Ajuste do FX</em> edita o parâmetro principal do efeito direto ali (corte, taxa, afinação, drive ou o operador fonte do ring mod); o botão <strong>…</strong> ao lado seleciona o operador e rola a tela até o card completo.</p>
+      <div class="tablewrap">
+        <table>
+          <tr><th>Efeito</th><th>Ajustes</th><th>O gráfico mostra</th></tr>
+          <tr><td>Passa-baixa / Passa-banda / Passa-alta</td><td>Corte (Hz), Q (ressonância; 0,7 = sem pico)</td><td>Resposta em frequência. A faixa sombreada vai do corte com o envelope de FX no nível 0 (20% do corte) até o nível 99 (100%).</td></tr>
+          <tr><td>Ring mod</td><td>Operador fonte</td><td>As duas ondas e o produto delas.</td></tr>
+          <tr><td>Saturação</td><td>Drive</td><td>Curva entrada → saída e um seno processado.</td></tr>
+          <tr><td>Bitcrusher</td><td>Taxa (Hz), Bits (1–24)</td><td>Os degraus de quantização e o “sample &amp; hold” num seno de 220 Hz.</td></tr>
+          <tr><td>Freq shift</td><td>Deslocamento (Hz)</td><td>Os harmônicos de 220 Hz (cinza) e para onde vão: somar Hz fixos deixa o som inarmônico.</td></tr>
+          <tr><td>Comb</td><td>Afinação (Hz), Feedback</td><td>Os “dentes” de ressonância na afinação e nos múltiplos.</td></tr>
+          <tr><td>Wavefolder</td><td>Drive (1–16), Simetria</td><td>Curva e seno processado, com o drive mínimo (envelope em 0, branco) e máximo (cor do operador). Simetria 0 = só harmônicos ímpares; acima disso entram os pares. Em notas agudas com drive alto pode gerar aliasing.</td></tr>
+        </table>
       </div>
-      <p style="font-size:13.5px;color:var(--text-muted)"><strong>Fold</strong> (wavefolder): quando o sinal passa do limite ele “rebate” pra dentro em vez de ser cortado, criando harmônicos novos — timbre metálico/brilhante estilo Buchla. <strong>FX1 = drive</strong> (1 = sem dobra, até 16), controlado também pelo envelope de FX, então o brilho pode abrir no ataque e fechar no release. <strong>FX Param2 = simetria</strong> (0–1): em 0 só harmônicos ímpares; acima disso entram os pares. Em notas agudas com drive alto pode gerar aliasing.</p>
+      <p>O <strong>envelope de FX</strong> fica no mesmo card. Ele só age nos filtros (varre o corte), no Wavefolder (varre o drive) e no morph da forma de onda Additive. Nos outros efeitos os knobs dele ficam desativados, e o texto acima deles diz o que ele controla. Ao trocar de efeito, os ajustes voltam a valores iniciais adequados (entre os três filtros, corte e Q são mantidos).</p>
+      <p><strong>Key track</strong> (nos filtros, Comb, Freq shift e Bitcrusher): faz o valor em Hz acompanhar a nota tocada, em volta do C4. Em 100%, uma oitava acima dobra o valor — o filtro mantém o mesmo brilho em toda a extensão do teclado e o Comb ressoa afinado com a nota (ajuste a afinação do Comb pra 261,6 Hz, que é o C4, ou um múltiplo dele). Em 50%, sobe meia oitava por oitava; em 0% (padrão), o valor é fixo como antes. Acompanha o glide, mas não o pitch bend nem o vibrato.</p>
 
       <h3>32 algoritmos — famílias</h3>
       <div class="tablewrap">

@@ -14,6 +14,7 @@
 #include "../app/spectrum.h"
 #include "../app/spectrogram_history.h"
 #include "../app/additive_presets.h"
+#include "../app/op_fx_math.h"
 
 #include <algorithm>
 #include <atomic>
@@ -22,6 +23,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <random>
 #include <thread>
 #include <vector>
@@ -2491,6 +2493,147 @@ static void testResynthEndToEnd() {
     check(std::fabs(dx - dy) < 3.0f, "ressintese ponta a ponta: o Amp EG ajustado reproduz o decaimento do som (3 dB)");
 }
 
+// --- [ADICIONADO em 2026-10-20] graficos do painel de efeito (app/op_fx_math.h) ---
+// O grafico tem que mostrar o que o DSP faz: mede o filtro/comb de verdade com
+// senos e compara com a curva desenhada.
+static float measureGainDb(const std::function<float(float)>& process, float hz) {
+    std::vector<float> out;
+    for (int i = 0; i < 48000; ++i) out.push_back(process(std::sin(2.0f * static_cast<float>(M_PI) * hz * static_cast<float>(i) / 48000.0f)));
+    std::vector<float> tail(out.begin() + 24000, out.end()); // regime permanente
+    return 20.0f * std::log10(computeRms(tail, 0, tail.size()) / std::sqrt(0.5f));
+}
+
+static void testOpFxFilterCurveMatchesDsp() {
+    using dx7fm_app::opfx::svfMagnitudeDb;
+    float worst = 0.0f;
+    for (FxType t : {FxType::LowPass, FxType::BandPass, FxType::HighPass})
+        for (float q : {0.707f, 4.0f})
+            for (float f : {100.0f, 800.0f, 2000.0f, 5000.0f, 15000.0f}) {
+                TPTStateVariableFilter flt;
+                flt.setSampleRate(48000.0);
+                flt.setParams(2000.0f, q);
+                float got = measureGainDb([&](float x) { auto o = flt.process(x); return t == FxType::LowPass ? o.lp : t == FxType::BandPass ? o.bp : o.hp; }, f);
+                float drawn = svfMagnitudeDb(t, f, 2000.0f, q, 48000.0f);
+                if (drawn > -40.0f) worst = std::max(worst, std::fabs(got - drawn));
+            }
+    std::printf("  (filtros: maior diferenca grafico x DSP medido = %.3f dB)\n", worst);
+    check(worst < 0.1f, "painel de efeito: curva dos filtros LP/BP/HP bate com o TPTStateVariableFilter medido (0.1 dB)");
+}
+
+static void testOpFxCombCurveMatchesDsp() {
+    using dx7fm_app::opfx::combMagnitudeDb;
+    float worst = 0.0f;
+    for (float f : {480.0f, 720.0f, 1000.0f, 960.0f, 3000.0f}) { // 480 Hz = atraso inteiro de 100 amostras
+        CombFilter c;
+        c.setSampleRate(48000.0);
+        float got = measureGainDb([&](float x) { return c.process(x, 480.0f, 0.7f); }, f);
+        worst = std::max(worst, std::fabs(got - combMagnitudeDb(f, 480.0f, 0.7f)));
+    }
+    std::printf("  (comb: maior diferenca grafico x DSP medido = %.3f dB)\n", worst);
+    check(worst < 0.1f, "painel de efeito: dentes do comb no grafico batem com o CombFilter medido (0.1 dB)");
+}
+
+static void testOpFxDefaultsAndSummary() {
+    using namespace dx7fm_app::opfx;
+    float p1 = 1234.0f, p2 = 3.0f;
+    applyDefaults(FxType::LowPass, FxType::HighPass, p1, p2);
+    bool keep = p1 == 1234.0f && p2 == 3.0f;
+    applyDefaults(FxType::LowPass, FxType::Fold, p1, p2);
+    bool fold = p1 == 3.0f && p2 == 0.0f;
+    applyDefaults(FxType::Fold, FxType::Crush, p1, p2);
+    bool crush = p1 == 8000.0f && p2 * 16.0f == 8.0f;
+    check(keep && fold && crush, "painel de efeito: trocar entre filtros mantem corte/Q; trocar de familia poe valores sensatos");
+    OperatorParams op;
+    op.fxType = FxType::Crush;
+    op.fxParam1 = 8000.0f;
+    op.fxParam2 = 0.5f;
+    char a[48], b[48];
+    summary(op, a, sizeof a);
+    op.fxType = FxType::LowPass;
+    op.fxParam1 = 2000.0f;
+    op.fxParam2 = 0.707f;
+    summary(op, b, sizeof b);
+    check(std::string(a) == "8.0 kHz  8 bits" && std::string(b) == "2.0 kHz  Q 0.7", "painel de efeito: resumo na tabela com nome e unidade");
+    bool same = true;
+    for (float x = -1.0f; x <= 1.0f; x += 0.01f) same &= shape(FxType::Fold, x, 4.0f, 0.3f, 1.0f) == triangleFold(x * 4.0f + 0.3f);
+    check(same, "painel de efeito: curva do Wavefolder = triangleFold do motor com o drive maximo");
+}
+
+// --- [ADICIONADO em 2026-10-20] key tracking do efeito + fontes Nota/Velocity ---
+// Op0 Sine sozinho na saida (nivel 80, ~0.19 de pico: longe do limitador).
+static std::vector<float> renderOp0(const std::function<void(VoiceParams&)>& setup, int note, int velocity = 100, int samples = 24000) {
+    Synth synth;
+    synth.init(48000.0, 4);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.op[0].outputLevel = 80;
+    setup(v);
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.noteOn(0, note, velocity);
+    std::vector<float> out;
+    for (int i = 0; i < samples; ++i) { float l, r; synth.renderStereo(l, r); out.push_back(l); }
+    return std::vector<float>(out.begin() + samples / 2, out.end());
+}
+
+static void testFxKeyTrackMovesFilterWithNote() {
+    // passa-baixa em 300 Hz (no C4); tocando C6 (1046.5 Hz): com key track 100%
+    // o corte vai pra 1200 Hz (2 oitavas acima), sem key track fica em 300 Hz.
+    auto lp = [](float kt) {
+        return [kt](VoiceParams& v) { v.op[0].fxType = FxType::LowPass; v.op[0].fxParam1 = 300.0f; v.op[0].fxParam2 = 0.707f; v.op[0].fxKeyTrack = kt; };
+    };
+    const float dry = computeRms(renderOp0([](VoiceParams&) {}, 84), 0, 12000);
+    auto gainDb = [&](float kt) { return 20.0f * std::log10(computeRms(renderOp0(lp(kt), 84), 0, 12000) / dry); };
+    const float f = 1046.5f;
+    float g0 = gainDb(0.0f), g1 = gainDb(1.0f), gHalf = gainDb(0.5f);
+    float e0 = dx7fm_app::opfx::svfMagnitudeDb(FxType::LowPass, f, 300.0f, 0.707f, 48000.0f);
+    float e1 = dx7fm_app::opfx::svfMagnitudeDb(FxType::LowPass, f, 1200.0f, 0.707f, 48000.0f);
+    float eHalf = dx7fm_app::opfx::svfMagnitudeDb(FxType::LowPass, f, 600.0f, 0.707f, 48000.0f);
+    std::printf("  (C6 num passa-baixa de 300Hz: key track 0%% %.1f dB (esperado %.1f), 50%% %.1f (%.1f), 100%% %.1f (%.1f))\n", g0, e0, gHalf,
+                eHalf, g1, e1);
+    check(std::fabs(g0 - e0) < 0.5f && std::fabs(gHalf - eHalf) < 0.5f && std::fabs(g1 - e1) < 0.5f,
+          "key track do efeito: o corte do filtro sobe com a nota (100% = 1 oitava por oitava, 50% = meia)");
+    // no C4 o key track nao muda nada
+    auto c4a = renderOp0(lp(0.0f), 60), c4b = renderOp0(lp(1.0f), 60);
+    float maxDiff = 0.0f;
+    for (size_t i = 0; i < c4a.size(); ++i) maxDiff = std::max(maxDiff, std::fabs(c4a[i] - c4b[i]));
+    check(maxDiff < 1e-4f, "key track do efeito: no C4 (centro) o efeito fica igual a sem key track");
+}
+
+static void testModSourcesKeyNoteAndVelocity() {
+    auto level = [](ModSource src, float depth, int note, int vel) {
+        auto x = renderOp0([&](VoiceParams& v) { v.modMatrix[0] = ModRoute{src, ModDest::OperatorLevel, 0, depth}; }, note, vel);
+        return computeRms(x, 0, x.size());
+    };
+    // Nota -> nivel, profundidade -0.5: C4 intacto; C9 (nota 120, fonte = +1) pela metade
+    float ref60 = computeRms(renderOp0([](VoiceParams&) {}, 60), 0, 12000);
+    float ref120 = computeRms(renderOp0([](VoiceParams&) {}, 120), 0, 12000);
+    float n60 = level(ModSource::KeyNote, -0.5f, 60, 100), n120 = level(ModSource::KeyNote, -0.5f, 120, 100);
+    std::printf("  (Nota -> nivel -0.5: C4 x%.3f, C9 x%.3f)\n", n60 / ref60, n120 / ref120);
+    check(std::fabs(n60 / ref60 - 1.0f) < 0.01f && std::fabs(n120 / ref120 - 0.5f) < 0.02f,
+          "mod matrix: fonte Nota vale 0 no C4 e +1 cinco oitavas acima");
+    // Velocity -> nivel, profundidade 1: ganho (1 + vel/127)
+    float v127 = level(ModSource::Velocity, 1.0f, 60, 127), v64 = level(ModSource::Velocity, 1.0f, 60, 64);
+    std::printf("  (Velocity -> nivel +1: 127/64 = %.3f, esperado %.3f)\n", v127 / v64, 2.0f / (1.0f + 64.0f / 127.0f));
+    check(std::fabs(v127 / v64 - 2.0f / (1.0f + 64.0f / 127.0f)) < 0.02f, "mod matrix: fonte Velocity = velocity/127");
+
+    VoiceParams v;
+    v.op[2].fxKeyTrack = 0.75f;
+    v.modMatrix[1] = ModRoute{ModSource::KeyNote, ModDest::OperatorFx1, 2, 0.3f};
+    v.modMatrix[2] = ModRoute{ModSource::Velocity, ModDest::OperatorMorph, 1, -0.4f};
+    VoiceParams back = voiceParamsFromJson(JsonValue::parse(voiceParamsToJson(v).dump()));
+    // patch "antigo": JSON com key track 0.75 e a chave fxKeyTrack apagada do texto
+    std::string old = voiceParamsToJson(v).dump();
+    int removed = 0;
+    for (size_t at; (at = old.find("\"fxKeyTrack\"")) != std::string::npos; ++removed)
+        old.erase(at, old.find(',', at) + 1 - at);
+    VoiceParams fromOld = voiceParamsFromJson(JsonValue::parse(old));
+    check(back.op[2].fxKeyTrack == 0.75f && back.modMatrix[1].src == ModSource::KeyNote && back.modMatrix[2].src == ModSource::Velocity &&
+              removed == kNumOps && fromOld.op[2].fxKeyTrack == 0.0f,
+          "key track e fontes Nota/Velocity sobrevivem ao JSON; patch sem a chave carrega com key track 0");
+}
+
 static void testAdditiveSilentWhenAllAmpsZero() {
     auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
     bool ok = true;
@@ -3100,6 +3243,11 @@ int main() {
     testAdditivePaintStroke();
     testAdditivePresetsAreValid();
     testAdditiveSquarePresetSounds();
+    testOpFxFilterCurveMatchesDsp();
+    testOpFxCombCurveMatchesDsp();
+    testOpFxDefaultsAndSummary();
+    testFxKeyTrackMovesFilterWithNote();
+    testModSourcesKeyNoteAndVelocity();
     testWavReaderFormats();
     testResynthFindsPartials();
     testResynthReferenceHarmonic();

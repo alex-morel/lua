@@ -93,7 +93,12 @@ struct OperatorState {
     float prevPrevOut = 0.0f; // auto-feedback usa a media das 2 ultimas amostras (estilo DX7)
     float lastAmp = 0.0f;     // amplitude do ampEG na ultima amostra (0..1), ver Voice::loudness()
     float lastAmpRaw = -1.0f; // nivel do EG (0..99) que gerou lastAmp (cache da exp2)
+    // cache do key tracking do efeito (OperatorParams::fxKeyTrack)
+    float ktLog2 = -1.0f, ktAmount = -1.0f, ktFactor = 1.0f;
 };
+
+// log2 da frequencia do C4 (nota 60, A4 = 440 Hz): centro do key tracking
+constexpr float kLog2C4 = 8.7813609f - 0.75f; // log2(440) - 9/12
 
 struct VoiceControllers {
     float pitchBendSemis = 0.0f;
@@ -384,6 +389,8 @@ private:
                 case ModSource::ChannelAT: srcVal = controllers_.channelAT01; break;
                 case ModSource::PolyAT:    srcVal = controllers_.polyAT01; break;
                 case ModSource::PitchBend: srcVal = controllers_.pitchBendSemis / std::max(0.01f, bendRangeSemis_); break;
+                case ModSource::KeyNote:   srcVal = std::clamp((static_cast<float>(note_) - 60.0f) / 60.0f, -1.0f, 1.0f); break;
+                case ModSource::Velocity:  srcVal = static_cast<float>(velocity_) / 127.0f; break;
                 default: break;
             }
             float amount = srcVal * route.depth;
@@ -471,6 +478,16 @@ private:
 
             // e. fx slot do operador, com fxEG modulando fxParam1
             float fx1 = opParams.fxParam1 * (1.0f + fx1Trim[i]);
+            // key tracking do efeito: segue a altura ATUAL da voz (com glide;
+            // sem bend/vibrato), relativa ao C4. exp2 so quando a altura muda.
+            if (opParams.fxKeyTrack > 0.0f) {
+                if (currentLog2_ != op.ktLog2 || opParams.fxKeyTrack != op.ktAmount) {
+                    op.ktLog2 = currentLog2_;
+                    op.ktAmount = opParams.fxKeyTrack;
+                    op.ktFactor = std::exp2(opParams.fxKeyTrack * (currentLog2_ - kLog2C4));
+                }
+                fx1 *= op.ktFactor;
+            }
             float processed = raw;
             switch (opParams.fxType) {
                 case FxType::Bypass: break;

@@ -315,6 +315,8 @@ inline const char* modSourceName(ModSource s) {
         case ModSource::ChannelAT: return "ChannelAT";
         case ModSource::PolyAT:    return "PolyAT";
         case ModSource::PitchBend: return "PitchBend";
+        case ModSource::KeyNote:   return "KeyNote";
+        case ModSource::Velocity:  return "Velocity";
     }
     return "None";
 }
@@ -325,6 +327,8 @@ inline ModSource modSourceFromName(const std::string& s) {
     if (s == "ChannelAT") return ModSource::ChannelAT;
     if (s == "PolyAT")    return ModSource::PolyAT;
     if (s == "PitchBend") return ModSource::PitchBend;
+    if (s == "KeyNote") return ModSource::KeyNote;
+    if (s == "Velocity") return ModSource::Velocity;
     return ModSource::None;
 }
 
@@ -501,6 +505,7 @@ inline JsonValue operatorParamsToJson(const OperatorParams& o) {
     j.set("fxType", JsonValue::makeString(fxTypeName(o.fxType)));
     j.set("fxParam1", JsonValue::makeNumber(o.fxParam1));
     j.set("fxParam2", JsonValue::makeNumber(o.fxParam2));
+    j.set("fxKeyTrack", JsonValue::makeNumber(o.fxKeyTrack));
     j.set("ringModSource", JsonValue::makeNumber(o.ringModSource));
     j.set("fxEGReleaseWithAmp", JsonValue::makeBool(o.fxEGReleaseWithAmp));
     j.set("pegDepth", JsonValue::makeNumber(o.pegDepth));
@@ -534,6 +539,7 @@ inline OperatorParams operatorParamsFromJson(const JsonValue* j) {
     o.fxType = fxTypeFromName(j->stringAt("fxType", fxTypeName(o.fxType)));
     o.fxParam1 = clampCast<float>(j->numberAt("fxParam1", o.fxParam1));
     o.fxParam2 = clampCast<float>(j->numberAt("fxParam2", o.fxParam2));
+    o.fxKeyTrack = clampCast<float>(j->numberAt("fxKeyTrack", o.fxKeyTrack)); // ausente (patch antigo) = 0
     o.ringModSource = clampCast<int>(j->numberAt("ringModSource", o.ringModSource));
     o.fxEGReleaseWithAmp = j->boolAt("fxEGReleaseWithAmp", o.fxEGReleaseWithAmp);
     o.pegDepth = clampCast<float>(j->numberAt("pegDepth", o.pegDepth));

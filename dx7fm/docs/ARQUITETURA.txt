@@ -108,7 +108,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 217 checagens de sanidade em 107 funcoes de teste (nao
+    demo.cpp        - 227 checagens de sanidade em 112 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -177,8 +177,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     que incluem os headers do motor pelo nome)
     ./demo
 
-Isso deve imprimir 217 linhas "[PASS] ..." e no final:
-    == Resultado: 217 passaram, 0 falharam ==
+Isso deve imprimir 227 linhas "[PASS] ..." e no final:
+    == Resultado: 227 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -430,6 +430,15 @@ ou um leitor de arquivo preencheria.
                               tabela de onda
       fxType, fxParam1, fxParam2, ringModSource - configuracao do efeito
                               por operador (ver secao 5)
+      fxKeyTrack (0..1, default 0) - [ADICIONADO em 2026-10-20] key
+                              tracking do efeito: nos efeitos cujo FX1 e
+                              frequencia (filtros, Comb, FreqShift, Crush),
+                              FX1 x 2^(fxKeyTrack * (log2(altura atual da
+                              voz) - log2(C4))). Usa currentLog2_ (segue o
+                              glide; nao segue bend/vibrato/PEG); a exp2 so
+                              e recalculada quando a altura muda
+                              (OperatorState::kt*). JSON "fxKeyTrack",
+                              ausente = 0.
       fxEGReleaseWithAmp (bool, default true) - se true, fxEG recebe
                               noteOff() junto com ampEG (o efeito "fecha"
                               no release, acompanhando a amplitude); se
@@ -447,7 +456,12 @@ ou um leitor de arquivo preencheria.
                               ignoram o PEG (comportamento tipico: sinos
                               inarmonicos nao devem "glissar")
 
-  ModSource { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend }
+  ModSource { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend,
+              KeyNote, Velocity }
+      [KeyNote/Velocity ADICIONADOS em 2026-10-20, no fim do enum]:
+      KeyNote = (nota - 60)/60 clampado -1..1 (0 no C4, +1 no C9);
+      Velocity = velocity/127. Fixos durante a nota. JSON: "KeyNote",
+      "Velocity"; UI: "Nota", "Velocity".
   ModDest   { None, OperatorLevel, OperatorFx1, OperatorFeedback,
               VoicePitch, OperatorMorph }
       [OperatorMorph ADICIONADO em 2026-10-18]: somado na posicao do morph
@@ -1898,7 +1912,7 @@ mudancas de cada porta estao no comentario de cabecalho do bloco.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 217 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 227 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
@@ -2194,6 +2208,23 @@ harnesses de teste/screenshot).
       do centro), ui::BeginCard/EndCard (child com altura automatica) e
       ui::LevelMeter. Fonte Roboto Medium 15px (DX7FM_FONT_DIR definido
       pelo CMake; sem o arquivo, cai na fonte embutida).
+  app/op_fx_math.h, app/op_fx_ui.h - [ADICIONADO em 2026-10-20] card
+      EFEITO DO OPERADOR: botoes de escolha do efeito, grafico do que ele
+      faz e knobs com nome/unidade reais de fxParam1/fxParam2 em cada efeito
+      (tabela no topo de op_fx_math.h; ex.: no Crush fxParam2 = bits/16).
+      Graficos: resposta do filtro EXATA do TPTStateVariableFilter (bilinear
+      com pre-warp: s = j tan(pi f/sr) / g) no corte maximo e minimo do FX EG;
+      |1/(1 - g e^-jwD)| do comb; curva de transferencia + seno processado
+      (Saturate, Crush com sample & hold, Fold no drive minimo e maximo);
+      harmonicos deslocados (FreqShift); as duas ondas e o produto (RingMod).
+      Testes medem o filtro e o comb de verdade com senos e comparam com a
+      curva (diferenca < 0.001 dB). applyDefaults: valores iniciais ao trocar
+      de efeito (entre filtros mantem corte/Q). O FX EG mudou pra este card
+      (desativado quando nao afeta nada). Na tabela, a coluna "Ajuste do FX"
+      edita o parametro PRINCIPAL de cada efeito com unidade
+      (OperatorFxQuickEdit) e o botao "..." seleciona o operador e rola ate o
+      card (g_scrollToFxCard). (Uma 1a versao deixou so um resumo de texto
+      na tabela: o usuario nao achou mais onde editar.)
   app/envelope_graph.h - ui::EnvelopeGraph: Amp EG dos 8 operadores
       sobrepostos (uma cor cada); o selecionado em destaque, com area
       preenchida e 4 pontos arrastaveis (vertical = level, horizontal =

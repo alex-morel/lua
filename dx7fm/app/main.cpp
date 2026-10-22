@@ -16,6 +16,7 @@
 #include "ui_widgets.h"
 #include "envelope_graph.h"
 #include "additive_editor.h"
+#include "op_fx_ui.h"
 #include "viz.h"
 #include "patch_browser.h"
 
@@ -255,6 +256,9 @@ void flowSameLine(float w) {
     if (x2 < ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x) ImGui::SameLine();
 }
 
+// botao "..." da coluna de efeito da tabela: rola ate o card EFEITO DO OPERADOR
+bool g_scrollToFxCard = false;
+
 bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
     // As ultimas 7 sao a reconstrucao propria das formas de onda AFM da
     // SY77/TX81Z (ver dx7_dsp.h e ARQUITETURA.txt secao 5).
@@ -275,7 +279,7 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
         ImGui::TableSetupColumn("Nivel");
         ImGui::TableSetupColumn("Feedback");
         ImGui::TableSetupColumn("FX");
-        ImGui::TableSetupColumn("FX1");
+        ImGui::TableSetupColumn("Ajuste do FX");
         ImGui::TableHeadersRow();
 
         for (int i = 0; i < kNumOps; ++i) {
@@ -328,19 +332,20 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
             ImGui::SetNextItemWidth(100);
             if (ImGui::Combo("##fx", &fx, kFx, IM_ARRAYSIZE(kFx), IM_ARRAYSIZE(kFx))) {
                 FxType newType = static_cast<FxType>(fx);
-                // FX1 do Fold e drive (1..16), nao Hz: ao trocar pra Fold, o
-                // default de 1000 (pensado pra corte de filtro) seria absurdo
-                if (newType == FxType::Fold && op.fxType != FxType::Fold) { op.fxParam1 = 3.0f; op.fxParam2 = 0.0f; }
+                // FX1/FX2 mudam de significado entre efeitos (corte em Hz,
+                // drive, bits...): valores iniciais sensatos pro efeito novo
+                dx7fm_app::opfx::applyDefaults(op.fxType, newType, op.fxParam1, op.fxParam2);
+                if (newType == FxType::RingMod && (op.ringModSource < 0 || op.ringModSource == i)) op.ringModSource = i == 0 ? 1 : 0;
                 op.fxType = newType;
                 changed = true;
             }
 
             ImGui::TableSetColumnIndex(7);
-            ImGui::SetNextItemWidth(80);
-            if (op.fxType == FxType::Fold)
-                changed |= ImGui::DragFloat("##fx1", &op.fxParam1, 0.02f, 1.0f, 16.0f, "drive %.2f", ImGuiSliderFlags_AlwaysClamp);
-            else
-                changed |= ImGui::DragFloat("##fx1", &op.fxParam1, 5.0f, 0.0f, 20000.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+            // parametro principal do efeito editavel aqui; "..." leva ao card completo
+            changed |= ui::OperatorFxQuickEdit(v, i, 120);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("...")) { selectedOp = i; g_scrollToFxCard = true; }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("todos os ajustes do efeito, com grafico (card EFEITO DO OPERADOR %d)", i + 1);
 
             ImGui::PopID();
         }
@@ -364,9 +369,6 @@ bool DrawOperatorDetail(OperatorParams& op, int opIndex) {
     flowSameLine(kw); changed |= ui::KnobU8("Rate scal", &op.rateScaling, 0, 7, 0, "%d", ks);
     flowSameLine(kw); changed |= ui::KnobU8("LFO pitch", &op.lfoPitchModSens, 0, 7, 0, "%d", ks);
     flowSameLine(kw); changed |= ui::KnobU8("LFO amp", &op.lfoAmpModSens, 0, 3, 0, "%d", ks);
-    flowSameLine(kw);
-    if (op.fxType == FxType::Fold) changed |= ui::Knob("Simetria", &op.fxParam2, 0.0f, 1.0f, 0.0f, "%.2f", ks);
-    else changed |= ui::Knob("FX P2", &op.fxParam2, 0.0f, 16.0f, 0.5f, "%.2f", ks);
 
     // key scaling: knobs + as opcoes de curva ao lado
     ImGui::TextDisabled("key scaling (nivel por nota, em volta do breakpoint)");
@@ -384,22 +386,32 @@ bool DrawOperatorDetail(OperatorParams& op, int opIndex) {
     changed |= ImGui::Checkbox("Direita exponencial##lsR", &op.levelScaling.rightExp);
     changed |= ImGui::Checkbox("PEG afeta freq fixa", &op.pegAffectsFixed);
     ImGui::EndGroup();
-    changed |= ImGui::Checkbox("FX EG acompanha o release do Amp EG", &op.fxEGReleaseWithAmp);
-    ImGui::SameLine();
-    {
-        int rm = op.ringModSource;
-        ImGui::SetNextItemWidth(120);
-        if (ImGui::SliderInt("Ring mod: op fonte", &rm, -1, kNumOps - 1, rm < 0 ? "nenhum" : "%d", ImGuiSliderFlags_AlwaysClamp)) { op.ringModSource = rm; changed = true; }
-    }
 
     if (op.waveform == Waveform::Additive) {
         static ui::AdditiveEditorState additiveUi; // estado so de UI (A/B, vista, parcial selecionado)
         changed |= ui::AdditiveEditor(op, opIndex, ui::opColor(opIndex), additiveUi);
     }
+    return changed;
+}
+
+// [ADICIONADO em 2026-10-20] Card do efeito do operador: painel de
+// op_fx_ui.h (escolha, grafico, knobs) + o FX EG, com o que ele controla.
+bool DrawOperatorFx(VoiceParams& v, int opIndex) {
+    using dx7fm_app::opfx::egSweeps;
+    auto& op = v.op[opIndex];
+    bool changed = ui::OperatorFxPanel(v, opIndex);
 
     ImGui::Spacing();
-    ImGui::TextDisabled("FX EG (modula o FX1 e o morph da Additive)");
+    const bool additive = op.waveform == Waveform::Additive, sweeps = egSweeps(op.fxType);
+    const char* what = sweeps ? (op.fxType == FxType::Fold ? "varre o drive" : "varre o corte (20% no nivel 0, 100% no 99)") : nullptr;
+    if (what && additive) ImGui::TextDisabled("FX EG: %s e move o morph A->B da Additive", what);
+    else if (what) ImGui::TextDisabled("FX EG: %s", what);
+    else if (additive) ImGui::TextDisabled("FX EG: move o morph A->B da Additive (nao afeta este efeito)");
+    else ImGui::TextDisabled("FX EG: nao afeta este efeito (so filtros, Wavefolder e o morph da Additive)");
+    ImGui::BeginDisabled(!sweeps && !additive);
     changed |= DrawEGKnobs("fxeg", op.fxEG.rate, op.fxEG.level, ui::opColor(opIndex, 200));
+    changed |= ImGui::Checkbox("FX EG acompanha o release do Amp EG", &op.fxEGReleaseWithAmp);
+    ImGui::EndDisabled();
     return changed;
 }
 // [ADICIONADO em 2026-09-21] Desenha a topologia de roteamento como um
@@ -549,9 +561,9 @@ bool DrawPeg(PEGParams& peg) {
 }
 bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
     bool changed = false;
-    static const char* kSrc[] = {"None", "LFO1", "LFO2", "ModWheel", "ChannelAT", "PolyAT", "PitchBend"};
+    static const char* kSrc[] = {"None", "LFO1", "LFO2", "ModWheel", "ChannelAT", "PolyAT", "PitchBend", "Nota", "Velocity"};
     static const char* kDst[] = {"None", "OperatorLevel", "OperatorFx1", "OperatorFeedback", "VoicePitch", "OperatorMorph"};
-    ImGui::TextDisabled("LFO/aftertouch/mod wheel -> parametros");
+    ImGui::TextDisabled("LFO/aftertouch/mod wheel/nota/velocity -> parametros");
     if (ImGui::BeginTable("modmatrix", 5, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("#");
         ImGui::TableSetupColumn("Fonte");
@@ -568,7 +580,10 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
             ImGui::TableSetColumnIndex(1);
             int src = static_cast<int>(r.src);
             ImGui::SetNextItemWidth(110);
-            if (ImGui::Combo("##src", &src, kSrc, 7)) { r.src = static_cast<ModSource>(src); changed = true; }
+            if (ImGui::Combo("##src", &src, kSrc, IM_ARRAYSIZE(kSrc), IM_ARRAYSIZE(kSrc))) { r.src = static_cast<ModSource>(src); changed = true; }
+            if (ImGui::IsItemHovered() && (r.src == ModSource::KeyNote || r.src == ModSource::Velocity))
+                ImGui::SetTooltip(r.src == ModSource::KeyNote ? "Nota: 0 no C4, +1 cinco oitavas acima (C9), -1 cinco abaixo"
+                                                              : "Velocity: 0..1 (velocity / 127), fixa durante a nota");
             ImGui::TableSetColumnIndex(2);
             int dst = static_cast<int>(r.dest);
             ImGui::SetNextItemWidth(140);
@@ -978,6 +993,11 @@ bool DrawPartLeftColumn(AppState& app, int partIndex) {
     char title[32];
     std::snprintf(title, sizeof title, "OPERADOR %d", sel + 1);
     if (ui::BeginCard("##card_opdetail", title, 0.0f, ui::opColor(sel))) changed |= DrawOperatorDetail(pp.voice.op[sel], sel);
+    ui::EndCard();
+
+    std::snprintf(title, sizeof title, "EFEITO DO OPERADOR %d", sel + 1);
+    if (g_scrollToFxCard) { ImGui::SetScrollHereY(0.0f); g_scrollToFxCard = false; } // botao "..." da tabela
+    if (ui::BeginCard("##card_opfx", title, 0.0f, ui::opColor(sel))) changed |= DrawOperatorFx(pp.voice, sel);
     ui::EndCard();
 
     if (ui::BeginCard("##card_peg", "PITCH EG", 0.0f, ui::col::kAccent2)) changed |= DrawPeg(pp.voice.peg);

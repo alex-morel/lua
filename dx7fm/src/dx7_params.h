@@ -84,6 +84,11 @@ struct OperatorParams {
     FxType fxType = FxType::Bypass;
     float fxParam1 = 1000.0f;
     float fxParam2 = 0.5f;
+    // [ADICIONADO em 2026-10-20] key tracking do efeito (0..1): FX1 (corte dos
+    // filtros, afinacao do Comb, Hz do FreqShift, taxa do Crush) multiplicado
+    // por 2^(fxKeyTrack * oitavas da nota em relacao ao C4). 1 = acompanha a
+    // nota (uma oitava acima dobra), 0 = Hz fixo (como antes).
+    float fxKeyTrack = 0.0f;
     int ringModSource = -1;
     bool fxEGReleaseWithAmp = true; // se true, fxEG recebe noteOff() junto com ampEG
                                      // (filtro/efeito "fecha" no release); se false, o
@@ -112,7 +117,10 @@ struct OperatorParams {
     float morphDepth = 0.0f;    // 0..1
 };
 
-enum class ModSource : uint8_t { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend };
+// KeyNote/Velocity [ADICIONADOS em 2026-10-20, no fim pra nao renumerar patches]:
+// KeyNote = (nota - 60) / 60, clampado -1..1 (C4 = 0, +1 cinco oitavas acima);
+// Velocity = velocity / 127 (0..1). Os dois sao fixos durante a nota.
+enum class ModSource : uint8_t { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend, KeyNote, Velocity };
 enum class ModDest : uint8_t { None, OperatorLevel, OperatorFx1, OperatorFeedback, VoicePitch,
                                OperatorMorph }; // OperatorMorph: [ADICIONADO em 2026-10-18], soma na posicao do morph A->B (Additive)
 
@@ -352,6 +360,7 @@ inline void sanitize(OperatorParams& o) {
         }
     }
     o.morphDepth = sanF(o.morphDepth, 0.0f, 1.0f, 0.0f);
+    o.fxKeyTrack = sanF(o.fxKeyTrack, 0.0f, 1.0f, 0.0f);
 }
 
 inline void sanitize(LFOParams& l) {
@@ -375,7 +384,7 @@ inline void sanitize(VoiceParams& v) {
     sanitize(v.lfo1);
     sanitize(v.lfo2);
     for (auto& r : v.modMatrix) {
-        r.src = sanEnum(r.src, ModSource::PitchBend);
+        r.src = sanEnum(r.src, ModSource::Velocity);
         r.dest = sanEnum(r.dest, ModDest::OperatorMorph);
         r.opIndex = std::clamp(r.opIndex, 0, kNumOps - 1);
         r.depth = sanF(r.depth, -1.0f, 1.0f, 0.0f);
