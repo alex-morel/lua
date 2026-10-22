@@ -85,6 +85,14 @@ dx7fm/
                       espectrograma da UI).
     wav_reader.h    - [ADICIONADO em 2026-10-20] leitor de WAV (PCM 8/16/
                       24/32, float 32/64, extensible), mixa em mono.
+    dx7_wavetable.h - [ADICIONADO em 2026-10-22] WavetableBank: as 2 ondas
+                      da Waveform::Wavetable viram frames (2 no crossfade,
+                      17 no morph espectral) com mipmaps anti-aliasing.
+                      Ver secao 4 (Waveform).
+    dx7_wavegen.h   - [ADICIONADO em 2026-10-22] geradores de onda de um
+                      ciclo (formas, pulso, harmonicos, frame de wavetable
+                      do Serum/Vital, periodo de um WAV) e utilitarios.
+                      So a UI e os testes usam; o motor nao.
     dx7_patch_io.h  - [ADICIONADO em 2026-09-21] Persistencia de patch:
                       um JSON minimo proprio (classe JsonValue, parser +
                       writer, sem lib externa) mais as funcoes
@@ -108,7 +116,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 227 checagens de sanidade em 112 funcoes de teste (nao
+    demo.cpp        - 240 checagens de sanidade em 120 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -177,8 +185,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     que incluem os headers do motor pelo nome)
     ./demo
 
-Isso deve imprimir 227 linhas "[PASS] ..." e no final:
-    == Resultado: 227 passaram, 0 falharam ==
+Isso deve imprimir 240 linhas "[PASS] ..." e no final:
+    == Resultado: 240 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -275,7 +283,38 @@ ou um leitor de arquivo preencheria.
 
   enum Waveform { Sine, Triangle, Saw, Square, Noise,
                   HalfSine, AbsSine, QuarterSine, AlternatingSine,
-                  CamelSine, SquaredSine, LogSaw, Additive }
+                  CamelSine, SquaredSine, LogSaw, Additive, Wavetable }
+      [Wavetable ADICIONADO em 2026-10-22, no FIM do enum] Duas ondas de um
+      ciclo (OperatorParams::wavetable.waveA/waveB, kWaveSize = 2048
+      amostras, nullptr = seno) e morph entre elas em
+      clamp(position + morphDepth * fxEG/99 + ModDest::OperatorMorph, 0, 1)
+      -- morphDepth e o MESMO campo da Additive (profundidade do fxEG), e o
+      destino OperatorMorph vale pras duas.
+        - Ondas no heap, IMUTAVEIS (shared_ptr<const vector<float>>): copiar
+          o patch (staging -> snapshot) so incrementa o contador; editar uma
+          onda = trocar o ponteiro por um vetor novo. Assim o VoiceParams
+          continua pequeno (o AppState mora na pilha do main).
+        - Tabelas (dx7_wavetable.h::WavetableBank), montadas na thread do
+          recompile() e guardadas em PatchSnapshot::wavetables (cache por
+          operador em PartRuntime::wtCache, chaveado pelos shared_ptr das
+          ondas -- nao pelo endereco cru, que poderia ser reusado):
+          * crossfade: 2 frames (A, B); espectral: 17 frames, cada
+            harmonico interpolado (magnitude linear, fase pelo menor arco;
+            fase oposta gira sempre no mesmo sentido -- escolher +90 pra uns
+            e -90 pra outros deixava o meio do morph com cara de ruido);
+          * ganho: A e B com pico 1; frames intermediarios com o ganho
+            INTERPOLADO (normalizar o pico de cada um derrubava o volume
+            pela metade no meio de serra -> serra invertida);
+          * mipmaps: 11 niveis, nivel k com harmonicos ate 1024 >> k numa
+            tabela de max(2048 >> k, 32) amostras (+1 de guarda); a leitura
+            escolhe pelo Nyquist da taxa INTERNA (com oversampling);
+          * leitura: 2 frames vizinhos x interpolacao linear (4 leituras).
+          Custo: ~1.3x o operador Sine; montar um banco: ~1.7 ms
+          (espectral) / 0.2 ms (crossfade).
+        - JSON: "wavetable": {"a": [...], "b": [...], "position", "spectral"},
+          amostras com 5 casas; ausente = defaults; tamanho errado e
+          reamostrado (sanWave em dx7_params.h). Arrays longos de numeros
+          passaram a sair 16 por linha (JsonValue::dump).
       [Additive ADICIONADO em 2026-10-18, no FIM do enum] Sintese aditiva:
       o operador soma kNumPartials (64; [era 8 ate 2026-10-20])
       osciladores senoidais REAIS, cada um com amplitude (0..1) e razao de
@@ -1912,7 +1951,7 @@ mudancas de cada porta estao no comentario de cabecalho do bloco.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 227 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 240 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
@@ -2247,6 +2286,15 @@ harnesses de teste/screenshot).
       encaixa), 3 vistas (Amplitude, Amplitude dB, Razao), o outro espectro
       (A/B) como marca branca, campos exatos do parcial selecionado,
       Copiar/Trocar/Limpar/Razoes harmonicas e o knob de Morph.
+  app/wavetable_editor.h, app/file_browser.h - [ADICIONADO em 2026-10-22]
+      editor da Wavetable: mini-graficos de A e B (clique escolhe qual
+      editar), onda na posicao do knob (banco proprio da UI), knobs Posicao
+      e Morph EG, Espectral/Crossfade e 4 abas pra criar a onda: Formas
+      (seno..LogSaw, ruido, pulso com largura), Desenhar (pinta com o mouse,
+      preenchendo entre quadros; suavizar/normalizar/inverter/DC),
+      Harmonicos (barras de PartialBars com razoes inteiras, presets
+      harmonicos) e WAV (WavBrowser de file_browser.h -- extraido do
+      dialogo de ressintese --; frame de wavetable ou periodo de um som).
   app/resynth_ui.h - [ADICIONADO em 2026-10-20] dialogo "Ressintetizar
       WAV..." (botao no editor da aditiva): navegador de pastas/.wav, forma
       de onda com os instantes A e B arrastaveis (faixa sombreada = quadro

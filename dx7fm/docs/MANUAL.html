@@ -715,11 +715,11 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
     <section id="referencia">
       <h2><span class="num">09</span>Referência rápida</h2>
 
-      <h3>Formas de onda (13)</h3>
+      <h3>Formas de onda (14)</h3>
       <div class="chiplist">
         <span class="chip">Sine</span><span class="chip">Triangle</span><span class="chip">Saw</span><span class="chip">Square</span><span class="chip">Noise</span>
         <span class="chip">HalfSine</span><span class="chip">AbsSine</span><span class="chip">QuarterSine</span><span class="chip">AlternatingSine</span><span class="chip">CamelSine</span><span class="chip">SquaredSine</span><span class="chip">LogSaw</span>
-        <span class="chip">Additive</span>
+        <span class="chip">Additive</span><span class="chip">Wavetable</span>
       </div>
       <p style="font-size:13.5px;color:var(--text-muted)">HalfSine…LogSaw são uma reconstrução própria inspirada nas formas de onda extras do motor AFM da Yamaha SY77/TX81Z — não uma cópia bit-exata da ROM original.</p>
       <p><strong>Additive</strong> (síntese aditiva): o operador vira a soma de <strong>64 osciladores senoidais</strong> (parciais), cada um com sua <strong>amplitude</strong> e sua <strong>razão de frequência</strong> (× a frequência do operador, de 0,01 a 128). Razões inteiras (1, 2, 3…) dão harmônicos; razões fracionárias (2,76, 5,40…) dão parciais inarmônicos — sinos, barras, tambores. Ao escolher Additive, o painel de detalhe do operador mostra o editor:</p>
@@ -733,6 +733,17 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
         <li>Parciais acima da metade da taxa de amostragem são desligados automaticamente (sem aliasing). Um operador aditivo continua podendo modular ou ser modulado em FM, e passar pelo efeito de FX.</li>
         <li>Custo: o motor calcula os parciais em grupos de 8 com instruções vetoriais (AVX2) e só até o último parcial ligado — um espectro de 8 parciais custa bem menos que um de 64. As vozes são divididas entre os núcleos do processador, então dezenas de vozes aditivas cabem em tempo real num PC atual.</li>
       </ul>
+      <h3>Wavetable (duas ondas com morph)</h3>
+      <p>Com a forma de onda <strong>Wavetable</strong>, o operador toca duas ondas de um ciclo, <strong>A</strong> e <strong>B</strong>, e passeia entre elas. O editor aparece no card do operador:</p>
+      <ul>
+        <li>Os mini-gráficos <strong>A</strong> e <strong>B</strong> mostram as duas ondas; clique em um pra escolher qual editar. O gráfico maior mostra a onda na posição do knob <strong>Posição</strong> (0% = A, 100% = B).</li>
+        <li><strong>Morph EG</strong>: quanto o envelope de FX empurra o morph na direção de B ao longo da nota. Na matriz de modulação, o destino <strong>OperatorMorph</strong> também move o morph — com LFO, mod wheel, aftertouch, Nota ou Velocity. Os três se somam.</li>
+        <li><strong>Espectral</strong> ou <strong>Crossfade</strong>: no espectral, cada harmônico vai de A até B, então o meio do caminho é uma onda intermediária e duas ondas de fase oposta não se anulam. No crossfade as amostras são misturadas, (1−m)·A + m·B — mais previsível, mas uma serra misturada com a serra invertida some no meio.</li>
+        <li>Quatro jeitos de criar a onda em edição: <strong>Formas</strong> (seno, triângulo, serra, quadrada, ruído, as 7 formas AFM e pulso com largura ajustável), <strong>Desenhar</strong> (clique e arraste; Suavizar, Normalizar, Inverter, Remover DC), <strong>Harmônicos</strong> (as barras do editor aditivo, com os harmônicos 1–64) e <strong>WAV</strong> (um arquivo de wavetable do Serum/Vital — escolha o frame — ou um período de qualquer som gravado, no instante escolhido).</li>
+        <li><strong>Copiar A→B</strong> e <strong>Trocar A↔B</strong> ajudam a montar a transição.</li>
+        <li>As ondas não geram aliasing: cada uma é guardada em várias versões com menos harmônicos, e o motor escolhe a que cabe abaixo da metade da taxa de amostragem pra nota tocada. Phase distortion, FM e os efeitos do operador funcionam como nas outras formas de onda. Custa cerca de 1,3× um operador senoidal.</li>
+      </ul>
+
       <h3>Ressíntese (a partir de um WAV)</h3>
       <p>No editor da forma de onda Additive, o botão <strong>Ressintetizar WAV…</strong> abre um diálogo que transforma um som gravado em parciais. Funciona melhor com <strong>uma nota só, isolada</strong> (sem reverb longo nem outras notas por cima).</p>
       <ol>

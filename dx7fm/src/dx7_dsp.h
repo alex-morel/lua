@@ -239,6 +239,9 @@ inline float oscWave(float phase01, Waveform wf, std::mt19937& rng,
         // Additive tem estado (fase de kNumPartials osciladores) e e gerada pela Voice
         // via PartialOscillators; se chegar aqui, cai no seno do parcial 1
         case Waveform::Additive:        return fastSin01(phase01);
+        // Wavetable le as tabelas do patch (dx7_wavetable.h) na Voice; sem
+        // tabela (onda nao carregada) soa como seno
+        case Waveform::Wavetable:       return fastSin01(phase01);
     }
     return 0.0f;
 }

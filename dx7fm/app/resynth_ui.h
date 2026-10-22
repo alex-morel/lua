@@ -1,5 +1,6 @@
 #pragma once
 #include "dx7_resynth.h"
+#include "file_browser.h"
 #include "spectrum.h"
 #include "ui_widgets.h"
 #include "wav_reader.h"
@@ -21,12 +22,7 @@ namespace ui {
 
 struct ResynthUiState {
     bool requestOpen = false;
-    // navegador
-    std::string dir;
-    struct Entry { std::string name; bool isDir; };
-    std::vector<Entry> entries;
-    bool listed = false;
-    char path[1024] = "";
+    WavBrowser browser; // app/file_browser.h
     // arquivo carregado
     dx7fm::WavData wav;
     std::string loadedPath, status;
@@ -44,32 +40,6 @@ struct ResynthUiState {
 };
 
 namespace resynth_detail {
-
-inline bool endsWithWav(const std::string& name) {
-    if (name.size() < 4) return false;
-    std::string ext = name.substr(name.size() - 4);
-    for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return ext == ".wav";
-}
-
-inline void listDir(ResynthUiState& st) {
-    namespace fs = std::filesystem;
-    st.entries.clear();
-    std::error_code ec;
-    for (fs::directory_iterator it(st.dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
-        std::string name = it->path().filename().string();
-        if (name.empty() || name[0] == '.') continue;
-        std::error_code ec2;
-        bool isDir = it->is_directory(ec2);
-        if (isDir || endsWithWav(name)) st.entries.push_back({name, isDir});
-    }
-    std::sort(st.entries.begin(), st.entries.end(), [](const ResynthUiState::Entry& a, const ResynthUiState::Entry& b) {
-        if (a.isDir != b.isDir) return a.isDir;
-        auto lower = [](std::string s) { for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; };
-        return lower(a.name) < lower(b.name);
-    });
-    st.listed = true;
-}
 
 inline void load(ResynthUiState& st, const std::string& path) {
     st.wav = dx7fm::readWavMono(path);
@@ -193,47 +163,23 @@ inline bool ResynthDialog(dx7fm::OperatorParams& op, int opIndex, ResynthUiState
     if (st.requestOpen) {
         ImGui::OpenPopup("Ressintese de WAV");
         st.requestOpen = false;
-        if (st.dir.empty()) {
-            const char* home = std::getenv("HOME");
-            st.dir = home ? home : ".";
-        }
-        st.listed = false;
+        st.browser.listed = false;
     }
     ImGui::SetNextWindowSize(ImVec2(1000, 540), ImGuiCond_Appearing);
     if (!ImGui::BeginPopupModal("Ressintese de WAV", nullptr, ImGuiWindowFlags_NoSavedSettings)) return false;
     bool applied = false;
-    if (!st.listed) listDir(st);
 
     // --- navegador (coluna esquerda) ---
-    ImGui::BeginChild("##browser", ImVec2(300, -ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_Borders);
-    if (ImGui::SmallButton("^ acima")) {
-        st.dir = fs::path(st.dir).parent_path().string();
-        if (st.dir.empty()) st.dir = "/";
-        st.listed = false;
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", st.dir.c_str());
-    ImGui::Separator();
-    for (const auto& e : st.entries) {
-        std::string label = (e.isDir ? "[pasta] " : "") + e.name;
-        const std::string full = (fs::path(st.dir) / e.name).string();
-        if (ImGui::Selectable(label.c_str(), !e.isDir && full == st.loadedPath)) {
-            if (e.isDir) { st.dir = full; st.listed = false; }
-            else { std::snprintf(st.path, sizeof st.path, "%s", full.c_str()); load(st, full); }
-        }
-    }
-    if (st.entries.empty()) ImGui::TextDisabled("(nenhuma pasta ou .wav aqui)");
-    ImGui::EndChild();
+    std::string picked = st.browser.drawList("##browser", ImVec2(300, -ImGui::GetFrameHeightWithSpacing()), st.loadedPath);
+    if (!picked.empty()) load(st, picked);
     ImGui::SameLine();
 
     // --- analise (coluna direita) ---
     ImGui::BeginGroup();
-    ImGui::SetNextItemWidth(-80);
-    bool enter = ImGui::InputTextWithHint("##path", "caminho de um arquivo .wav", st.path, sizeof st.path, ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::SameLine();
-    if (ImGui::Button("Abrir", ImVec2(-1, 0)) || enter) {
-        load(st, st.path);
-        if (st.wav.error.empty()) { st.dir = fs::path(st.path).parent_path().string(); st.listed = false; }
+    std::string typed = st.browser.drawPathInput("resynthpath");
+    if (!typed.empty()) {
+        load(st, typed);
+        if (st.wav.error.empty()) st.browser.followFile(typed);
     }
     if (!st.status.empty()) ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col::kAccent2), "%s", st.status.c_str());
 

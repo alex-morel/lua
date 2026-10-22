@@ -73,6 +73,20 @@ public:
             case Type::String: return "\"" + escape(str_) + "\"";
             case Type::Array: {
                 if (arr_.empty()) return "[]";
+                // [2026-10-22] array longo so de numeros (parciais, ondas da
+                // Wavetable): 16 por linha em vez de 1, senao uma onda de 2048
+                // amostras viraria 2048 linhas no arquivo
+                bool numeric = arr_.size() > 8;
+                for (const auto& e : arr_) numeric &= e.type_ == Type::Number;
+                if (numeric) {
+                    std::string out = "[\n";
+                    for (size_t i = 0; i < arr_.size(); ++i) {
+                        if (i % 16 == 0) out += padIn;
+                        out += arr_[i].dump(indent + 1);
+                        if (i + 1 < arr_.size()) out += (i % 16 == 15) ? ",\n" : ", ";
+                    }
+                    return out + "\n" + pad + "]";
+                }
                 std::string out = "[\n";
                 for (size_t i = 0; i < arr_.size(); ++i) {
                     out += padIn + arr_[i].dump(indent + 1);
@@ -239,6 +253,7 @@ inline const char* waveformName(Waveform w) {
         case Waveform::SquaredSine:     return "SquaredSine";
         case Waveform::LogSaw:          return "LogSaw";
         case Waveform::Additive:        return "Additive";
+        case Waveform::Wavetable:       return "Wavetable";
     }
     return "Sine";
 }
@@ -255,6 +270,7 @@ inline Waveform waveformFromName(const std::string& s) {
     if (s == "SquaredSine")     return Waveform::SquaredSine;
     if (s == "LogSaw")          return Waveform::LogSaw;
     if (s == "Additive")        return Waveform::Additive;
+    if (s == "Wavetable")       return Waveform::Wavetable;
     return Waveform::Sine;
 }
 
@@ -484,6 +500,21 @@ inline OperatorParams::PartialSet partialSetFromJson(const JsonValue* j) {
     return p;
 }
 
+// Onda da Wavetable: array de amostras com 5 casas (resolucao 1e-5, ~-100 dB
+// abaixo do pico; ~37 KB por onda). Carga: tamanho errado e reamostrado pelo
+// sanitize (sanWave); vazio/ausente = nullptr (seno).
+inline JsonValue waveToJson(const std::shared_ptr<const std::vector<float>>& w) {
+    JsonValue a = JsonValue::makeArray();
+    if (w) for (float x : *w) a.push(JsonValue::makeNumber(std::round(static_cast<double>(x) * 1e5) / 1e5));
+    return a;
+}
+inline std::shared_ptr<const std::vector<float>> waveFromJson(const JsonValue* j) {
+    if (!j || j->arraySize() == 0) return nullptr;
+    auto w = std::make_shared<std::vector<float>>(j->arraySize());
+    for (size_t i = 0; i < w->size(); ++i) (*w)[i] = clampCast<float>(j->at(i).asNumber(0.0));
+    return sanWave(w);
+}
+
 inline JsonValue operatorParamsToJson(const OperatorParams& o) {
     JsonValue j = JsonValue::makeObject();
     j.set("fixedFreq", JsonValue::makeBool(o.fixedFreq));
@@ -515,6 +546,14 @@ inline JsonValue operatorParamsToJson(const OperatorParams& o) {
     add.set("b", partialSetToJson(o.additiveB));
     add.set("morph", JsonValue::makeNumber(o.morphDepth));
     j.set("additive", std::move(add));
+    if (o.wavetable.waveA || o.wavetable.waveB || o.waveform == Waveform::Wavetable) {
+        JsonValue wt = JsonValue::makeObject();
+        wt.set("a", waveToJson(o.wavetable.waveA));
+        wt.set("b", waveToJson(o.wavetable.waveB));
+        wt.set("position", JsonValue::makeNumber(o.wavetable.position));
+        wt.set("spectral", JsonValue::makeBool(o.wavetable.spectralMorph));
+        j.set("wavetable", std::move(wt));
+    }
     return j;
 }
 inline OperatorParams operatorParamsFromJson(const JsonValue* j) {
@@ -548,6 +587,12 @@ inline OperatorParams operatorParamsFromJson(const JsonValue* j) {
         o.additiveA = partialSetFromJson(add->find("a"));
         o.additiveB = partialSetFromJson(add->find("b"));
         o.morphDepth = clampCast<float>(add->numberAt("morph", o.morphDepth));
+    }
+    if (auto* wt = j->find("wavetable")) { // ausente (patch antigo) = mantem os defaults
+        o.wavetable.waveA = waveFromJson(wt->find("a"));
+        o.wavetable.waveB = waveFromJson(wt->find("b"));
+        o.wavetable.position = clampCast<float>(wt->numberAt("position", o.wavetable.position));
+        o.wavetable.spectralMorph = wt->boolAt("spectral", o.wavetable.spectralMorph);
     }
     return o;
 }

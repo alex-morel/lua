@@ -70,6 +70,13 @@ struct PartRuntime {
     CompiledAlgorithm compiledCache{};
     bool hasCompiledCache = false;
     uint64_t generation = 0; // contador de recompile() (ver PatchSnapshot::generation)
+    // cache das tabelas da Wavetable por operador (so a thread do recompile() toca aqui)
+    struct WavetableCache {
+        std::shared_ptr<const std::vector<float>> waveA, waveB;
+        bool spectral = true;
+        WavetableBankPtr bank;
+    };
+    std::array<WavetableCache, kNumOps> wtCache{};
 
     std::unordered_set<int> sostenutoCaptured;
     bool sostenutoDown = false;
@@ -152,7 +159,23 @@ public:
             pr.hasCompiledCache = true;
         }
         int newIdx = pr.stagingIndex_;
-        pr.snapshots_[static_cast<size_t>(newIdx)] = PatchSnapshot{pr.params.voice, pr.compiledCache, ++pr.generation};
+        // tabelas da Wavetable: so remonta o operador cujas ondas/modo mudaram.
+        // O cache guarda os shared_ptr das ondas (nao so o endereco): uma onda
+        // liberada nao pode ter o endereco reusado por outra enquanto esta aqui.
+        WavetableBanks banks{};
+        for (int i = 0; i < kNumOps; ++i) {
+            const auto& o = pr.params.voice.op[i];
+            auto& c = pr.wtCache[static_cast<size_t>(i)];
+            if (o.waveform != Waveform::Wavetable) continue; // cache fica: voltar pra Wavetable nao remonta
+            if (!c.bank || c.waveA != o.wavetable.waveA || c.waveB != o.wavetable.waveB || c.spectral != o.wavetable.spectralMorph) {
+                c.bank = makeWavetableBank(o);
+                c.waveA = o.wavetable.waveA;
+                c.waveB = o.wavetable.waveB;
+                c.spectral = o.wavetable.spectralMorph;
+            }
+            banks[static_cast<size_t>(i)] = c.bank;
+        }
+        pr.snapshots_[static_cast<size_t>(newIdx)] = PatchSnapshot{pr.params.voice, pr.compiledCache, ++pr.generation, std::move(banks)};
         int oldLive = pr.liveIndex_.exchange(newIdx, std::memory_order_acq_rel);
         pr.stagingIndex_ = 3 - newIdx - oldLive; // o terceiro indice (0+1+2=3)
     }
@@ -285,6 +308,9 @@ public:
     }
     int workerThreads() const { return pool_.workers(); }
 
+    // snapshot AO VIVO da parte (o que o audio le), so pra testes/depuracao
+    const PatchSnapshot* debugLiveSnapshot(int part) const { return parts_[part].live(); }
+
     int activeVoiceCount() const {
         int c = 0;
         for (auto& s : slots_) if (s.ownerPart >= 0 && s.voice.isActive()) ++c;
@@ -394,6 +420,7 @@ private:
         s.sostenutoHeld = false;
         s.triggerCounter = ++triggerCounter_;
         const PatchSnapshot* snap = pr.live(); // notas NOVAS sempre pegam o patch AO VIVO mais recente
+        s.voice.bindWavetables(&snap->wavetables);
         s.voice.noteOn(&snap->voice, &snap->compiled, soundingNote, velocity, extraDetuneCents, legato, glideFromHz,
                        snap->generation);
         s.voice.controllers().pitchBendSemis = pr.bend;
@@ -551,6 +578,7 @@ private:
             auto& pr = parts_[s.ownerPart];
             const PatchSnapshot* snap = live[s.ownerPart];
             s.voice.rebind(&snap->voice, &snap->compiled, snap->generation); // "ao vivo": pega qualquer recompile() publicado ate agora
+            s.voice.bindWavetables(&snap->wavetables);
             float pan = std::clamp(pr.params.pan + s.subPan, -1.0f, 1.0f);
             jobs_.push_back({static_cast<int>(idx), 1.0f - std::max(0.0f, pan), 1.0f + std::min(0.0f, pan), pr.params.level, 0});
         }

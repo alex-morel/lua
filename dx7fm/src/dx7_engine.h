@@ -1,7 +1,10 @@
 #pragma once
 #include "dx7_params.h"
 #include "dx7_dsp.h"
+#include "dx7_wavetable.h"
 #include <algorithm>
+#include <array>
+#include <memory>
 #include <cmath>
 #include <random>
 
@@ -65,6 +68,16 @@ inline CompiledAlgorithm compileAlgorithm(const AlgorithmMatrix& m) {
 // (compileAlgorithm deriva um do outro). Publicar os dois juntos, de uma
 // vez, e a base do mecanismo de troca atomica de patch em dx7_alloc.h
 // (thread safety) -- ver PartRuntime::live()/recompile().
+using WavetableBankPtr = std::shared_ptr<const WavetableBank>;
+using WavetableBanks = std::array<WavetableBankPtr, kNumOps>;
+
+// Tabelas da Waveform::Wavetable de um patch (nullptr nos operadores que nao
+// sao Wavetable). Custa ms por operador: o Synth guarda cache (recompile).
+inline WavetableBankPtr makeWavetableBank(const OperatorParams& o) {
+    if (o.waveform != Waveform::Wavetable) return nullptr;
+    return std::make_shared<const WavetableBank>(o.wavetable.waveA.get(), o.wavetable.waveB.get(), o.wavetable.spectralMorph);
+}
+
 struct PatchSnapshot {
     VoiceParams voice;
     CompiledAlgorithm compiled;
@@ -73,9 +86,12 @@ struct PatchSnapshot {
     // saber quando refaze-los -- so o ponteiro nao basta, porque o triple
     // buffer reusa os mesmos 3 slots de memoria.
     uint64_t generation = 0;
+    WavetableBanks wavetables{}; // [2026-10-22] montadas a partir de voice (ver makeWavetableBank)
 };
 inline PatchSnapshot makeSnapshot(const VoiceParams& v) {
-    return PatchSnapshot{v, compileAlgorithm(v.matrix), 0};
+    PatchSnapshot s{v, compileAlgorithm(v.matrix), 0, {}};
+    for (int i = 0; i < kNumOps; ++i) s.wavetables[static_cast<size_t>(i)] = makeWavetableBank(v.op[i]);
+    return s;
 }
 
 struct OperatorState {
@@ -236,6 +252,10 @@ public:
         compiled_ = compiled;
         generation_ = generation;
     }
+
+    // [2026-10-22] tabelas da Waveform::Wavetable do MESMO snapshot de patch_
+    // (o Synth chama junto com noteOn/rebind). nullptr = operadores Wavetable soam seno.
+    void bindWavetables(const WavetableBanks* banks) { wavetables_ = banks; }
 
     // Uma amostra na taxa BASE (nao superamostrada). Se oversampleFactor_>1,
     // roda processOneSample() internamente a taxa superamostrada e decima
@@ -466,6 +486,11 @@ private:
                 float morph = std::clamp(opParams.morphDepth * (fxEnv / 99.0f) + morphTrim[i], 0.0f, 1.0f);
                 raw = op.partials.process(opParams.additiveA, opParams.additiveB, morph, freqHz, modIn,
                                           opParams.phaseDistortion, static_cast<float>(sampleRate_), c.partialGroups);
+            } else if (opParams.waveform == Waveform::Wavetable && wavetables_ && (*wavetables_)[static_cast<size_t>(i)]) {
+                // duas ondas com morph (dx7_wavetable.h): posicao do knob +
+                // fxEG x profundidade + mod matrix; mipmap pela frequencia
+                float morph = std::clamp(opParams.wavetable.position + opParams.morphDepth * (fxEnv / 99.0f) + morphTrim[i], 0.0f, 1.0f);
+                raw = (*wavetables_)[static_cast<size_t>(i)]->read(ph, morph, freqHz, static_cast<float>(sampleRate_));
             } else {
                 raw = oscWave(ph, opParams.waveform, rng_, dist_);
             }
@@ -601,6 +626,7 @@ private:
     }
 
     const VoiceParams* patch_ = nullptr;
+    const WavetableBanks* wavetables_ = nullptr;
     const CompiledAlgorithm* compiled_ = nullptr;
     double baseSampleRate_ = 0.0; // taxa "externa"; 0 ate o primeiro setSampleRate()
     double sampleRate_ = 48000.0; // taxa INTERNA (= baseSampleRate_ * oversampleFactor_)

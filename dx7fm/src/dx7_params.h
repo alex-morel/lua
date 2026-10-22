@@ -2,7 +2,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace dx7fm {
 
@@ -10,6 +12,7 @@ constexpr int kNumOps = 8;
 constexpr int kNumModRoutes = 8;
 constexpr int kNumPartials = 64; // osciladores senoidais da forma de onda Additive (multiplo de 8: kernel SIMD)
 constexpr float kMaxPartialRatio = 128.0f; // razao maxima de um parcial (64 harmonicos impares chegam a 127)
+constexpr int kWaveSize = 2048; // amostras de UM ciclo de onda da Waveform::Wavetable (= frame do Serum/Vital)
 
 struct EGParams {
     uint8_t rate[4]  = {99, 99, 99, 50};
@@ -37,7 +40,10 @@ enum class Waveform : uint8_t {
     // com amplitude e razao de frequencia LIVRES (inarmonicos: sinos,
     // tambores...), morph A->B pelo fxEG -- ver OperatorParams::additiveA/B.
     // SEMPRE no fim, pra nao renumerar as anteriores.
-    Additive
+    Additive,
+    // [ADICIONADO em 2026-10-22] duas ondas de um ciclo (A e B) com morph
+    // entre elas -- ver OperatorParams::wavetable e dx7_wavetable.h.
+    Wavetable
 };
 
 enum class FxType : uint8_t {
@@ -114,7 +120,21 @@ struct OperatorParams {
         }
     };
     PartialSet additiveA, additiveB;
-    float morphDepth = 0.0f;    // 0..1
+    float morphDepth = 0.0f;    // 0..1; profundidade do fxEG no morph (Additive E Wavetable)
+
+    // [ADICIONADO em 2026-10-22] so usado com waveform == Wavetable: duas
+    // ondas de um ciclo (kWaveSize amostras) e o morph entre elas, em
+    // clamp(position + morphDepth * fxEG/99 + ModDest::OperatorMorph, 0, 1).
+    // As ondas ficam no heap e sao IMUTAVEIS (shared_ptr<const>): copiar o
+    // patch (staging -> snapshot a cada recompile) so incrementa o contador, e
+    // editar uma onda = trocar o ponteiro por um vetor novo. nullptr = seno.
+    // As tabelas com anti-aliasing sao montadas no recompile (dx7_wavetable.h).
+    struct WavetableParams {
+        std::shared_ptr<const std::vector<float>> waveA, waveB;
+        float position = 0.0f;     // 0..1 (0 = A, 1 = B)
+        bool spectralMorph = true; // true: interpola os harmonicos; false: crossfade das amostras
+    };
+    WavetableParams wavetable;
 };
 
 // KeyNote/Velocity [ADICIONADOS em 2026-10-20, no fim pra nao renumerar patches]:
@@ -329,6 +349,29 @@ inline void sanEG(uint8_t (&rate)[4], uint8_t (&level)[4]) {
 }
 } // namespace detail
 
+// Onda da Wavetable: tamanho diferente de kWaveSize e reamostrado (linear,
+// ciclico); com NaN/Inf ou vazia vira nullptr (= seno). So aloca se precisar.
+inline std::shared_ptr<const std::vector<float>> sanWave(std::shared_ptr<const std::vector<float>> w) {
+    if (!w) return w;
+    const auto& v = *w;
+    if (v.empty()) return nullptr;
+    for (float x : v) if (!std::isfinite(x)) return nullptr;
+    if (v.size() == static_cast<size_t>(kWaveSize)) {
+        bool inRange = true;
+        for (float x : v) inRange &= x >= -1.0f && x <= 1.0f;
+        if (inRange) return w;
+    }
+    auto out = std::make_shared<std::vector<float>>(static_cast<size_t>(kWaveSize));
+    const size_t n = v.size();
+    for (int i = 0; i < kWaveSize; ++i) {
+        double pos = static_cast<double>(i) * static_cast<double>(n) / kWaveSize;
+        size_t i0 = static_cast<size_t>(pos) % n, i1 = (i0 + 1) % n;
+        float t = static_cast<float>(pos - std::floor(pos));
+        (*out)[static_cast<size_t>(i)] = std::clamp(v[i0] * (1.0f - t) + v[i1] * t, -1.0f, 1.0f);
+    }
+    return out;
+}
+
 inline void sanitize(OperatorParams& o) {
     using namespace detail;
     o.coarseRatio = sanF(o.coarseRatio, 0.01f, 32.0f, 1.0f);
@@ -346,7 +389,10 @@ inline void sanitize(OperatorParams& o) {
     o.lfoAmpModSens = std::min<uint8_t>(o.lfoAmpModSens, 3);
     o.lfoPitchModSens = std::min<uint8_t>(o.lfoPitchModSens, 7);
     o.feedback = sanF(o.feedback, 0.0f, 1.0f, 0.0f);
-    o.waveform = sanEnum(o.waveform, Waveform::Additive);
+    o.waveform = sanEnum(o.waveform, Waveform::Wavetable);
+    o.wavetable.position = sanF(o.wavetable.position, 0.0f, 1.0f, 0.0f);
+    o.wavetable.waveA = sanWave(o.wavetable.waveA);
+    o.wavetable.waveB = sanWave(o.wavetable.waveB);
     o.phaseDistortion = sanF(o.phaseDistortion, 0.0f, 1.0f, 0.0f);
     o.fxType = sanEnum(o.fxType, FxType::Fold);
     o.fxParam1 = sanF(o.fxParam1, 0.0f, 20000.0f, 1000.0f);

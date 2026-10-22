@@ -7,6 +7,7 @@
 #include "wav_writer.h"
 #include "wav_reader.h"
 #include "dx7_resynth.h"
+#include "dx7_wavegen.h"
 #include "../app/event_queue.h"
 #include "../app/patch_browser.h"
 #include "../app/envelope_math.h"
@@ -2634,6 +2635,207 @@ static void testModSourcesKeyNoteAndVelocity() {
           "key track e fontes Nota/Velocity sobrevivem ao JSON; patch sem a chave carrega com key track 0");
 }
 
+// --- [ADICIONADO em 2026-10-22] Waveform::Wavetable (dx7_wavetable.h + dx7_wavegen.h) ---
+static void setWavetable(VoiceParams& v, wavegen::Wave a, wavegen::Wave b, float position, bool spectral = true) {
+    auto& o = v.op[0];
+    o.waveform = Waveform::Wavetable;
+    o.wavetable.waveA = a.empty() ? nullptr : wavegen::share(std::move(a));
+    o.wavetable.waveB = b.empty() ? nullptr : wavegen::share(std::move(b));
+    o.wavetable.position = position;
+    o.wavetable.spectralMorph = spectral;
+}
+
+// magnitude do harmonico h de um ciclo (DFT de 1 bin)
+static float cycleHarmonic(const wavegen::Wave& w, int h) {
+    double re = 0.0, im = 0.0;
+    for (size_t i = 0; i < w.size(); ++i) {
+        double ph = 2.0 * M_PI * h * static_cast<double>(i) / static_cast<double>(w.size());
+        re += w[i] * std::cos(ph);
+        im += w[i] * std::sin(ph);
+    }
+    return static_cast<float>(2.0 * std::hypot(re, im) / static_cast<double>(w.size()));
+}
+
+static void testWavetableSineMatchesSineOperator() {
+    auto ref = renderOp0([](VoiceParams&) {}, 69);
+    auto wt = renderOp0([](VoiceParams& v) { setWavetable(v, wavegen::fromShape(Waveform::Sine), {}, 0.3f); }, 69);
+    float maxDiff = 0.0f;
+    for (size_t i = 0; i < ref.size(); ++i) maxDiff = std::max(maxDiff, std::fabs(ref[i] - wt[i]));
+    std::printf("  (Wavetable seno x operador Sine: maior diferenca %.2e)\n", maxDiff);
+    check(maxDiff < 1e-3f, "Wavetable com A e B = seno soa igual ao operador Sine");
+}
+
+static void testWavetableAntiAliasing() {
+    // serra em ~2960 Hz (nota 102): harmonicos 9..16 passam de Nyquist e,
+    // na serra ingenua, voltam espelhados (alias) em 48000 - h*f
+    const float f = 440.0f * std::pow(2.0f, (102 - 69) / 12.0f);
+    auto naive = renderOp0([](VoiceParams& v) { v.op[0].waveform = Waveform::Saw; }, 102);
+    auto table = renderOp0([](VoiceParams& v) { setWavetable(v, wavegen::fromShape(Waveform::Saw), {}, 0.0f); }, 102);
+    auto aliasEnergy = [&](const std::vector<float>& x) {
+        double e = 0.0;
+        for (int h = 9; h <= 16; ++h) { float a = std::fabs(48000.0f - h * f); e += mag(x, a) * mag(x, a); }
+        return std::sqrt(e);
+    };
+    float an = aliasEnergy(naive), at = aliasEnergy(table);
+    float fundN = mag(naive, f), fundT = mag(table, f);
+    std::printf("  (serra em %.0f Hz: alias/fundamental ingenua %.4f, wavetable %.6f)\n", f, an / fundN, at / fundT);
+    check(at / fundT < 0.01f * (an / fundN), "Wavetable: mipmaps cortam os harmonicos acima de Nyquist (alias 40 dB abaixo da serra ingenua)");
+}
+
+static void testWavetableMorphModes() {
+    // crossfade e linear no morph: posicao 0.5 = media de 0 e 1
+    auto saw = wavegen::fromShape(Waveform::Saw), sq = wavegen::fromShape(Waveform::Square);
+    auto at = [&](float pos, bool spectral, wavegen::Wave a, wavegen::Wave b) {
+        return renderOp0([&](VoiceParams& v) { setWavetable(v, a, b, pos, spectral); }, 57);
+    };
+    auto x0 = at(0.0f, false, saw, sq), x1 = at(1.0f, false, saw, sq), xm = at(0.5f, false, saw, sq);
+    float maxDiff = 0.0f;
+    for (size_t i = 0; i < xm.size(); ++i) maxDiff = std::max(maxDiff, std::fabs(xm[i] - 0.5f * (x0[i] + x1[i])));
+    check(maxDiff < 1e-5f, "Wavetable crossfade: posicao 0.5 = (A + B) / 2 amostra a amostra");
+
+    // serra -> serra invertida: crossfade cancela no meio, espectral nao
+    auto inv = saw;
+    wavegen::invert(inv);
+    float rEnd = computeRms(at(0.0f, true, saw, inv), 0, 12000);
+    float rCross = computeRms(at(0.5f, false, saw, inv), 0, 12000);
+    float rSpec = computeRms(at(0.5f, true, saw, inv), 0, 12000);
+    std::printf("  (serra -> serra invertida no meio do morph: crossfade %.3f, espectral %.3f do volume das pontas)\n", rCross / rEnd, rSpec / rEnd);
+    check(rCross / rEnd < 0.01f && rSpec / rEnd > 0.9f, "Wavetable espectral: morph entre ondas de fase oposta nao passa pelo silencio (o crossfade passa)");
+
+    // serra -> quadrada: os harmonicos impares tem fase oposta (180 graus, sentido
+    // ambiguo). Girar uns pra +90 e outros pra -90 deixava o meio do morph com
+    // cara de ruido (variacao total 74.6 contra 4 nas pontas); sentido unico: ~17
+    // (o resto e o ripple de Gibbs de 1023 harmonicos)
+    WavetableBank bank(&saw, &sq, true);
+    float mid[kWaveSize];
+    bank.preview(0.5f, mid, kWaveSize);
+    double tv = 0.0;
+    for (int i = 0; i < kWaveSize; ++i) tv += std::fabs(mid[(i + 1) % kWaveSize] - mid[i]);
+    std::printf("  (serra -> quadrada, meio do morph espectral: variacao total %.1f)\n", tv);
+    check(tv < 30.0, "Wavetable espectral: fases opostas giram no mesmo sentido (meio do morph sem cara de ruido)");
+}
+
+static void testWavetableMorphModulation() {
+    // A = so o harmonico 1, B = so o 2: a energia em 2f mostra onde o morph esta
+    const float one[2] = {1.0f, 0.0f}, two[2] = {0.0f, 1.0f};
+    auto a = wavegen::fromHarmonics(one, 2), b = wavegen::fromHarmonics(two, 2);
+    auto share2f = [&](const std::function<void(VoiceParams&)>& extra, int vel = 100) {
+        auto x = renderOp0([&](VoiceParams& v) { setWavetable(v, a, b, 0.0f); extra(v); }, 69, vel);
+        float m1 = mag(x, 440.0), m2 = mag(x, 880.0);
+        return m2 / (m1 + m2);
+    };
+    float none = share2f([](VoiceParams&) {});
+    float knob = share2f([](VoiceParams& v) { v.op[0].wavetable.position = 1.0f; });
+    float eg = share2f([](VoiceParams& v) { v.op[0].morphDepth = 1.0f; }); // fxEG padrao fica em 99
+    float matrix = share2f([](VoiceParams& v) { v.modMatrix[0] = ModRoute{ModSource::Velocity, ModDest::OperatorMorph, 0, 1.0f}; }, 127);
+    float half = share2f([](VoiceParams& v) { v.modMatrix[0] = ModRoute{ModSource::Velocity, ModDest::OperatorMorph, 0, 0.5f}; }, 127);
+    std::printf("  (fracao em 2f: sem morph %.3f, knob %.3f, FX EG %.3f, matriz %.3f, matriz 0.5 %.3f)\n", none, knob, eg, matrix, half);
+    check(none < 0.01f && knob > 0.99f && eg > 0.99f && matrix > 0.99f && half > 0.3f && half < 0.7f,
+          "Wavetable: morph movido pelo knob de posicao, pelo FX EG e pela mod matrix (OperatorMorph)");
+}
+
+static void testWavetableJsonAndSanitize() {
+    VoiceParams v;
+    setWavetable(v, wavegen::fromShape(Waveform::Saw), wavegen::pulse(0.25f), 0.4f, false);
+    VoiceParams back = voiceParamsFromJson(JsonValue::parse(voiceParamsToJson(v).dump()));
+    const auto& o = back.op[0].wavetable;
+    float maxDiff = 0.0f;
+    for (int i = 0; i < kWaveSize; ++i) {
+        maxDiff = std::max(maxDiff, std::fabs((*o.waveA)[static_cast<size_t>(i)] - (*v.op[0].wavetable.waveA)[static_cast<size_t>(i)]));
+        maxDiff = std::max(maxDiff, std::fabs((*o.waveB)[static_cast<size_t>(i)] - (*v.op[0].wavetable.waveB)[static_cast<size_t>(i)]));
+    }
+    check(back.op[0].waveform == Waveform::Wavetable && maxDiff <= 1e-5f && o.position == 0.4f && !o.spectralMorph,
+          "Wavetable: ondas, posicao e modo sobrevivem ao JSON (erro <= 1e-5)");
+    VoiceParams fresh = voiceParamsFromJson(JsonValue::parse(voiceParamsToJson(VoiceParams{}).dump()));
+    OperatorParams odd;
+    odd.wavetable.waveA = std::make_shared<const std::vector<float>>(512, 0.5f);
+    odd.wavetable.waveB = std::make_shared<const std::vector<float>>(kWaveSize, std::nanf(""));
+    sanitize(odd);
+    check(!fresh.op[0].wavetable.waveA && odd.wavetable.waveA && odd.wavetable.waveA->size() == static_cast<size_t>(kWaveSize) &&
+              !odd.wavetable.waveB,
+          "Wavetable: patch sem ondas carrega como seno; onda de tamanho errado e reamostrada, com NaN vira seno");
+}
+
+static void testWavegenImport() {
+    // wavetable de 4 frames (frame f = seno no harmonico f+1)
+    std::vector<float> table;
+    for (int f = 0; f < 4; ++f)
+        for (int i = 0; i < kWaveSize; ++i) table.push_back(std::sin(2.0f * static_cast<float>(M_PI) * (f + 1) * i / kWaveSize));
+    auto frame2 = wavegen::fromWavFrame(table, 2);
+    bool same = wavegen::wavetableFrames(table) == 4;
+    for (int i = 0; i < kWaveSize; ++i) same &= frame2[static_cast<size_t>(i)] == table[static_cast<size_t>(2 * kWaveSize + i)];
+    check(same, "Wavetable/WAV: arquivo de wavetable (4 frames de 2048) e o frame escolhido vem identico");
+
+    // som comum: seno de 440 Hz com DC -> um periodo, sem DC, comecando na subida do zero
+    std::vector<float> tone(48000);
+    for (size_t i = 0; i < tone.size(); ++i) tone[i] = 0.1f + 0.5f * std::sin(2.0f * static_cast<float>(M_PI) * 440.0f * static_cast<float>(i) / 48000.0f);
+    float f0 = 0.0f;
+    auto per = wavegen::fromWavPeriod(tone, 48000.0, 0.5, &f0);
+    auto ref = wavegen::fromShape(Waveform::Sine);
+    float maxDiff = per.empty() ? 1.0f : 0.0f;
+    for (size_t i = 0; i < per.size(); ++i) maxDiff = std::max(maxDiff, std::fabs(per[i] - ref[i]));
+    std::printf("  (periodo de um seno de 440 Hz: f0 %.2f Hz, diferenca do seno %.3f)\n", f0, maxDiff);
+    check(std::fabs(f0 - 440.0f) < 0.5f && maxDiff < 0.05f, "Wavetable/WAV: um periodo de um som comum vira um ciclo (f0 detectado, DC tirado)");
+
+    float amp[8];
+    for (int k = 0; k < 8; ++k) amp[k] = 1.0f / (k + 1);
+    auto saw = wavegen::fromHarmonics(amp, 8);
+    float h1 = cycleHarmonic(saw, 1);
+    check(std::fabs(cycleHarmonic(saw, 2) / h1 - 0.5f) < 1e-3f && std::fabs(cycleHarmonic(saw, 5) / h1 - 0.2f) < 1e-3f &&
+              cycleHarmonic(saw, 9) < 1e-4f,
+          "Wavetable/harmonicos: onda gerada tem exatamente as amplitudes pedidas (1/k) e nada acima");
+}
+
+static void testWavetableBankCache() {
+    Synth synth;
+    synth.init(48000.0, 4);
+    VoiceParams v;
+    setWavetable(v, wavegen::fromShape(Waveform::Saw), wavegen::fromShape(Waveform::Square), 0.0f);
+    v.op[3].waveform = Waveform::Wavetable;
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    const void* b0 = synth.debugLiveSnapshot(0)->wavetables[0].get();
+    const void* b3 = synth.debugLiveSnapshot(0)->wavetables[3].get();
+    synth.part(0).voice.op[0].outputLevel = 50;
+    synth.part(0).voice.op[0].wavetable.position = 0.7f;
+    synth.recompile(0);
+    bool kept = synth.debugLiveSnapshot(0)->wavetables[0].get() == b0 && synth.debugLiveSnapshot(0)->wavetables[3].get() == b3;
+    synth.part(0).voice.op[0].wavetable.waveA = wavegen::share(wavegen::pulse(0.1f));
+    synth.recompile(0);
+    bool swapped = synth.debugLiveSnapshot(0)->wavetables[0].get() != b0 && synth.debugLiveSnapshot(0)->wavetables[3].get() == b3;
+    check(b0 && b3 && kept && swapped && !synth.debugLiveSnapshot(0)->wavetables[1],
+          "Wavetable: tabelas em cache no recompile (outros parametros nao remontam; trocar a onda A remonta so aquele operador)");
+}
+
+static void testWavetableCost() {
+    auto timeIt = [](bool wavetable) {
+        Synth synth;
+        synth.init(48000.0, 16);
+        VoiceParams v;
+        applyAlgorithm(v, 1);
+        for (auto& op : v.op) {
+            op.outputLevel = 80;
+            if (wavetable) {
+                op.waveform = Waveform::Wavetable;
+                op.wavetable.waveA = wavegen::share(wavegen::fromShape(Waveform::Saw));
+                op.wavetable.waveB = wavegen::share(wavegen::fromShape(Waveform::Square));
+                op.wavetable.position = 0.37f;
+            }
+        }
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        for (int n = 0; n < 16; ++n) synth.noteOn(0, 40 + n, 100);
+        auto t0 = std::chrono::steady_clock::now();
+        float sink = 0.0f, L[256], R[256];
+        for (int b = 0; b < 48000 / 256; ++b) { synth.renderBlock(L, R, 256); sink += L[0]; }
+        double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        return sink == 12345.0f ? 0.0 : sec;
+    };
+    double sine = timeIt(false), wt = timeIt(true);
+    std::printf("  (16 vozes x 8 ops, 1s: Sine=%.3fs, Wavetable espectral=%.3fs, razao=%.2fx)\n", sine, wt, wt / sine);
+    check(wt < sine * 2.0, "Wavetable custa menos que 2x o operador Sine");
+}
+
 static void testAdditiveSilentWhenAllAmpsZero() {
     auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
     bool ok = true;
@@ -3239,6 +3441,14 @@ int main() {
     testAdditiveSilentWhenAllAmpsZero();
     testAdditiveJson();
     testAdditiveCost();
+    testWavetableSineMatchesSineOperator();
+    testWavetableAntiAliasing();
+    testWavetableMorphModes();
+    testWavetableMorphModulation();
+    testWavetableJsonAndSanitize();
+    testWavegenImport();
+    testWavetableBankCache();
+    testWavetableCost();
     testAdditiveEditorAxes();
     testAdditivePaintStroke();
     testAdditivePresetsAreValid();
