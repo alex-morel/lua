@@ -16,6 +16,7 @@ completo sob a GPLv3.
 | Freeverb | reverb "Room" (`FreeverbRoom`) | Jezar at Dreampoint | domínio público | porta fiel |
 | Faust phaflangers.lib | phaser e flanger (`Phaser`, `Flanger`) | Julius O. Smith III | STK-4.3 (estilo MIT) | porta, com mudanças |
 | Audio EQ Cookbook | EQ de 3 bandas (`Eq3`) | Robert Bristow-Johnson | fórmulas publicadas | implementação própria |
+| msfa (music-synthesizer-for-android) | importação de SysEx do DX7 (`src/dx7_sysex.h`): tabela dos 32 algoritmos e fórmulas de conversão | Google Inc. (Raph Levien) | Apache-2.0 | porta (tabela + fórmulas), com mudanças |
 | Roboto Medium | fonte da interface (`third_party/imgui/misc/fonts/Roboto-Medium.ttf`) | Google (Christian Robertson) | Apache 2.0 | arquivo distribuído com o Dear ImGui, carregado em tempo de execução |
 
 As mudanças feitas em cada porta estão descritas no comentário de cabeçalho
@@ -32,6 +33,8 @@ do bloco correspondente em `src/dx7_globalfx.h`.
 - Freeverb (distribuição original de Jezar): <https://github.com/chiptunes-swift/freeverb>
   (`freeverb/Components/*`)
 - Faust: <https://github.com/grame-cncm/faustlibraries> (`phaflangers.lib`, `licenses/stk-4.3.0.md`)
+- msfa (baixado em 2026-10-24): <https://github.com/google/music-synthesizer-for-android>
+  (`app/src/main/jni/fm_core.cc`, `dx7note.cc`, `env.cc`, `lfo.cc`)
 
 ---
 
@@ -95,6 +98,32 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
+
+### msfa (music-synthesizer-for-android) — Apache License 2.0
+
+```
+Copyright 2012 Google Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+Mudanças: a tabela de algoritmos (`algorithms[32]` de `fm_core.cc`) é
+interpretada por simulação dos barramentos pra montar a matriz livre deste
+motor, incluindo o laço de feedback entre operadores dos algoritmos 4 e 6
+(que a msfa não implementa); as fórmulas de `dx7note.cc`, `env.cc` e
+`lfo.cc` foram reescritas como conversões pros parâmetros deste motor. Texto
+completo da licença em `third_party/licenses/Apache-2.0.txt` (compatível com
+a GPLv3 do projeto).
 
 ### Freeverb — domínio público
 

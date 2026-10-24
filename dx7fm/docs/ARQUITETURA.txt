@@ -83,6 +83,12 @@ dx7fm/
                       fxEG do morph, Amp EG). Ver secao 4 (Waveform).
     dx7_fft.h       - FFT radix-2 (usada pela ressintese e pelo
                       espectrograma da UI).
+    dx7_tuning.h    - [ADICIONADO em 2026-10-24] microafinacao Scala: parsers
+                      .scl/.kbm e a tabela nota -> Hz (TuningTable) de cada
+                      parte. Ver secao "RECURSOS DE 2026-10-24".
+    dx7_sysex.h     - [ADICIONADO em 2026-10-24] importacao de SysEx do DX7
+                      (banco VMEM de 32 e voz VCED) -> PartParams. Tabela de
+                      algoritmos e formulas da msfa (Apache-2.0).
     wav_reader.h    - [ADICIONADO em 2026-10-20] leitor de WAV (PCM 8/16/
                       24/32, float 32/64, extensible), mixa em mono.
     dx7_wavetable.h - [ADICIONADO em 2026-10-22] WavetableBank: as 2 ondas
@@ -116,7 +122,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 257 checagens de sanidade em 130 funcoes de teste (nao
+    demo.cpp        - 279 checagens de sanidade em 138 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -185,8 +191,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     que incluem os headers do motor pelo nome)
     ./demo
 
-Isso deve imprimir 257 linhas "[PASS] ..." e no final:
-    == Resultado: 257 passaram, 0 falharam ==
+Isso deve imprimir 279 linhas "[PASS] ..." e no final:
+    == Resultado: 279 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -547,6 +553,49 @@ ou um leitor de arquivo preencheria.
           |L3-L2|/v3, v = egRateToSpeed) e calculada no rebuildCache; por
           amostra o EG recebe taxa/k, k = ciclo natural / divisao do BPM,
           entao o envelope inteiro (inclusive ataque e release) escala.
+  RECURSOS DE 2026-10-24 (macros, LFO global, clock, arpejador, afinacao, SysEx):
+  - Macros: VoiceParams::macro[4] (valor salvo) + macroName; ModSource
+      Macro1..4. O valor AO VIVO e um controlador da parte
+      (Synth::setMacro / macroValue, atomico pra UI ler), aplicado pela
+      audio thread via AppEvent::Macro (roteado por canal como o mod wheel);
+      a voz le de VoiceControllers::macro01. Ao carregar um patch o app manda
+      os valores salvos (sendPatchMacros).
+  - LFOParams::global: um LFO por PARTE (PartRuntime::glfo), calculado 1x
+      por pedaco em renderChunk (glfoBuf) e lido pelas vozes
+      (Voice::bindGlobalLfos; indice por process(), sub-amostras do
+      oversampling leem a mesma amostra). Key sync: reinicia na 1a nota
+      presa da parte. Com tempoSync, a fase vem da posicao de batida
+      (LFO::processAtPhase). LfoRate da matriz nao age no global.
+  - Posicao de batida (Synth::beatPos_): seminimas desde o ultimo Start,
+      avanca com o BPM em renderBlock; resetTransport() (evento
+      TransportStart, vindo do Start do clock MIDI) zera e recomeca o arp.
+  - Arpejador: VoiceParams::arp (modo, oitavas, divisao, gate, swing,
+      latch). Com arp ligado, Synth::noteOn/noteOff so mexem em
+      PartRuntime::arpKeys; renderBlock corta o pedaco no instante exato do
+      proximo passo / fim de gate (arpNextEventBeat) e arpProcessDue toca
+      pelo caminho normal (dispatchNoteOn/Off). Passos na grade das batidas;
+      o 1o sai na hora da tecla. Swing atrasa os passos impares (swing x
+      passo). Sem arp tocando, nenhum corte: saida identica. Observador
+      setArpObserver (testes). Evento sai na 1a amostra no instante exato
+      ou depois (ate 1 amostra de arredondamento).
+  - Microafinacao: PartParams::tuning (texto .scl/.kbm + A4) -> recompile
+      monta TuningTable (cache por texto) e leva no PatchSnapshot; a voz
+      (bindTuning) e soundingHz (glide) usam a tabela; tecla sem som no
+      .kbm e recusada no noteOn. 12-TET padrao usa a MESMA conta de
+      Voice::noteToHz (bit a bit igual). copyPatchKeepingRouting mantem a
+      afinacao (e da parte, nao do som).
+  - SysEx do DX7 (dx7_sysex.h): os 32 algoritmos vem da tabela de
+      barramentos da msfa (fm_core.cc), simulada pra montar a matriz -- com
+      o laco de feedback 4->6 dos algoritmos 4 e 6 (a msfa nao implementa).
+      Conversoes: nivel (tabela scaleoutlevel, 0.75 dB/passo como o nosso),
+      rate (velocidade do EG da msfa a 44.1 kHz -> inverso de
+      egRateToSpeed; o DX7 e bem mais lento que a nossa escala no meio),
+      razao (coarse 0 = 0.5), fixa (10^(coarse&3 + fine/100)), detune,
+      feedback 2^(fb-8) na diagonal, level scaling (bp + 17, ~0.24
+      dB/oit por unidade linear), LFO (velocidade e atraso pela msfa; o
+      vibrato aqui chega a +-1 semitom, o do DX7 vai alem), PEG (pegDepth 1
+      em todos), transpose (24 = sem transpor) e nome.
+
   [ADICIONADO em 2026-10-24] MORPH ENTRE ALGORITMOS (como o ASM Leviasynth):
       VoiceParams::algoSlot[7] + numAlgos (1..8; slot 1 = `matrix`, por
       compatibilidade), algoMorph (0..1) e algoStep (salta pro slot mais
@@ -2020,7 +2069,7 @@ mudancas de cada porta estao no comentario de cabecalho do bloco.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 257 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 279 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).
@@ -2364,6 +2413,25 @@ harnesses de teste/screenshot).
       Harmonicos (barras de PartialBars com razoes inteiras, presets
       harmonicos) e WAV (WavBrowser de file_browser.h -- extraido do
       dialogo de ressintese --; frame de wavetable ou periodo de um som).
+  app/settings.h - [ADICIONADO em 2026-10-24] ~/.config/dx7fm/settings.json
+      (XDG_CONFIG_HOME respeitado): oversampling, seguir clock MIDI, CCs
+      aprendidos (um por alvo, um alvo por CC) e caminhos de afinacao.
+      O popup "Configuracoes" (topo) troca o oversampling reiniciando o
+      synth na mesma taxa (applyOversample).
+  MIDI learn (main.cpp): a thread MIDI le AppState::ccTarget[128]
+      (atomicos, reconstruidos pela UI a partir de settings.cc); em modo
+      learn grava o CC em learnedCc e a UI registra (PollMidiLearn). CC
+      aprendido tem prioridade sobre o mapeamento fixo. Volume/BPM sao
+      atomicos do Synth (o knob de volume le o valor real).
+  app/midi_clock.h - [ADICIONADO em 2026-10-24] ClockEstimator: media dos
+      ultimos 24 intervalos de pulso (uma batida). alsa_midi.h entrega
+      CLOCK/START/CONTINUE/STOP; Start vira AppEvent::TransportStart. O BPM
+      do clock vale enquanto chegam pulsos (< 0.5s) e "seguir" esta ligado.
+  Desfazer/refazer + A/B (main.cpp): historico de PartParams por parte (ate
+      100); uma edicao vira passo quando nenhum widget esta ativo; carregar,
+      Init e importar DX7 tambem. Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z (com Ctrl
+      apertado o teclado do PC nao toca). A/B troca so o som
+      (copyPatchKeepingRouting) e cada lado tem o seu historico.
   app/resynth_ui.h - [ADICIONADO em 2026-10-20] dialogo "Ressintetizar
       WAV..." (botao no editor da aditiva): navegador de pastas/.wav, forma
       de onda com os instantes A e B arrastaveis (faixa sombreada = quadro

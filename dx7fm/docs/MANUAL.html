@@ -706,9 +706,14 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
         <li>Ao lado dos botões, <span style="color:var(--accent)">* alterações não salvas</span> avisa quando o som mudou desde o último salvar/carregar (desfazer uma edição tira o aviso). Com alterações pendentes, carregar outro patch ou clicar Init pede confirmação antes de descartar.</li>
         <li>Mensagens de sucesso ou erro (arquivo inválido, sem permissão…) aparecem logo abaixo da lista.</li>
       </ul>
+      <ul>
+        <li><strong>Desfazer / Refazer</strong> (Ctrl+Z, Ctrl+Y ou Ctrl+Shift+Z): cada edição vira um passo quando você solta o controle (arrastar um knob é um passo só). Carregar, Init e importar do DX7 também podem ser desfeitos. O histórico é por parte e guarda até 100 passos.</li>
+        <li><strong>A | B</strong>: guarda duas versões do som da parte pra comparar. Clique no outro lado pra ouvir; cada lado tem o seu próprio desfazer. <strong>Copiar A → B</strong> copia o lado atual pro outro. O roteamento da parte (canal, faixas, nível) não muda.</li>
+        <li><strong>Importar DX7 (.syx)</strong>: abre bancos de 32 vozes ou vozes únicas do Yamaha DX7 (os mesmos arquivos do Dexed). Clique numa voz da lista pra carregar na parte; dá pra ir tocando e trocando, e Ctrl+Z volta ao som anterior. A conversão é aproximada: os 6 operadores do DX7 viram os operadores 1–6 (7 e 8 ficam desligados), e algoritmo, envelopes, níveis, level scaling, LFO e pitch EG são convertidos pras escalas deste motor.</li>
+      </ul>
       <div class="callout">
         <strong>O que um patch guarda</strong>
-        <p>O <em>som</em> da parte: os 8 operadores, matriz, envelopes, LFOs, matriz de modulação, modo de voz, glide, unison, bend range, transpose e o nome. Carregar <strong>não muda o roteamento</strong> da parte — habilitada, canal MIDI, faixas de tecla/velocity, vozes reservadas, nível e pan ficam como estão. Assim dá pra carregar o mesmo patch em partes diferentes de um split sem desmontar o split.</p>
+        <p>O <em>som</em> da parte: os 8 operadores, matriz, envelopes, LFOs, matriz de modulação, macros, arpejador, modo de voz, glide, unison, bend range, transpose e o nome. Carregar <strong>não muda o roteamento</strong> da parte — habilitada, canal MIDI, faixas de tecla/velocity, vozes reservadas, nível, pan e afinação ficam como estão. Assim dá pra carregar o mesmo patch em partes diferentes de um split sem desmontar o split.</p>
       </div>
     </section>
 
@@ -772,6 +777,21 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
       <p>O <strong>envelope de FX</strong> fica no mesmo card. Ele só age nos filtros (varre o corte), no Wavefolder (varre o drive) e no morph da forma de onda Additive. Nos outros efeitos os knobs dele ficam desativados, e o texto acima deles diz o que ele controla. Ao trocar de efeito, os ajustes voltam a valores iniciais adequados (entre os três filtros, corte e Q são mantidos).</p>
       <p><strong>Key track</strong> (nos filtros, Comb, Freq shift e Bitcrusher): faz o valor em Hz acompanhar a nota tocada, em volta do C4. Em 100%, uma oitava acima dobra o valor — o filtro mantém o mesmo brilho em toda a extensão do teclado e o Comb ressoa afinado com a nota (ajuste a afinação do Comb pra 261,6 Hz, que é o C4, ou um múltiplo dele). Em 50%, sobe meia oitava por oitava; em 0% (padrão), o valor é fixo como antes. Acompanha o glide, mas não o pitch bend nem o vibrato.</p>
 
+      <h3>Macros e MIDI learn</h3>
+      <p>O card <strong>MACROS</strong> tem 4 knobs por patch, com nome editável. Sozinhos eles não fazem nada: são fontes (<strong>Macro1–4</strong>) da matriz de modulação, então um knob pode abrir vários parâmetros de uma vez (ex.: Macro1 → morph de algoritmos + FX1 de dois operadores). O botão embaixo de cada macro é o <strong>MIDI learn</strong>: clique em “aprender” e mova um knob ou fader do seu controlador — o CC dele passa a mover a macro (botão direito esquece). No popup <strong>Configurações</strong> (no topo) dá pra aprender também o <strong>Volume</strong> e o <strong>BPM</strong>. Os CCs aprendidos ficam salvos no app e valem pras partes que recebem o canal do controlador.</p>
+
+      <h3>Arpejador</h3>
+      <p>No card <strong>ARPEJADOR</strong> (salvo no patch): com <strong>Ligado</strong>, as teclas que você segura montam o padrão e o arpejador toca uma nota por passo no tempo do BPM. Modos: sobe, desce, sobe/desce (sem repetir as pontas), aleatório e como tocado; <strong>Oitavas</strong> repete o padrão até 4 oitavas acima; <strong>Divisão</strong> é o tamanho do passo (1/16 = semicolcheia); <strong>Gate</strong> é quanto do passo a nota soa (100% = legato); <strong>Swing</strong> atrasa os passos ímpares (33% = tercina); <strong>Latch</strong> mantém o arpejo depois de soltar as teclas, até a próxima tecla. Os passos caem na grade do compasso, e o Start de um clock MIDI recomeça o arpejo no 1.</p>
+
+      <h3>BPM, clock MIDI e LFO global</h3>
+      <p>O knob <strong>BPM</strong> (topo) é o tempo dos LFOs e envelopes com Sync e do arpejador. Se um teclado, sequenciador ou DAW mandar <strong>clock MIDI</strong> pra porta do dx7fm, o BPM passa a seguir o clock (o knob mostra “BPM (MIDI)”); dá pra desligar isso em Configurações. Cada LFO tem a opção <strong>Global</strong>: em vez de um LFO por nota, a parte inteira usa um só — num acorde, todas as notas ondulam juntas. Um LFO global com Sync fica alinhado ao compasso (e ao Start do clock).</p>
+
+      <h3>Microafinação (Scala)</h3>
+      <p>No card <strong>PARTE</strong>, a linha <strong>Afinação</strong> carrega uma escala no formato Scala (<span class="mono">.scl</span>, milhares de escalas disponíveis gratuitamente) e, opcionalmente, um mapeamento de teclado (<span class="mono">.kbm</span>: quais teclas tocam quais graus, a nota e a frequência de referência, e teclas sem som). Sem <span class="mono">.kbm</span>, cada tecla é um grau da escala a partir do C4 e o lá (nota 69) fica no <strong>A4</strong> escolhido (380–500 Hz). <strong>12-TET</strong> volta ao temperamento igual. A afinação é da parte (trocar de patch não muda) e o app lembra os arquivos no próximo início.</p>
+
+      <h3>Configurações</h3>
+      <p>O botão <strong>Configurações</strong> (embaixo do logo) abre: <strong>oversampling</strong> 1×/2×/4× (menos aliasing em FM agressiva e notas agudas, ao custo de ~2×/~4× de CPU nas vozes; trocar corta as notas que estiverem soando), <strong>seguir o clock MIDI</strong> e a lista do <strong>MIDI learn</strong>. Ficam salvas em <span class="mono">~/.config/dx7fm/settings.json</span>.</p>
+
       <h3>Morph entre algoritmos</h3>
       <p>No card <strong>Algoritmo</strong>, a fileira <strong>Algoritmos 1 2 …</strong> guarda até <strong>8 algoritmos</strong> no mesmo patch. Clique num número pra editar aquele algoritmo (o preset + Aplicar e a matriz avançada passam a valer pra ele); <strong>+</strong> cria um novo, copiando o que está em edição, e <strong>−</strong> remove o que está em edição. Com dois ou mais, aparece a <strong>régua do morph</strong>: arraste o marcador laranja pra escolher a posição — ela passa pelos algoritmos em ordem, e no meio do caminho as conexões são misturadas (uma modulação que só existe num deles vai sumindo aos poucos, como um índice de FM diminuindo). <strong>Saltar</strong> pula de algoritmo em algoritmo em vez de passar pelo meio. <strong>Ver posição</strong> faz o diagrama mostrar o ponto do morph, com as setas mais grossas onde a conexão é mais forte. Pra mover o morph durante a nota, use o destino <strong>AlgoMorph</strong> na matriz de modulação (com um LFO, um envelope com loop, a mod wheel…).</p>
       <p style="font-size:13.5px;color:var(--text-muted)">O <em>Feedback</em> de cada operador na tabela vale em todos os algoritmos; o feedback que vem dos presets fica dentro de cada algoritmo e faz morph junto. Ring mod não tem meio-termo: a conexão liga ou desliga no ponto mais próximo.</p>
@@ -820,7 +840,6 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
       <h2><span class="num">11</span>Limitações conhecidas desta versão</h2>
       <ul>
         <li>Sem seletor de dispositivo de áudio na interface — usa sempre <code>default</code> do ALSA.</li>
-        <li>Sem seletor de oversampling na interface (o motor suporta 2×/4× anti-aliasing, fixo em 1× no app).</li>
         <li>Os patches ficam só na pasta <code>patches/</code>; não há seletor de arquivos pra abrir de outro lugar (copie o arquivo pra essa pasta).</li>
         <li>As curvas de envelope, escala por tecla e velocidade são aproximações próprias — não as tabelas exatas da ROM do hardware original.</li>
         <li>Ainda não testado numa distro Linux verdadeiramente minimal — validado até aqui num desktop Arch/EndeavourOS com as bibliotecas já instaladas.</li>
