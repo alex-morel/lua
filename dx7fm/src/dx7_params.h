@@ -169,7 +169,8 @@ struct OperatorParams {
 // LFO3/LFO4/Env1..Env3 [ADICIONADOS em 2026-10-22, no fim]: LFOs -1..1,
 // envelopes de modulacao 0..1 (nivel/99).
 enum class ModSource : uint8_t { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend, KeyNote, Velocity,
-                                 LFO3, LFO4, Env1, Env2, Env3 };
+                                 LFO3, LFO4, Env1, Env2, Env3,
+                                 Macro1, Macro2, Macro3, Macro4 }; // [2026-10-24] macros da parte, 0..1
 // OperatorMorph: [ADICIONADO em 2026-10-18], soma na posicao do morph A->B (Additive/Wavetable).
 // [ADICIONADOS em 2026-10-22, no fim]:
 //   VoicePan      soma no pan da voz (-1..1; +1 = toda pra direita)
@@ -238,6 +239,12 @@ struct VoiceParams {
     // 0..1 percorre os slots em ordem (numAlgos - 1 trechos iguais) e os pesos
     // (PM, diagonal/feedback, outputMix) sao interpolados entre os vizinhos.
     // algoStep: salta pro slot mais proximo em vez de passar pelo meio.
+    // [ADICIONADO em 2026-10-24] 4 macros (fontes Macro1..4 da matriz): o valor
+    // salvo no patch e o nome. O valor AO VIVO e um controlador da parte
+    // (Synth::setMacro, como o mod wheel); o app manda estes valores ao carregar.
+    static constexpr int kNumMacros = 4;
+    float macro[kNumMacros] = {};
+    std::string macroName[kNumMacros] = {"Macro 1", "Macro 2", "Macro 3", "Macro 4"};
     AlgorithmMatrix algoSlot[kMaxAlgoSlots - 1];
     uint8_t numAlgos = 1; // 1 = sem morph (como antes)
     float algoMorph = 0.0f;
@@ -526,6 +533,7 @@ inline void sanitize(LFOParams& l) {
 inline void sanitize(VoiceParams& v) {
     using namespace detail;
     for (auto& o : v.op) sanitize(o);
+    for (auto& m : v.macro) m = sanF(m, 0.0f, 1.0f, 0.0f);
     v.numAlgos = static_cast<uint8_t>(std::clamp<int>(v.numAlgos, 1, kMaxAlgoSlots));
     v.algoMorph = sanF(v.algoMorph, 0.0f, 1.0f, 0.0f);
     for (int s = 0; s < kMaxAlgoSlots; ++s) {
@@ -543,7 +551,7 @@ inline void sanitize(VoiceParams& v) {
         e.division = static_cast<uint8_t>(std::min<int>(e.division, kNumLfoDivisions - 1));
     }
     for (auto& r : v.modMatrix) {
-        r.src = sanEnum(r.src, ModSource::Env3);
+        r.src = sanEnum(r.src, ModSource::Macro4);
         r.dest = sanEnum(r.dest, ModDest::AlgoMorph);
         r.opIndex = std::clamp(r.opIndex, 0, modDestPerLfo(r.dest) ? kNumLfos - 1 : kNumOps - 1);
         r.depth = sanF(r.depth, -1.0f, 1.0f, 0.0f);

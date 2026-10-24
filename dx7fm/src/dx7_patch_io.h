@@ -340,6 +340,10 @@ inline const char* modSourceName(ModSource s) {
         case ModSource::Env1:      return "Env1";
         case ModSource::Env2:      return "Env2";
         case ModSource::Env3:      return "Env3";
+        case ModSource::Macro1:    return "Macro1";
+        case ModSource::Macro2:    return "Macro2";
+        case ModSource::Macro3:    return "Macro3";
+        case ModSource::Macro4:    return "Macro4";
     }
     return "None";
 }
@@ -357,6 +361,10 @@ inline ModSource modSourceFromName(const std::string& s) {
     if (s == "Env1")      return ModSource::Env1;
     if (s == "Env2")      return ModSource::Env2;
     if (s == "Env3")      return ModSource::Env3;
+    if (s == "Macro1")    return ModSource::Macro1;
+    if (s == "Macro2")    return ModSource::Macro2;
+    if (s == "Macro3")    return ModSource::Macro3;
+    if (s == "Macro4")    return ModSource::Macro4;
     return ModSource::None;
 }
 
@@ -696,6 +704,14 @@ inline JsonValue voiceParamsToJson(const VoiceParams& v) {
     for (int i = 0; i < kNumOps; ++i) ops.push(operatorParamsToJson(v.op[i]));
     j.set("op", std::move(ops));
     j.set("matrix", algorithmMatrixToJson(v.matrix));
+    JsonValue macros = JsonValue::makeArray();
+    for (int k = 0; k < VoiceParams::kNumMacros; ++k) {
+        JsonValue m = JsonValue::makeObject();
+        m.set("value", JsonValue::makeNumber(v.macro[k]));
+        m.set("name", JsonValue::makeString(v.macroName[k]));
+        macros.push(std::move(m));
+    }
+    j.set("macros", std::move(macros));
     // [2026-10-24] morph entre algoritmos: slots 2..numAlgos (o 1 e "matrix")
     if (v.activeAlgos() > 1) {
         JsonValue slots = JsonValue::makeArray();
@@ -733,6 +749,12 @@ inline VoiceParams voiceParamsFromJson(const JsonValue& j) {
     // incompleto (de uma versao antiga, por ex.) apagaria os defaults acima
     // com uma AlgorithmMatrix vazia em vez de preserva-los.
     if (auto* matrix = j.find("matrix")) v.matrix = algorithmMatrixFromJson(matrix);
+    if (auto* macros = j.find("macros"))
+        for (int k = 0; k < VoiceParams::kNumMacros && k < static_cast<int>(macros->arraySize()); ++k) {
+            const JsonValue& m = macros->at(static_cast<size_t>(k));
+            v.macro[k] = clampCast<float>(m.numberAt("value", 0.0));
+            v.macroName[k] = m.stringAt("name", v.macroName[k]).substr(0, 24);
+        }
     if (auto* slots = j.find("algorithms")) { // ausente (patch antigo) = 1 algoritmo, sem morph
         int n = std::min<int>(static_cast<int>(slots->arraySize()), kMaxAlgoSlots - 1);
         for (int k = 0; k < n; ++k) v.algoSlot[k] = algorithmMatrixFromJson(&slots->at(static_cast<size_t>(k)));

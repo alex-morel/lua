@@ -3225,6 +3225,54 @@ static void testAppSettings() {
     check(bad.oversample == 1 && bad.cc.empty(), "configuracoes: valores invalidos (oversample 3, CC 200) caem nos padroes");
 }
 
+// --- [ADICIONADO em 2026-10-24] macros ---
+static void testMacros() {
+    using namespace dx7fm_app;
+    // Macro1 -> VoiceLevel +1 com a macro em 0.5: ganho 1.5; valor dado ANTES da nota vale pra ela
+    auto render = [](float macro, bool viaEvent) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        VoiceParams v;
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f;
+        v.op[0].outputLevel = 80;
+        v.modMatrix[0] = ModRoute{ModSource::Macro1, ModDest::VoiceLevel, 0, 1.0f};
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        if (viaEvent) { // como o app: evento Macro roteado pelo canal (parte 0 em omni)
+            std::atomic<bool> enabled[kNumParts];
+            std::atomic<int> channel[kNumParts];
+            for (int p = 0; p < kNumParts; ++p) { enabled[p] = (p == 0); channel[p] = 0; }
+            NoteRouting routing;
+            AppEvent e;
+            e.kind = AppEvent::Kind::Macro;
+            e.channel1to16 = 3;
+            e.note = 0;
+            e.floatValue = macro;
+            applyAppEvent(synth, e, enabled, channel, routing);
+        } else {
+            synth.setMacro(0, 0, macro);
+        }
+        synth.noteOn(0, 69, 100);
+        std::vector<float> out;
+        for (int i = 0; i < 9600; ++i) { float l, r; synth.renderStereo(l, r); out.push_back(l); }
+        return std::pair<float, float>(computeRms(out, 4800, 4800), synth.macroValue(0, 0));
+    };
+    auto [off, v0] = render(0.0f, false);
+    auto [half, v1] = render(0.5f, false);
+    auto [viaEv, v2] = render(0.5f, true);
+    std::printf("  (Macro1 -> volume: 0.5 da ganho x%.3f; via evento x%.3f)\n", half / off, viaEv / off);
+    check(std::fabs(half / off - 1.5f) < 0.01f && std::fabs(viaEv / off - 1.5f) < 0.01f && v1 == 0.5f && v2 == 0.5f && v0 == 0.0f,
+          "macros: Macro1 modula pela matriz; valor dado antes da nota vale pra ela; evento Macro chega pela fila");
+
+    VoiceParams p;
+    p.macro[2] = 0.7f;
+    p.macroName[2] = "Brilho";
+    VoiceParams back = voiceParamsFromJson(JsonValue::parse(voiceParamsToJson(p).dump()));
+    check(back.macro[2] == 0.7f && back.macroName[2] == "Brilho" && back.macroName[0] == "Macro 1",
+          "macros: valor e nome sobrevivem ao JSON do patch");
+}
+
 static void testAdditiveSilentWhenAllAmpsZero() {
     auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
     bool ok = true;
@@ -3847,6 +3895,7 @@ int main() {
     testAlgoMorphEightSlots();
     testAlgoMorphCost();
     testAppSettings();
+    testMacros();
     testNewModDestinations();
     testModulationJson();
     testAdditiveEditorAxes();

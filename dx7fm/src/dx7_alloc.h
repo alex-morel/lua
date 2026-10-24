@@ -83,6 +83,8 @@ struct PartRuntime {
     bool sustainDown = false;
     float bend = 0.0f;
     float modWheel = 0.0f;
+    // [2026-10-24] macros: a audio thread escreve (setMacro), a UI le pra mostrar
+    std::atomic<float> macro[VoiceParams::kNumMacros] = {};
     float channelAT = 0.0f;
 };
 
@@ -244,6 +246,17 @@ public:
         pr.bend = semis;
         for (auto& s : slots_) if (s.ownerPart == part) s.voice.controllers().pitchBendSemis = semis;
     }
+
+    // [ADICIONADO em 2026-10-24] macro k (0..3) da parte, 0..1. Chamar da thread
+    // que roda o audio (como os outros controladores); macroValue() pode ser
+    // lido de qualquer thread.
+    void setMacro(int part, int k, float v01) {
+        if (part < 0 || part >= kNumParts || k < 0 || k >= VoiceParams::kNumMacros) return;
+        v01 = std::clamp(v01, 0.0f, 1.0f);
+        parts_[part].macro[k].store(v01, std::memory_order_relaxed);
+        for (auto& s : slots_) if (s.ownerPart == part) s.voice.controllers().macro01[k] = v01;
+    }
+    float macroValue(int part, int k) const { return parts_[part].macro[k].load(std::memory_order_relaxed); }
 
     void modWheel(int part, float v01) {
         auto& pr = parts_[part];
@@ -437,6 +450,7 @@ private:
                        snap->generation);
         s.voice.controllers().pitchBendSemis = pr.bend;
         s.voice.controllers().modWheel01 = pr.modWheel;
+        for (int k = 0; k < VoiceParams::kNumMacros; ++k) s.voice.controllers().macro01[k] = pr.macro[k].load(std::memory_order_relaxed);
         s.voice.controllers().channelAT01 = pr.channelAT;
     }
 

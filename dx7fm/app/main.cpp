@@ -85,6 +85,15 @@ struct AppState {
     // [2026-10-24] configuracoes do app (settings.json) e o render do audio (pra religar)
     dx7fm_app::AppSettings settings;
     std::function<void(float*, int)> render;
+    // [2026-10-24] MIDI learn. ccTarget: copia de settings.cc pra thread MIDI
+    // (um atomico por CC, -1 = sem alvo) -- a thread MIDI nunca le o vector.
+    // learnTarget: alvo esperando um CC (-1 = nenhum); a thread MIDI grava o CC
+    // recebido em learnedCc e a UI registra em settings no proximo quadro.
+    std::atomic<int> ccTarget[128];
+    std::atomic<int> learnTarget{-1};
+    std::atomic<int> learnedCc{-1};
+    int learnPending = -1; // so UI: alvo do learn em andamento
+    float macroSeen[kNumParts][VoiceParams::kNumMacros] = {}; // ultimo valor ao vivo visto pela UI
     int selectedOp = 0;
     int selectedAlgo = 0; // indice (0-based) no combo de presets de algoritmo
     int algoSlot = 0;          // [2026-10-24] slot do morph de algoritmos em edicao (0 = slot 1)
@@ -176,10 +185,44 @@ void audioRenderCallback(AppState& app, float* interleaved, int frames) {
 
 // --- entrada MIDI (thread separada: so EMPILHA eventos) ------------------
 
+// tabela da thread MIDI a partir de settings.cc (so a UI chama)
+void rebuildCcTable(AppState& app) {
+    for (auto& t : app.ccTarget) t.store(-1, std::memory_order_relaxed);
+    for (const auto& m : app.settings.cc) app.ccTarget[m.cc].store(static_cast<int>(m.target), std::memory_order_relaxed);
+}
+
+// volume geral: knob em dB (-60 = mudo .. +6); CC/knob 0..1 nessa escala
+inline float volumeDbFromGain(float g) { return g <= 0.0f ? -60.0f : std::clamp(20.0f * std::log10(g), -60.0f, 6.0f); }
+inline float gainFromVolumeDb(float db) { return db <= -60.0f ? 0.0f : dbToLinear(db); }
+
 void onMidiEvent(AppState& app, const MidiEvent& ev) {
     AppEvent ae;
     ae.part = -1;
     ae.channel1to16 = ev.channel + 1; // convencao do motor: 0=omni, 1..16=canal especifico
+    if (ev.type == MidiEvent::Type::ControlChange && ev.data1 >= 0 && ev.data1 < 128) {
+        // [2026-10-24] MIDI learn: o proximo CC vira o do alvo em espera
+        if (app.learnTarget.load(std::memory_order_acquire) >= 0) {
+            app.learnedCc.store(ev.data1, std::memory_order_release);
+            app.learnTarget.store(-1, std::memory_order_release);
+            return;
+        }
+        const int target = app.ccTarget[ev.data1].load(std::memory_order_relaxed);
+        if (target >= 0) { // CC aprendido: tem prioridade sobre o mapeamento fixo (mod wheel etc.)
+            using dx7fm_app::CcTarget;
+            const float v = std::clamp(ev.data2 / 127.0f, 0.0f, 1.0f);
+            if (target <= static_cast<int>(CcTarget::Macro4)) {
+                ae.kind = AppEvent::Kind::Macro;
+                ae.note = target;
+                ae.floatValue = v;
+                app.eventQueue.push(ae);
+            } else if (target == static_cast<int>(CcTarget::MasterVolume)) {
+                app.synth.setMasterVolume(gainFromVolumeDb(-60.0f + 66.0f * v)); // atomico
+            } else if (target == static_cast<int>(CcTarget::Bpm)) {
+                app.synth.setTempoBpm(std::round(20.0f + 280.0f * v)); // atomico
+            }
+            return;
+        }
+    }
     switch (ev.type) {
         case MidiEvent::Type::NoteOn:
             ae.kind = AppEvent::Kind::NoteOn;
@@ -673,6 +716,64 @@ bool DrawPeg(PEGParams& peg) {
     changed |= ui::Knob("Range", &peg.rangeOctaves, 0.1f, 8.0f, 4.0f, "%.1f oit", ks);
     return changed;
 }
+// [ADICIONADO em 2026-10-24] Macros: 4 knobs por patch, fontes Macro1..4 da
+// matriz. O valor ao vivo e um controlador da parte (Synth::setMacro, via fila
+// de eventos); o do patch acompanha (fica salvo). CC aprendido mexe no ao vivo.
+void LearnButton(AppState& app, dx7fm_app::CcTarget target, float width); // junto do popup de configuracoes
+
+bool DrawMacros(AppState& app, int part) {
+    auto& v = app.synth.part(part).voice;
+    bool changed = false;
+    ImGui::TextDisabled("Fontes Macro1..4 da matriz de modulacao. Nome editavel; botao embaixo = MIDI learn.");
+    ui::KnobStyle ks;
+    ks.color = ui::col::kAccent;
+    ks.cellWidth = 96.0f;
+    for (int k = 0; k < VoiceParams::kNumMacros; ++k) {
+        if (k) ImGui::SameLine();
+        ImGui::BeginGroup();
+        ImGui::PushID(k);
+        // o valor ao vivo so muda por CC ou por um evento nosso ja aplicado: so
+        // adota quando ELE mudou (senao o knob voltaria enquanto o evento do
+        // proprio knob ainda esta na fila)
+        const float live = app.synth.macroValue(part, k);
+        if (live != app.macroSeen[part][k]) {
+            app.macroSeen[part][k] = live;
+            if (std::fabs(live - v.macro[k]) > 1e-6f) { v.macro[k] = live; changed = true; }
+        }
+        float shown = v.macro[k];
+        if (ui::Knob(v.macroName[k].c_str(), &shown, 0.0f, 1.0f, 0.0f, "%.2f", ks)) {
+            v.macro[k] = shown;
+            AppEvent e;
+            e.kind = AppEvent::Kind::Macro;
+            e.part = part;
+            e.note = k;
+            e.floatValue = shown;
+            app.eventQueue.push(e);
+            changed = true;
+        }
+        char name[25];
+        std::snprintf(name, sizeof name, "%s", v.macroName[k].c_str());
+        ImGui::SetNextItemWidth(ks.cellWidth);
+        if (ImGui::InputText("##name", name, sizeof name)) { v.macroName[k] = name; changed = true; }
+        LearnButton(app, static_cast<dx7fm_app::CcTarget>(k), ks.cellWidth);
+        ImGui::PopID();
+        ImGui::EndGroup();
+    }
+    return changed;
+}
+
+// manda os valores de macro do patch pro motor (ao carregar/zerar um patch)
+void sendPatchMacros(AppState& app, int part) {
+    for (int k = 0; k < VoiceParams::kNumMacros; ++k) {
+        AppEvent e;
+        e.kind = AppEvent::Kind::Macro;
+        e.part = part;
+        e.note = k;
+        e.floatValue = app.synth.part(part).voice.macro[k];
+        app.eventQueue.push(e);
+    }
+}
+
 // [ADICIONADO em 2026-10-22] Envelopes de modulacao (estilo DX, comecam no
 // level 4 como o PEG): uma aba por envelope, curva + knobs. So fontes da
 // matriz (Env1..Env3) -- sozinhos nao fazem nada.
@@ -753,7 +854,7 @@ bool DrawModEnvelopes(VoiceParams& v) {
 bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
     bool changed = false;
     static const char* kSrc[] = {"None", "LFO1", "LFO2", "ModWheel", "ChannelAT", "PolyAT", "PitchBend", "Nota", "Velocity",
-                                 "LFO3", "LFO4", "Env1", "Env2", "Env3"};
+                                 "LFO3", "LFO4", "Env1", "Env2", "Env3", "Macro1", "Macro2", "Macro3", "Macro4"};
     static const char* kDst[] = {"None", "OperatorLevel", "OperatorFx1", "OperatorFeedback", "VoicePitch", "OperatorMorph",
                                  "VoicePan", "VoiceLevel", "OperatorPitch", "OperatorFx2", "LfoRate", "LfoDepth", "AlgoMorph"};
     static const char* kDstTip[] = {"", "nivel do operador x (1 + quantidade)", "FX1 do operador x (1 + quantidade): corte, taxa, afinacao, drive",
@@ -879,6 +980,7 @@ void doLoadPatch(AppState& app, int part, const std::filesystem::path& path) {
     }
     copyPatchKeepingRouting(app.synth.part(part), loaded);
     publishPart(app, part);
+    sendPatchMacros(app, part);
     std::snprintf(ui.name, sizeof(ui.name), "%s", app.synth.part(part).name.c_str());
     ui.currentFile = path;
     ui.selected = path;
@@ -890,6 +992,7 @@ void doInitPatch(AppState& app, int part) {
     auto& ui = app.patchUi[part];
     copyPatchKeepingRouting(app.synth.part(part), PartParams{});
     publishPart(app, part);
+    sendPatchMacros(app, part);
     std::snprintf(ui.name, sizeof(ui.name), "%s", app.synth.part(part).name.c_str());
     ui.currentFile.clear();
     markPatchClean(app, part);
@@ -1192,6 +1295,8 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
     }
     ui::EndCard();
 
+    if (ui::BeginCard("##card_macros", "MACROS", 0.0f, ui::col::kAccent)) changed |= DrawMacros(app, partIndex);
+    ui::EndCard();
     if (ui::BeginCard("##card_lfo", "LFOs", 0.0f, ui::col::kAccent2)) {
         // [2026-10-22] 4 LFOs (2x2). Pitch/Amp = vibrato/tremolo direto; os 4 tambem sao fontes da matriz
         if (ImGui::BeginTable("##lfos", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersInnerH)) {
@@ -1522,6 +1627,40 @@ void applyOversample(AppState& app, int os) {
     dx7fm_app::saveSettings(app.settings);
 }
 
+// MIDI learn: botao que mostra o CC do alvo ("CC 21"), "aprender" ou
+// "mova um CC..." durante o learn. Clique = aprender; direito = esquecer.
+void LearnButton(AppState& app, dx7fm_app::CcTarget target, float width) {
+    const int t = static_cast<int>(target);
+    char lbl[32];
+    const int cc = app.settings.ccFor(target);
+    if (app.learnPending == t) std::snprintf(lbl, sizeof lbl, "mova um CC...##l%d", t);
+    else if (cc >= 0) std::snprintf(lbl, sizeof lbl, "CC %d##l%d", cc, t);
+    else std::snprintf(lbl, sizeof lbl, "aprender##l%d", t);
+    const bool waiting = app.learnPending == t;
+    if (waiting) ImGui::PushStyleColor(ImGuiCol_Button, ui::col::kAccent2);
+    if (ImGui::Button(lbl, ImVec2(width, 0))) {
+        if (waiting) { app.learnPending = -1; app.learnTarget.store(-1); }
+        else { app.learnPending = t; app.learnedCc.store(-1); app.learnTarget.store(t, std::memory_order_release); }
+    }
+    if (waiting) ImGui::PopStyleColor();
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && cc >= 0) {
+        app.settings.forget(target);
+        dx7fm_app::saveSettings(app.settings);
+        rebuildCcTable(app);
+    }
+    ImGui::SetItemTooltip("Clique e mova um knob/fader do controlador MIDI pra ligar o CC dele aqui.\nBotao direito: esquecer o CC.");
+}
+
+// a cada quadro (UI): registra o CC que a thread MIDI capturou
+void PollMidiLearn(AppState& app) {
+    const int cc = app.learnedCc.exchange(-1, std::memory_order_acq_rel);
+    if (cc < 0 || app.learnPending < 0) return;
+    app.settings.learn(static_cast<dx7fm_app::CcTarget>(app.learnPending), cc);
+    app.learnPending = -1;
+    dx7fm_app::saveSettings(app.settings);
+    rebuildCcTable(app);
+}
+
 void DrawSettingsPopup(AppState& app) {
     if (!ImGui::BeginPopup("Configuracoes")) return;
     ImGui::TextUnformatted("Oversampling (anti-aliasing)");
@@ -1536,6 +1675,16 @@ void DrawSettingsPopup(AppState& app) {
     }
     ImGui::Separator();
     if (ImGui::Checkbox("Seguir o clock MIDI quando ele chegar", &app.settings.midiClock)) dx7fm_app::saveSettings(app.settings);
+    ImGui::Separator();
+    ImGui::TextUnformatted("MIDI learn (CC -> controle)");
+    ImGui::TextDisabled("As macros valem pra parte que recebe o canal do CC; volume e BPM sao globais.");
+    for (int t = 0; t <= static_cast<int>(dx7fm_app::CcTarget::Bpm); ++t) {
+        const auto target = static_cast<dx7fm_app::CcTarget>(t);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(dx7fm_app::ccTargetName(target));
+        ImGui::SameLine(90);
+        LearnButton(app, target, 140);
+    }
     ImGui::TextDisabled("arquivo: %s", dx7fm_app::settingsPath().string().c_str());
     ImGui::EndPopup();
 }
@@ -1593,7 +1742,7 @@ void DrawTopBar(AppState& app) {
         ImGui::SameLine();
         // Volume geral em dB (-60..+6); o minimo (-60) e mudo de verdade.
         // Estado so da UI: o motor guarda ganho linear (Synth::setMasterVolume).
-        static float volumeDb = 0.0f;
+        float volumeDb = volumeDbFromGain(app.synth.masterVolume()); // CC aprendido tambem mexe
         ui::KnobStyle ks;
         ks.size = 34.0f;
         // [2026-10-22] BPM global dos LFOs com Sync (estado do app, nao do patch)
@@ -1602,7 +1751,7 @@ void DrawTopBar(AppState& app) {
         ImGui::SetItemTooltip("Tempo dos LFOs com Sync (todas as partes). Arraste, ou botao direito pra digitar.");
         ImGui::SameLine();
         if (ui::Knob("Volume", &volumeDb, -60.0f, 6.0f, 0.0f, volumeDb <= -60.0f ? "mudo" : "%.1f dB", ks))
-            app.synth.setMasterVolume(volumeDb <= -60.0f ? 0.0f : dbToLinear(volumeDb));
+            app.synth.setMasterVolume(gainFromVolumeDb(volumeDb));
         ImGui::EndTable();
     }
     ImGui::EndChild();
@@ -1712,6 +1861,7 @@ void DrawVisualizers(AppState& app) {
 // Desenha a janela inteira do app (1x por frame). forceTab >= 0 forca a aba
 // aberta (0..3 = partes, 4 = FX globais) -- usado pelo harness de screenshot.
 void DrawMainUi(AppState& app, int forceTab = -1) {
+    PollMidiLearn(app);
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
     ImGui::Begin("dx7fm", nullptr,
@@ -1773,6 +1923,7 @@ int main(int, char**) {
     AppState app;
 
     app.settings = dx7fm_app::loadSettings();
+    rebuildCcTable(app);
     app.synth.init(kSampleRate, kMaxVoices, app.settings.oversample);
     app.synth.setWorkerThreads(audioWorkerThreads());
     // Por padrao so a parte A toca; B-D comecam desligadas (senao cada nota,

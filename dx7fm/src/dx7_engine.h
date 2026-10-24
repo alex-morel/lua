@@ -121,6 +121,7 @@ struct VoiceControllers {
     float modWheel01 = 0.0f;
     float channelAT01 = 0.0f;
     float polyAT01 = 0.0f;
+    float macro01[4] = {}; // [2026-10-24] macros da parte (ModSource::Macro1..4)
 };
 
 // A voz fisica completa: 8 operadores + PEG + 2 LFOs. NAO possui o patch,
@@ -493,6 +494,10 @@ private:
                 case ModSource::Env1:      srcVal = envV[0]; break;
                 case ModSource::Env2:      srcVal = envV[1]; break;
                 case ModSource::Env3:      srcVal = envV[2]; break;
+                case ModSource::Macro1:    srcVal = controllers_.macro01[0]; break;
+                case ModSource::Macro2:    srcVal = controllers_.macro01[1]; break;
+                case ModSource::Macro3:    srcVal = controllers_.macro01[2]; break;
+                case ModSource::Macro4:    srcVal = controllers_.macro01[3]; break;
                 default: break;
             }
             float amount = srcVal * route.depth;
