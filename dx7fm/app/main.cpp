@@ -18,6 +18,7 @@
 #include "additive_editor.h"
 #include "op_fx_ui.h"
 #include "wavetable_editor.h"
+#include "settings.h"
 #include "viz.h"
 #include "patch_browser.h"
 
@@ -33,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -80,6 +82,9 @@ struct AppState {
     struct HeldPcNote { int channel; int note; };
     std::unordered_map<SDL_Scancode, HeldPcNote> heldPcNotes;
     int pcKeyboardChannel = 1;
+    // [2026-10-24] configuracoes do app (settings.json) e o render do audio (pra religar)
+    dx7fm_app::AppSettings settings;
+    std::function<void(float*, int)> render;
     int selectedOp = 0;
     int selectedAlgo = 0; // indice (0-based) no combo de presets de algoritmo
     int algoSlot = 0;          // [2026-10-24] slot do morph de algoritmos em edicao (0 = slot 1)
@@ -1502,6 +1507,39 @@ void StatusChip(bool ok, const char* text) {
     ImGui::TextUnformatted(text);
 }
 
+// [ADICIONADO em 2026-10-24] Troca o oversampling: o motor precisa de um
+// init novo (buffers/decimadores por voz), entao para o audio, reinicia o
+// synth na mesma taxa (as notas soando sao cortadas; patches e partes ficam),
+// religa e salva em settings.json.
+void applyOversample(AppState& app, int os) {
+    const unsigned rate = app.audioOut.sampleRate();
+    const bool wasRunning = app.audioOut.isRunning();
+    app.audioOut.stop();
+    app.synth.init(rate, kMaxVoices, os);
+    for (int p = 0; p < kNumParts; ++p) app.synth.allNotesOff(p);
+    if (wasRunning) app.audioOut.start("default", rate, kPeriodFrames, app.render);
+    app.settings.oversample = os;
+    dx7fm_app::saveSettings(app.settings);
+}
+
+void DrawSettingsPopup(AppState& app) {
+    if (!ImGui::BeginPopup("Configuracoes")) return;
+    ImGui::TextUnformatted("Oversampling (anti-aliasing)");
+    ImGui::TextDisabled("Calcula as vozes a 2x/4x a taxa e filtra: menos aliasing em FM agressiva e notas agudas.\n"
+                        "Custa ~2x/~4x de CPU nas vozes. Trocar corta as notas que estiverem soando.");
+    int os = app.settings.oversample;
+    for (int v : {1, 2, 4}) {
+        char lbl[16];
+        std::snprintf(lbl, sizeof lbl, "%dx", v);
+        if (v != 1) ImGui::SameLine();
+        if (ImGui::RadioButton(lbl, os == v) && os != v) applyOversample(app, v);
+    }
+    ImGui::Separator();
+    if (ImGui::Checkbox("Seguir o clock MIDI quando ele chegar", &app.settings.midiClock)) dx7fm_app::saveSettings(app.settings);
+    ImGui::TextDisabled("arquivo: %s", dx7fm_app::settingsPath().string().c_str());
+    ImGui::EndPopup();
+}
+
 void DrawTopBar(AppState& app) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::rgb(24, 27, 35));
     ImGui::BeginChild("##header", ImVec2(0, 92), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
@@ -1519,6 +1557,8 @@ void DrawTopBar(AppState& app) {
         ImGui::PopStyleColor();
         ImGui::PopFont();
         ImGui::TextDisabled("8-OP FM SYNTH");
+        if (ImGui::SmallButton("Configuracoes")) ImGui::OpenPopup("Configuracoes");
+        DrawSettingsPopup(app);
 
         // status
         ImGui::TableSetColumnIndex(1);
@@ -1732,7 +1772,8 @@ int main(int, char**) {
 
     AppState app;
 
-    app.synth.init(kSampleRate, kMaxVoices, /*oversample=*/1);
+    app.settings = dx7fm_app::loadSettings();
+    app.synth.init(kSampleRate, kMaxVoices, app.settings.oversample);
     app.synth.setWorkerThreads(audioWorkerThreads());
     // Por padrao so a parte A toca; B-D comecam desligadas (senao cada nota,
     // MIDI ou do teclado do PC, dispararia 4 camadas empilhadas -- todas em
@@ -1744,7 +1785,8 @@ int main(int, char**) {
         initPatchUi(app, p);
     }
 
-    auto render = [&app](float* buf, int frames) { audioRenderCallback(app, buf, frames); };
+    app.render = [&app](float* buf, int frames) { audioRenderCallback(app, buf, frames); };
+    auto& render = app.render;
     if (app.audioOut.start("default", kSampleRate, kPeriodFrames, render) &&
         app.audioOut.sampleRate() != kSampleRate) {
         // o ALSA negociou outra taxa (set_rate_near): reinicia o synth nela,
@@ -1753,7 +1795,7 @@ int main(int, char**) {
         unsigned actualRate = app.audioOut.sampleRate();
         std::fprintf(stderr, "[audio] dispositivo usa %u Hz (pedido %u Hz), ajustando o synth\n", actualRate, kSampleRate);
         app.audioOut.stop();
-        app.synth.init(actualRate, kMaxVoices, /*oversample=*/1);
+        app.synth.init(actualRate, kMaxVoices, app.settings.oversample);
         app.audioOut.start("default", actualRate, kPeriodFrames, render);
     }
     app.midiIn.start("dx7fm", "input", [&app](const MidiEvent& ev) { onMidiEvent(app, ev); });

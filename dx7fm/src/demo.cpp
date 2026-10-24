@@ -16,6 +16,7 @@
 #include "../app/spectrogram_history.h"
 #include "../app/additive_presets.h"
 #include "../app/op_fx_math.h"
+#include "../app/settings.h"
 
 #include <algorithm>
 #include <atomic>
@@ -3205,6 +3206,25 @@ static void testAlgoMorphCost() {
     check(moving < still * 1.3, "morph de algoritmos: mover a posicao a cada amostra custa menos que 1.3x a posicao parada");
 }
 
+// --- [ADICIONADO em 2026-10-24] configuracoes do app (app/settings.h) ---
+static void testAppSettings() {
+    using namespace dx7fm_app;
+    AppSettings s;
+    s.oversample = 4;
+    s.midiClock = false;
+    s.learn(CcTarget::Macro2, 21);
+    s.learn(CcTarget::Bpm, 22);
+    s.learn(CcTarget::Macro3, 21); // CC 21 passa pra Macro3 (sai da Macro2)
+    s.learn(CcTarget::Bpm, 23);    // BPM troca de CC
+    s.sclPath[2] = "/tmp/x.scl";
+    AppSettings back = settingsFromJson(settingsToJson(s));
+    check(back.oversample == 4 && !back.midiClock && back.ccFor(CcTarget::Macro2) == -1 && back.ccFor(CcTarget::Macro3) == 21 &&
+              back.ccFor(CcTarget::Bpm) == 23 && back.cc.size() == 2 && back.sclPath[2] == "/tmp/x.scl",
+          "configuracoes: oversampling, clock, CCs aprendidos (um por alvo/um alvo por CC) e afinacao sobrevivem ao arquivo");
+    AppSettings bad = settingsFromJson("{\"oversample\": 3, \"cc\": [{\"cc\": 200, \"target\": \"Macro1\"}]}");
+    check(bad.oversample == 1 && bad.cc.empty(), "configuracoes: valores invalidos (oversample 3, CC 200) caem nos padroes");
+}
+
 static void testAdditiveSilentWhenAllAmpsZero() {
     auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
     bool ok = true;
@@ -3826,6 +3846,7 @@ int main() {
     testAlgoMorphTwoSlots();
     testAlgoMorphEightSlots();
     testAlgoMorphCost();
+    testAppSettings();
     testNewModDestinations();
     testModulationJson();
     testAdditiveEditorAxes();
