@@ -706,6 +706,18 @@ inline JsonValue voiceParamsToJson(const VoiceParams& v) {
     for (int i = 0; i < kNumOps; ++i) ops.push(operatorParamsToJson(v.op[i]));
     j.set("op", std::move(ops));
     j.set("matrix", algorithmMatrixToJson(v.matrix));
+    {
+        static const char* modes[] = {"Up", "Down", "UpDown", "Random", "AsPlayed"};
+        JsonValue a = JsonValue::makeObject();
+        a.set("on", JsonValue::makeBool(v.arp.on));
+        a.set("mode", JsonValue::makeString(modes[static_cast<int>(v.arp.mode)]));
+        a.set("octaves", JsonValue::makeNumber(v.arp.octaves));
+        a.set("division", JsonValue::makeString(lfoDivisionName(v.arp.division)));
+        a.set("gate", JsonValue::makeNumber(v.arp.gate));
+        a.set("swing", JsonValue::makeNumber(v.arp.swing));
+        a.set("latch", JsonValue::makeBool(v.arp.latch));
+        j.set("arp", std::move(a));
+    }
     JsonValue macros = JsonValue::makeArray();
     for (int k = 0; k < VoiceParams::kNumMacros; ++k) {
         JsonValue m = JsonValue::makeObject();
@@ -751,6 +763,18 @@ inline VoiceParams voiceParamsFromJson(const JsonValue& j) {
     // incompleto (de uma versao antiga, por ex.) apagaria os defaults acima
     // com uma AlgorithmMatrix vazia em vez de preserva-los.
     if (auto* matrix = j.find("matrix")) v.matrix = algorithmMatrixFromJson(matrix);
+    if (auto* a = j.find("arp")) {
+        static const char* modes[] = {"Up", "Down", "UpDown", "Random", "AsPlayed"};
+        v.arp.on = a->boolAt("on", false);
+        const std::string m = a->stringAt("mode", "Up");
+        for (int k = 0; k < 5; ++k) if (m == modes[k]) v.arp.mode = static_cast<ArpMode>(k);
+        v.arp.octaves = clampCast<uint8_t>(a->numberAt("octaves", 1));
+        const std::string d = a->stringAt("division", lfoDivisionName(12));
+        for (int k = 0; k < kNumLfoDivisions; ++k) if (d == lfoDivisionName(k)) v.arp.division = static_cast<uint8_t>(k);
+        v.arp.gate = clampCast<float>(a->numberAt("gate", 0.5));
+        v.arp.swing = clampCast<float>(a->numberAt("swing", 0.0));
+        v.arp.latch = a->boolAt("latch", false);
+    }
     if (auto* macros = j.find("macros"))
         for (int k = 0; k < VoiceParams::kNumMacros && k < static_cast<int>(macros->arraySize()); ++k) {
             const JsonValue& m = macros->at(static_cast<size_t>(k));

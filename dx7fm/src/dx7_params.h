@@ -207,6 +207,22 @@ struct AlgorithmMatrix {
     float outputMix[kNumOps] = {};      // quanto de cada operador vai pro bus de saida da voz
 };
 
+// [ADICIONADO em 2026-10-24] Arpejador (no patch; um por parte). Com `on`, as
+// teclas da parte so montam o padrao; o Synth toca uma nota por passo, na
+// grade do BPM (division = indice de lfoDivisionName), com a nota soando por
+// gate x passo. swing atrasa os passos impares em swing x passo (1/3 = tercina).
+// latch: soltar todas as teclas mantem o padrao ate a proxima tecla.
+enum class ArpMode : uint8_t { Up, Down, UpDown, Random, AsPlayed };
+struct ArpParams {
+    bool on = false;
+    ArpMode mode = ArpMode::Up;
+    uint8_t octaves = 1;   // 1..4
+    uint8_t division = 12; // 1/16
+    float gate = 0.5f;     // 0.05..1 (1 = legato)
+    float swing = 0.0f;    // 0..0.75
+    bool latch = false;
+};
+
 // [ADICIONADO em 2026-10-24] envelope de modulacao = EG estilo DX + loop e sync.
 // loop: ao chegar no sustain (L3) volta ao estagio 1 a partir do nivel atual
 // (ciclo L3 -> L1 -> L2 -> L3) ate o note off, que faz o release normal.
@@ -246,6 +262,7 @@ struct VoiceParams {
     // [ADICIONADO em 2026-10-24] 4 macros (fontes Macro1..4 da matriz): o valor
     // salvo no patch e o nome. O valor AO VIVO e um controlador da parte
     // (Synth::setMacro, como o mod wheel); o app manda estes valores ao carregar.
+    ArpParams arp; // [2026-10-24]
     static constexpr int kNumMacros = 4;
     float macro[kNumMacros] = {};
     std::string macroName[kNumMacros] = {"Macro 1", "Macro 2", "Macro 3", "Macro 4"};
@@ -538,6 +555,11 @@ inline void sanitize(VoiceParams& v) {
     using namespace detail;
     for (auto& o : v.op) sanitize(o);
     for (auto& m : v.macro) m = sanF(m, 0.0f, 1.0f, 0.0f);
+    v.arp.mode = sanEnum(v.arp.mode, ArpMode::AsPlayed);
+    v.arp.octaves = static_cast<uint8_t>(std::clamp<int>(v.arp.octaves, 1, 4));
+    v.arp.division = static_cast<uint8_t>(std::min<int>(v.arp.division, kNumLfoDivisions - 1));
+    v.arp.gate = sanF(v.arp.gate, 0.05f, 1.0f, 0.5f);
+    v.arp.swing = sanF(v.arp.swing, 0.0f, 0.75f, 0.0f);
     v.numAlgos = static_cast<uint8_t>(std::clamp<int>(v.numAlgos, 1, kMaxAlgoSlots));
     v.algoMorph = sanF(v.algoMorph, 0.0f, 1.0f, 0.0f);
     for (int s = 0; s < kMaxAlgoSlots; ++s) {

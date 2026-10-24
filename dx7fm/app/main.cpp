@@ -806,6 +806,38 @@ bool DrawMacros(AppState& app, int part) {
     return changed;
 }
 
+// [ADICIONADO em 2026-10-24] Arpejador do patch (o motor fica em Synth:
+// arpKeyDown/arpProcessDue; os passos caem na grade do BPM).
+bool DrawArp(ArpParams& a) {
+    bool changed = false;
+    changed |= ImGui::Checkbox("Ligado##arp", &a.on);
+    ImGui::SetItemTooltip("As teclas da parte montam o padrao; o arpejador toca uma nota por passo no tempo do BPM");
+    ImGui::SameLine();
+    static const char* kModes[] = {"Sobe", "Desce", "Sobe/desce", "Aleatorio", "Como tocado"};
+    int mode = static_cast<int>(a.mode);
+    ImGui::SetNextItemWidth(130);
+    if (ImGui::Combo("##arpmode", &mode, kModes, IM_ARRAYSIZE(kModes))) { a.mode = static_cast<ArpMode>(mode); changed = true; }
+    ImGui::SameLine();
+    changed |= ImGui::Checkbox("Latch", &a.latch);
+    ImGui::SetItemTooltip("Soltar todas as teclas mantem o arpejo; a proxima tecla comeca um padrao novo");
+    ui::KnobStyle ks;
+    ks.color = ui::col::kAccent;
+    int div = a.division;
+    if (ui::KnobInt("Divisao", &div, 0, kNumLfoDivisions - 1, 12, lfoDivisionName(div), ks)) { a.division = static_cast<uint8_t>(div); changed = true; }
+    ImGui::SameLine();
+    int oct = a.octaves;
+    if (ui::KnobInt("Oitavas", &oct, 1, 4, 1, "%d", ks)) { a.octaves = static_cast<uint8_t>(oct); changed = true; }
+    ImGui::SameLine();
+    float gate = a.gate * 100.0f;
+    if (ui::Knob("Gate", &gate, 5.0f, 100.0f, 50.0f, "%.0f%%", ks)) { a.gate = gate / 100.0f; changed = true; }
+    ImGui::SetItemTooltip("Quanto do passo a nota fica soando (100%% = legato)");
+    ImGui::SameLine();
+    float swing = a.swing * 100.0f;
+    if (ui::Knob("Swing", &swing, 0.0f, 75.0f, 0.0f, "%.0f%%", ks)) { a.swing = swing / 100.0f; changed = true; }
+    ImGui::SetItemTooltip("Atrasa os passos impares (33%% = tercina)");
+    return changed;
+}
+
 // manda os valores de macro do patch pro motor (ao carregar/zerar um patch)
 void sendPatchMacros(AppState& app, int part) {
     for (int k = 0; k < VoiceParams::kNumMacros; ++k) {
@@ -1340,6 +1372,8 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
     ui::EndCard();
 
     if (ui::BeginCard("##card_macros", "MACROS", 0.0f, ui::col::kAccent)) changed |= DrawMacros(app, partIndex);
+    ui::EndCard();
+    if (ui::BeginCard("##card_arp", "ARPEJADOR", 0.0f, ui::col::kAccent)) changed |= DrawArp(pp.voice.arp);
     ui::EndCard();
     if (ui::BeginCard("##card_lfo", "LFOs", 0.0f, ui::col::kAccent2)) {
         // [2026-10-22] 4 LFOs (2x2). Pitch/Amp = vibrato/tremolo direto; os 4 tambem sao fontes da matriz

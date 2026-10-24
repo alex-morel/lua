@@ -3356,6 +3356,85 @@ static void testGlobalLfo() {
           "LFO global com sync: fase na grade das batidas; Start do transporte (clock MIDI) realinha");
 }
 
+// --- [ADICIONADO em 2026-10-24] arpejador ---
+struct ArpEvent { int note; bool on; double sec; };
+static std::vector<ArpEvent> runArp(const std::function<void(ArpParams&)> setup, const std::vector<int>& keys, double seconds,
+                                    const std::function<void(Synth&, double)>& atTime = nullptr) {
+    Synth synth;
+    synth.init(48000.0, 16);
+    synth.setTempoBpm(120.0f);
+    VoiceParams v;
+    v.arp.on = true;
+    setup(v.arp);
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    std::vector<ArpEvent> log;
+    synth.setArpObserver([](void* ctx, int, int note, bool on, double beat) {
+        static_cast<std::vector<ArpEvent>*>(ctx)->push_back({note, on, beat * 0.5}); // 120 BPM: 0.5 s por batida
+    }, &log);
+    for (int k : keys) synth.noteOn(0, k, 100);
+    float L[100], R[100];
+    for (int i = 0; i < static_cast<int>(seconds * 480); ++i) {
+        if (atTime) atTime(synth, i / 480.0);
+        synth.renderBlock(L, R, 100);
+    }
+    return log;
+}
+static std::vector<int> onsets(const std::vector<ArpEvent>& log, std::vector<double>* times = nullptr) {
+    std::vector<int> n;
+    for (const auto& e : log) if (e.on) { n.push_back(e.note); if (times) times->push_back(e.sec); }
+    return n;
+}
+
+static void testArpeggiator() {
+    // Up, 1/16 a 120 BPM (passo 125 ms), gate 50%: C E G C E G, liga a cada 125 ms e solta 62.5 ms depois
+    std::vector<double> t;
+    auto up = runArp([](ArpParams& a) { a.mode = ArpMode::Up; }, {64, 60, 67}, 0.74);
+    auto upNotes = onsets(up, &t);
+    bool timing = upNotes.size() == 6;
+    for (size_t i = 0; timing && i < t.size(); ++i) timing &= std::fabs(t[i] - 0.125 * i) < 1.0 / 48000.0;
+    double firstOff = -1.0;
+    for (const auto& e : up) if (!e.on) { firstOff = e.sec; break; }
+    std::printf("  (arp Up: %d %d %d %d %d %d; ligou em 0/%.4f/%.4f s; 1o note off em %.4f s)\n", upNotes[0], upNotes[1], upNotes[2], upNotes[3],
+                upNotes[4], upNotes[5], t[1], t[2], firstOff);
+    check(upNotes == std::vector<int>({60, 64, 67, 60, 64, 67}) && timing && std::fabs(firstOff - 0.0625) < 1.0 / 48000.0,
+          "arpejador Up 1/16: ordem crescente, um passo a cada 125 ms (exato na amostra), gate 50% solta na metade");
+
+    auto down = onsets(runArp([](ArpParams& a) { a.mode = ArpMode::Down; }, {64, 60, 67}, 0.37));
+    auto updown = onsets(runArp([](ArpParams& a) { a.mode = ArpMode::UpDown; }, {64, 60, 67}, 0.74));
+    auto oct = onsets(runArp([](ArpParams& a) { a.octaves = 2; }, {60, 64}, 0.49));
+    auto played = onsets(runArp([](ArpParams& a) { a.mode = ArpMode::AsPlayed; }, {67, 60, 64}, 0.37));
+    check(down == std::vector<int>({67, 64, 60}) && updown == std::vector<int>({60, 64, 67, 64, 60, 64}) &&
+              oct == std::vector<int>({60, 64, 72, 76}) && played == std::vector<int>({67, 60, 64}),
+          "arpejador: Down, UpDown (sem repetir as pontas), 2 oitavas e como tocado");
+
+    // swing 1/3: passos impares atrasados 1/3 de passo
+    std::vector<double> ts;
+    onsets(runArp([](ArpParams& a) { a.swing = 1.0f / 3.0f; }, {60, 64}, 0.5), &ts);
+    std::printf("  (swing 1/3: passos em");
+    for (double x : ts) std::printf(" %.5f", x);
+    std::printf(" s)\n");
+    // o evento sai na 1a amostra no instante exato ou depois dele (ate 1 amostra de arredondamento)
+    const double swungExact = 0.125 + 0.125 * static_cast<double>(1.0f / 3.0f);
+    check(ts.size() >= 4 && ts[1] - swungExact >= -1e-9 && ts[1] - swungExact < 1.0 / 48000.0 && std::fabs(ts[2] - 0.25) < 1.0 / 48000.0,
+          "arpejador: swing atrasa os passos impares");
+
+    // latch: solta tudo em 0.2s -> continua; tecla nova em 0.45s -> padrao novo so com ela
+    auto latched = runArp([](ArpParams& a) { a.latch = true; }, {60, 64}, 0.8, [](Synth& s, double sec) {
+        if (std::fabs(sec - 0.2) < 1e-9) { s.noteOff(0, 60); s.noteOff(0, 64); }
+        if (std::fabs(sec - 0.45) < 1e-9) s.noteOn(0, 70, 100);
+    });
+    auto ln = onsets(latched);
+    // sem latch: soltar tudo para o arpejo (e solta a nota que soava)
+    auto stopped = runArp([](ArpParams&) {}, {60, 64}, 0.6, [](Synth& s, double sec) {
+        if (std::fabs(sec - 0.2) < 1e-9) { s.noteOff(0, 60); s.noteOff(0, 64); }
+    });
+    bool lastOff = !stopped.empty() && !stopped.back().on;
+    std::printf("  (latch: %zu notas, ultimas %d %d; sem latch: %zu notas)\n", ln.size(), ln[ln.size() - 2], ln.back(), onsets(stopped).size());
+    check(ln.size() == 7 && ln[3] == 64 && ln.back() == 70 && ln[ln.size() - 2] == 70 && onsets(stopped).size() == 2 && lastOff,
+          "arpejador: latch mantem o padrao depois de soltar e troca na tecla nova; sem latch, soltar para");
+}
+
 static void testAdditiveSilentWhenAllAmpsZero() {
     auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
     bool ok = true;
@@ -3981,6 +4060,7 @@ int main() {
     testMacros();
     testMidiClockEstimator();
     testGlobalLfo();
+    testArpeggiator();
     testNewModDestinations();
     testModulationJson();
     testAdditiveEditorAxes();

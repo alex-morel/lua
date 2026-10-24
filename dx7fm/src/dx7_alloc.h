@@ -11,6 +11,7 @@
 #include <cstring>
 #include <unordered_map>
 #include <unordered_set>
+#include <random>
 #include <vector>
 
 namespace dx7fm {
@@ -90,6 +91,15 @@ struct PartRuntime {
     LFO glfo[kNumLfos];
     float glfoBuf[kNumLfos][256] = {};
     bool glfoRestart = false;
+    // [2026-10-24] arpejador (so a audio thread): teclas em ordem de chegada,
+    // quantas estao fisicamente presas (latch), passo atual e agenda em batidas
+    struct ArpKey { int note, velocity; };
+    std::vector<ArpKey> arpKeys;
+    int arpPhysical = 0;
+    bool arpRunning = false;
+    long arpStep = 0;
+    double arpNextBeat = 0.0, arpOffBeat = -1.0;
+    int arpSounding = -1; // nota que o arp esta tocando (-1 = nenhuma)
     float channelAT = 0.0f;
 };
 
@@ -211,11 +221,123 @@ public:
             releaseAllHeld(part);
             pr.runMode = pr.params.voiceMode;
         }
-        if (pr.heldStack.empty()) pr.glfoRestart = true; // 1a nota presa: key sync dos LFOs globais
+        if (pr.heldStack.empty() && pr.arpPhysical == 0) pr.glfoRestart = true; // 1a nota presa: key sync dos LFOs globais
+        if (pr.live()->voice.arp.on) { arpKeyDown(part, note, velocity); return; }
+        dispatchNoteOn(part, note, velocity);
+    }
+
+    // noteOn sem o arpejador (o arp usa pra tocar os passos)
+    void dispatchNoteOn(int part, int note, int velocity) {
+        auto& pr = parts_[part];
         switch (pr.runMode) {
             case VoiceMode::Poly:   polyNoteOn(part, note, velocity); break;
             case VoiceMode::Mono:   monoGroupNoteOn(part, note, velocity, 1); break;
             case VoiceMode::Unison: monoGroupNoteOn(part, note, velocity, std::max(1, pr.params.unisonCount)); break;
+        }
+    }
+
+    // --- arpejador ([2026-10-24]) ----------------------------------------------
+    void arpKeyDown(int part, int note, int velocity) {
+        auto& pr = parts_[part];
+        if (pr.arpPhysical == 0 && pr.arpRunning) pr.arpKeys.clear(); // latch: tecla nova depois de soltar tudo = padrao novo
+        pr.arpKeys.erase(std::remove_if(pr.arpKeys.begin(), pr.arpKeys.end(), [&](const PartRuntime::ArpKey& k) { return k.note == note; }),
+                         pr.arpKeys.end());
+        pr.arpKeys.push_back({note, velocity});
+        ++pr.arpPhysical;
+        if (!pr.arpRunning) { // comeca ja (sem esperar a grade); os passos seguintes caem na grade
+            pr.arpRunning = true;
+            pr.arpStep = 0;
+            pr.arpNextBeat = beatPos_;
+        }
+    }
+
+    void arpKeyUp(int part, int note) {
+        auto& pr = parts_[part];
+        bool was = false;
+        for (const auto& k : pr.arpKeys) was |= k.note == note;
+        if (!was) { dispatchNoteOff(part, note); return; } // tecla que nao e do arpejo (presa antes de ligar o arp)
+        pr.arpPhysical = std::max(0, pr.arpPhysical - 1);
+        const bool latch = pr.live()->voice.arp.latch;
+        if (!latch) pr.arpKeys.erase(std::remove_if(pr.arpKeys.begin(), pr.arpKeys.end(),
+                                                    [&](const PartRuntime::ArpKey& k) { return k.note == note; }), pr.arpKeys.end());
+        if (pr.arpKeys.empty()) arpStop(part);
+    }
+
+    // [2026-10-24] observador das notas que o arpejador dispara (testes, UI):
+    // fn(ctx, parte, nota, ligou?, posicao em batidas). nullptr = nenhum.
+    using NoteObserver = void (*)(void* ctx, int part, int note, bool on, double beat);
+    void setArpObserver(NoteObserver fn, void* ctx) { arpObs_ = fn; arpObsCtx_ = ctx; }
+
+    void arpNoteOn(int part, int note, int vel) {
+        dispatchNoteOn(part, note, vel);
+        if (arpObs_) arpObs_(arpObsCtx_, part, note, true, beatPos_);
+    }
+    void arpNoteOff(int part, int note) {
+        dispatchNoteOff(part, note);
+        if (arpObs_) arpObs_(arpObsCtx_, part, note, false, beatPos_);
+    }
+
+    void arpStop(int part) {
+        auto& pr = parts_[part];
+        if (pr.arpSounding >= 0) arpNoteOff(part, pr.arpSounding);
+        pr.arpSounding = -1;
+        pr.arpRunning = false;
+        pr.arpKeys.clear();
+        pr.arpPhysical = 0;
+        pr.arpOffBeat = -1.0;
+    }
+
+    // nota do passo `step` segundo o modo (notas x oitavas)
+    int arpNoteFor(const PartRuntime& pr, const ArpParams& a, long step, int& velocity) {
+        std::vector<PartRuntime::ArpKey> base = pr.arpKeys;
+        if (a.mode != ArpMode::AsPlayed)
+            std::sort(base.begin(), base.end(), [](const PartRuntime::ArpKey& x, const PartRuntime::ArpKey& y) { return x.note < y.note; });
+        std::vector<PartRuntime::ArpKey> seq;
+        for (int o = 0; o < a.octaves; ++o)
+            for (const auto& k : base) seq.push_back({k.note + 12 * o, k.velocity});
+        if (a.mode == ArpMode::Down) std::reverse(seq.begin(), seq.end());
+        if (a.mode == ArpMode::UpDown && seq.size() > 2) // sobe e desce sem repetir as pontas
+            for (size_t i = seq.size() - 2; i >= 1; --i) seq.push_back(seq[i]);
+        if (seq.empty()) return -1;
+        size_t idx = a.mode == ArpMode::Random ? static_cast<size_t>(arpRng_() % seq.size()) : static_cast<size_t>(step % static_cast<long>(seq.size()));
+        velocity = seq[idx].velocity;
+        return std::clamp(seq[idx].note, 0, 127);
+    }
+
+    // proximo evento do arp (passo ou fim de gate) em batidas; -1 = nenhum
+    double arpNextEventBeat() const {
+        double next = -1.0;
+        for (const auto& pr : parts_) {
+            if (pr.arpRunning) next = next < 0.0 ? pr.arpNextBeat : std::min(next, pr.arpNextBeat);
+            if (pr.arpOffBeat >= 0.0) next = next < 0.0 ? pr.arpOffBeat : std::min(next, pr.arpOffBeat);
+        }
+        return next;
+    }
+
+    void arpProcessDue() {
+        for (int p = 0; p < kNumParts; ++p) {
+            auto& pr = parts_[p];
+            const ArpParams& a = pr.live()->voice.arp;
+            if ((pr.arpRunning || pr.arpOffBeat >= 0.0) && !a.on) { arpStop(p); continue; } // arp desligado com notas
+            if (pr.arpOffBeat >= 0.0 && pr.arpOffBeat <= beatPos_ + 1e-9) { // fim do gate
+                if (pr.arpSounding >= 0) arpNoteOff(p, pr.arpSounding);
+                pr.arpSounding = -1;
+                pr.arpOffBeat = -1.0;
+            }
+            if (!pr.arpRunning || pr.arpNextBeat > beatPos_ + 1e-9) continue;
+            const double stepLen = lfoDivisionBeats(a.division);
+            if (pr.arpSounding >= 0) { arpNoteOff(p, pr.arpSounding); pr.arpSounding = -1; } // gate 100%: legato
+            int vel = 100;
+            const int note = arpNoteFor(pr, a, pr.arpStep, vel);
+            if (note >= 0) {
+                arpNoteOn(p, note, vel);
+                pr.arpSounding = note;
+                pr.arpOffBeat = a.gate >= 1.0f ? -1.0 : beatPos_ + a.gate * stepLen;
+            }
+            ++pr.arpStep;
+            // proximo passo na grade (a partir da batida 0); impar atrasado pelo swing
+            const long gridIdx = static_cast<long>(std::floor(beatPos_ / stepLen + 1e-6)) + 1;
+            pr.arpNextBeat = gridIdx * stepLen + ((gridIdx % 2) ? a.swing * stepLen : 0.0);
         }
     }
 
@@ -224,6 +346,12 @@ public:
     // mono: heldStack), e uma que FOI aceita tem que poder ser solta mesmo
     // que a parte tenha sido desabilitada no meio.
     void noteOff(int part, int note) {
+        auto& pr = parts_[part];
+        if (pr.arpRunning || pr.arpPhysical > 0) { arpKeyUp(part, note); return; }
+        dispatchNoteOff(part, note);
+    }
+
+    void dispatchNoteOff(int part, int note) {
         auto& pr = parts_[part];
         switch (pr.runMode) {
             case VoiceMode::Poly: polyNoteOff(part, note); break;
@@ -302,6 +430,7 @@ public:
 
     void allNotesOff(int part) {
         auto& pr = parts_[part];
+        if (pr.arpRunning || pr.arpOffBeat >= 0.0 || pr.arpPhysical > 0) arpStop(part);
         releaseAllHeld(part);
         pr.sostenutoCaptured.clear();
     }
@@ -326,8 +455,16 @@ public:
     void renderBlock(float* outL, float* outR, int n) {
         for (int done = 0; done < n;) {
             int len = std::min(kRenderChunk, n - done);
+            // arpejador: corta o pedaco no instante exato do proximo passo/gate
+            // (sem arp tocando, nada muda -- saida identica a antes)
+            const double beatsPerSample = static_cast<double>(tempoBpm_.load(std::memory_order_relaxed)) / (60.0 * sampleRate_);
+            const double next = arpNextEventBeat();
+            if (next >= 0.0) {
+                if (next <= beatPos_ + 1e-9) { arpProcessDue(); continue; }
+                len = std::min(len, std::max(1, static_cast<int>(std::ceil((next - beatPos_) / beatsPerSample - 1e-9))));
+            }
             renderChunk(outL + done, outR + done, len);
-            beatPos_ += len * static_cast<double>(tempoBpm_.load(std::memory_order_relaxed)) / (60.0 * sampleRate_);
+            beatPos_ += len * beatsPerSample;
             done += len;
         }
     }
@@ -335,7 +472,10 @@ public:
     // [ADICIONADO em 2026-10-24] posicao de batida (seminimas desde o ultimo
     // Start): avanca com o BPM; LFOs globais com sync usam pra ficar no compasso.
     // Chamar da thread do audio (Start do clock MIDI -> evento TransportStart).
-    void resetTransport() { beatPos_ = 0.0; }
+    void resetTransport() {
+        beatPos_ = 0.0;
+        for (auto& pr : parts_) if (pr.arpRunning) { pr.arpNextBeat = 0.0; pr.arpStep = 0; } // arpejo recomeca no 1
+    }
     double beatPosition() const { return beatPos_; }
 
     // Threads de audio ALEM da que chama renderBlock() (0 = tudo serial, o
@@ -749,6 +889,9 @@ private:
     std::atomic<float> masterVolume_{1.0f}; // alvo, escrito pela UI (setMasterVolume)
     std::atomic<float> tempoBpm_{120.0f};    // setTempoBpm (LFOs com tempoSync)
     double beatPos_ = 0.0;                   // so a audio thread (resetTransport, renderBlock)
+    std::minstd_rand arpRng_{12345};         // modo Random do arpejador (semente fixa: testes reproduziveis)
+    NoteObserver arpObs_ = nullptr;
+    void* arpObsCtx_ = nullptr;
     float masterGain_ = 1.0f;               // valor suavizado, so a audio thread toca
 
     // renderBlock: buffers por voz (alocados em init, nunca na audio thread)
