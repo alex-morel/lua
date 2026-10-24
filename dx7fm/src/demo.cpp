@@ -8,6 +8,7 @@
 #include "wav_reader.h"
 #include "dx7_resynth.h"
 #include "dx7_wavegen.h"
+#include "dx7_sysex.h"
 #include "../app/event_queue.h"
 #include "../app/patch_browser.h"
 #include "../app/envelope_math.h"
@@ -3512,6 +3513,124 @@ static void testTuningInEngine() {
           "afinacao: salva com a parte e fica na parte ao carregar outro patch");
 }
 
+// --- [ADICIONADO em 2026-10-24] SysEx do DX7 (dx7_sysex.h) ---
+// empacota uma voz VCED (155) no formato VMEM (128), como o DX7 guarda nos bancos
+static void packVmem(const sysex::Dx7Voice& v, uint8_t* b) {
+    const uint8_t* p = v.p;
+    for (int k = 0; k < 6; ++k) {
+        const uint8_t* s = p + k * 21;
+        uint8_t* d = b + k * 17;
+        for (int i = 0; i < 11; ++i) d[i] = s[i];
+        d[11] = static_cast<uint8_t>(s[11] | (s[12] << 2));
+        d[12] = static_cast<uint8_t>(s[13] | (s[20] << 3));
+        d[13] = static_cast<uint8_t>(s[14] | (s[15] << 2));
+        d[14] = s[16];
+        d[15] = static_cast<uint8_t>(s[17] | (s[18] << 1));
+        d[16] = s[19];
+    }
+    for (int i = 0; i < 8; ++i) b[102 + i] = p[126 + i];
+    b[110] = p[134];
+    b[111] = static_cast<uint8_t>(p[135] | (p[136] << 3));
+    for (int i = 0; i < 4; ++i) b[112 + i] = p[137 + i];
+    b[116] = static_cast<uint8_t>(p[141] | (p[142] << 1) | (p[143] << 4));
+    b[117] = p[144];
+    for (int i = 0; i < 10; ++i) b[118 + i] = p[145 + i];
+}
+
+static sysex::Dx7Voice testVoice(int k) {
+    sysex::Dx7Voice v;
+    for (int op = 0; op < 6; ++op) {
+        uint8_t* o = v.p + op * 21;
+        for (int i = 0; i < 4; ++i) { o[i] = static_cast<uint8_t>((k * 7 + op * 13 + i * 17) % 100); o[4 + i] = static_cast<uint8_t>((99 - k - i * 5) % 100); }
+        o[8] = 39; o[9] = static_cast<uint8_t>(k % 100); o[10] = 50; o[11] = static_cast<uint8_t>(k % 4); o[12] = 3;
+        o[13] = static_cast<uint8_t>(op % 8); o[14] = static_cast<uint8_t>(op % 4); o[15] = static_cast<uint8_t>(k % 8);
+        o[16] = static_cast<uint8_t>(80 + op); o[17] = op == 5 && k % 2; o[18] = static_cast<uint8_t>((k + op) % 32);
+        o[19] = static_cast<uint8_t>(k % 100); o[20] = static_cast<uint8_t>((k + op) % 15);
+    }
+    for (int i = 0; i < 8; ++i) v.p[126 + i] = static_cast<uint8_t>(50 + i);
+    v.p[134] = static_cast<uint8_t>(k % 32); v.p[135] = static_cast<uint8_t>(k % 8); v.p[136] = 1;
+    v.p[137] = 35; v.p[138] = 10; v.p[139] = 5; v.p[140] = 0; v.p[141] = 1; v.p[142] = static_cast<uint8_t>(k % 6); v.p[143] = 3;
+    v.p[144] = 24;
+    std::string name = "VOZ " + std::to_string(k);
+    for (int i = 0; i < 10; ++i) v.p[145 + i] = static_cast<uint8_t>(i < static_cast<int>(name.size()) ? name[static_cast<size_t>(i)] : ' ');
+    return v;
+}
+
+static void testDx7Sysex() {
+    // banco sintetico de 32 vozes -> VMEM -> parser -> as mesmas vozes
+    std::vector<uint8_t> syx = {0xF0, 0x43, 0x00, 0x09, 0x20, 0x00};
+    std::vector<uint8_t> body(4096);
+    for (int k = 0; k < 32; ++k) packVmem(testVoice(k), &body[static_cast<size_t>(k) * 128]);
+    syx.insert(syx.end(), body.begin(), body.end());
+    syx.push_back(sysex::checksum(body.data(), body.size()));
+    syx.push_back(0xF7);
+    std::string err;
+    auto voices = sysex::parse(syx, err);
+    bool same = voices.size() == 32 && err.empty();
+    for (int k = 0; same && k < 32; ++k) same &= std::memcmp(voices[static_cast<size_t>(k)].p, testVoice(k).p, 155) == 0;
+    check(same && voices[7].name() == "VOZ 7", "SysEx DX7: banco de 32 vozes (VMEM) ida e volta pelo parser, nomes inclusive");
+    auto broken = syx;
+    broken[100] ^= 1;
+    auto none = sysex::parse(broken, err);
+    std::vector<uint8_t> single = {0xF0, 0x43, 0x00, 0x00, 0x01, 0x1B};
+    sysex::Dx7Voice one = testVoice(5);
+    single.insert(single.end(), one.p, one.p + 155);
+    single.push_back(sysex::checksum(one.p, 155));
+    single.push_back(0xF7);
+    std::string err2;
+    auto singles = sysex::parse(single, err2);
+    check(none.empty() && !err.empty() && singles.size() == 1 && std::memcmp(singles[0].p, one.p, 155) == 0,
+          "SysEx DX7: checksum errado e recusado; voz unica (VCED) tambem le");
+
+    // topologias: portadoras de cada um dos 32 algoritmos do DX7
+    const int carriers[32] = {2, 2, 2, 2, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 3, 3, 4, 4, 4, 5, 5, 3, 3, 3, 4, 4, 5, 6};
+    bool topo = true;
+    for (int a = 1; a <= 32; ++a) {
+        AlgorithmMatrix m = sysex::algorithmMatrix(a, 0.5f);
+        int c = 0, fb = 0;
+        for (int i = 0; i < kNumOps; ++i) { c += m.outputMix[i] != 0.0f; for (int j = 0; j < kNumOps; ++j) fb += m.mod[i][j] == 0.5f; }
+        topo &= c == carriers[a - 1] && fb == 1 && m.outputMix[6] == 0.0f && m.outputMix[7] == 0.0f;
+    }
+    AlgorithmMatrix a1 = sysex::algorithmMatrix(1, 0.5f), a4 = sysex::algorithmMatrix(4, 0.5f);
+    topo &= a1.mod[0][1] == 1.0f && a1.mod[2][3] == 1.0f && a1.mod[3][4] == 1.0f && a1.mod[5][5] == 0.5f; // 2->1, 4->3, 5->4; fb no 6
+    topo &= a4.mod[5][3] == 0.5f && a4.outputMix[0] == 1.0f && a4.outputMix[3] == 1.0f;                 // alg 4: laco 4 -> 6
+    check(topo, "SysEx DX7: os 32 algoritmos com o numero certo de portadoras e o feedback (proprio ou o laco dos alg. 4 e 6)");
+
+    // conversoes
+    bool conv = std::fabs(sysex::ratio(0, 0) - 0.5f) < 1e-6f && std::fabs(sysex::ratio(3, 50) - 4.5f) < 1e-5f &&
+                std::fabs(sysex::fixedHz(2, 0) - 100.0f) < 1e-3f && std::fabs(sysex::fixedHz(1, 50) - std::sqrt(10.0f) * 10.0f) < 1e-2f &&
+                sysex::detuneCents(7) == 0.0f && sysex::levelToOurs(99) == 99 && sysex::levelToOurs(50) == 50 && sysex::levelToOurs(0) == 0 &&
+                sysex::feedbackAmount(7) == 0.5f && sysex::feedbackAmount(0) == 0.0f && sysex::rateToOurs(99) > sysex::rateToOurs(50) &&
+                sysex::rateToOurs(50) > sysex::rateToOurs(20) && std::fabs(sysex::lfoHz(35) - 5.81f) < 0.05f;
+    std::printf("  (rates DX7 -> nossos: 99->%d 75->%d 50->%d 25->%d; LFO 35 = %.2f Hz, 99 = %.1f Hz)\n", sysex::rateToOurs(99),
+                sysex::rateToOurs(75), sysex::rateToOurs(50), sysex::rateToOurs(25), sysex::lfoHz(35), sysex::lfoHz(99));
+    check(conv, "SysEx DX7: razao, frequencia fixa, detune, nivel, feedback, rates e LFO convertidos");
+
+    // banco real do Dexed, se estiver instalado (nao falha sem ele)
+    const char* home = std::getenv("HOME");
+    const std::string dexed = std::string(home ? home : "") + "/.local/share/DigitalSuburban/Dexed/Cartridges/Dexed_01.syx";
+    std::ifstream f(dexed, std::ios::binary);
+    if (f) {
+        std::vector<uint8_t> real((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        auto bank = sysex::parse(real, err);
+        bool sounds = bank.size() == 32;
+        Synth synth;
+        synth.init(48000.0, 4);
+        PartParams pp = sysex::toPart(bank.empty() ? sysex::Dx7Voice{} : bank[0]);
+        synth.part(0).voice = pp.voice;
+        synth.recompile(0);
+        synth.noteOn(0, 60, 100);
+        std::vector<float> x;
+        for (int i = 0; i < 24000; ++i) { float l, r; synth.renderStereo(l, r); x.push_back(l); }
+        float rms = computeRms(x, 4800, 19200);
+        std::printf("  (Dexed_01.syx: %zu vozes, 1a = \"%s\", 2a = \"%s\"; tocando a 1a: RMS %.3f)\n", bank.size(),
+                    bank.empty() ? "" : bank[0].name().c_str(), bank.size() > 1 ? bank[1].name().c_str() : "", rms);
+        check(sounds && rms > 0.01f && std::isfinite(rms), "SysEx DX7: banco real (Dexed_01.syx) le as 32 vozes e a primeira toca");
+    } else {
+        std::printf("  (Dexed_01.syx nao encontrado: teste com banco real pulado)\n");
+    }
+}
+
 static void testAdditiveSilentWhenAllAmpsZero() {
     auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
     bool ok = true;
@@ -4140,6 +4259,7 @@ int main() {
     testArpeggiator();
     testTuningParsers();
     testTuningInEngine();
+    testDx7Sysex();
     testNewModDestinations();
     testModulationJson();
     testAdditiveEditorAxes();

@@ -8,6 +8,7 @@
 #include "dx7_globalfx.h"
 #include "dx7_patch_io.h"
 #include "dx7_algorithms.h"
+#include "dx7_sysex.h"
 
 #include "alsa_audio.h"
 #include "alsa_midi.h"
@@ -140,6 +141,11 @@ struct AppState {
     PartHistory hist[kNumParts];
     ABState ab[kNumParts];
     ui::WavBrowser tuningBrowser; // [2026-10-24] escolha de .scl/.kbm (exts trocadas no main)
+    // [2026-10-24] importacao de SysEx do DX7 (so UI thread)
+    ui::WavBrowser dx7Browser;
+    std::vector<dx7fm::sysex::Dx7Voice> dx7Voices;
+    std::string dx7File, dx7Error;
+    int dx7Selected = -1;
     ui::EnvelopeGraphState envGraph[kNumParts]; // visibilidade das curvas / arrasto, por parte
     double lastPatchScan = -1e9;
 };
@@ -1341,6 +1347,65 @@ void DrawPatchConfirmPopup(AppState& app, int part) {
     ImGui::EndPopup();
 }
 
+// [ADICIONADO em 2026-10-24] Importar SysEx do DX7 (banco de 32 ou voz unica):
+// escolher o .syx, clicar numa voz carrega na parte (da pra ir tocando e
+// trocando); Ctrl+Z desfaz. Conversao em src/dx7_sysex.h.
+void loadDx7File(AppState& app, const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    app.dx7Voices = dx7fm::sysex::parse(data, app.dx7Error);
+    app.dx7File = path;
+    app.dx7Selected = -1;
+    if (!app.dx7Voices.empty()) app.dx7Browser.followFile(path);
+}
+
+void importDx7Voice(AppState& app, int part, int index) {
+    historyCommit(app, part);
+    copyPatchKeepingRouting(app.synth.part(part), dx7fm::sysex::toPart(app.dx7Voices[static_cast<size_t>(index)]));
+    publishPart(app, part);
+    sendPatchMacros(app, part);
+    historyCommit(app, part);
+    auto& ui = app.patchUi[part];
+    std::snprintf(ui.name, sizeof(ui.name), "%s", app.synth.part(part).name.c_str());
+    ui.currentFile.clear();
+    ui.dirty = patchFingerprint(app.synth.part(part)) != ui.baseline;
+    setPatchStatus(ui, true, "Importado do DX7: " + app.synth.part(part).name);
+    app.dx7Selected = index;
+}
+
+void DrawDx7Import(AppState& app, int part) {
+    if (ImGui::SmallButton("Importar DX7 (.syx)")) { app.dx7Browser.listed = false; ImGui::OpenPopup("Importar DX7"); }
+    ImGui::SetItemTooltip("Bancos de 32 vozes ou voz unica do Yamaha DX7 (os mesmos .syx do Dexed)");
+    ImGui::SetNextWindowSize(ImVec2(760, 460), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Importar DX7", nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
+    std::string picked = app.dx7Browser.drawList("##dx7browser", ImVec2(330, -ImGui::GetFrameHeightWithSpacing()), app.dx7File);
+    if (!picked.empty()) loadDx7File(app, picked);
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    std::string typed = app.dx7Browser.drawPathInput("dx7path");
+    if (!typed.empty()) loadDx7File(app, typed);
+    if (!app.dx7Error.empty()) ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::col::kAccent2), "%s", app.dx7Error.c_str());
+    if (app.dx7Voices.empty()) {
+        ImGui::TextDisabled("Escolha um .syx. Clicar numa voz carrega ela nesta parte --\n"
+                            "da pra ir tocando e trocando; Ctrl+Z volta ao som anterior.\n\n"
+                            "A conversao e aproximada: os 6 operadores do DX7 viram os\n"
+                            "operadores 1-6 (7 e 8 desligados), algoritmo, envelopes,\n"
+                            "level scaling, LFO e pitch EG convertidos.");
+    } else {
+        ImGui::Text("%s: %zu voz(es)", std::filesystem::path(app.dx7File).filename().string().c_str(), app.dx7Voices.size());
+        ImGui::BeginChild("##dx7voices", ImVec2(0, -ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_Borders);
+        for (size_t i = 0; i < app.dx7Voices.size(); ++i) {
+            char lbl[48];
+            std::snprintf(lbl, sizeof lbl, "%2zu  %s##v%zu", i + 1, app.dx7Voices[i].name().c_str(), i);
+            if (ImGui::Selectable(lbl, app.dx7Selected == static_cast<int>(i))) importDx7Voice(app, part, static_cast<int>(i));
+        }
+        ImGui::EndChild();
+    }
+    ImGui::EndGroup();
+    if (ImGui::Button("Fechar") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
 void DrawPatchSection(AppState& app, int part) {
     auto& ui = app.patchUi[part];
     auto& pp = app.synth.part(part);
@@ -1368,6 +1433,8 @@ void DrawPatchSection(AppState& app, int part) {
         ImGui::SetItemTooltip("Compara duas versoes do som: o outro lado guarda o som e o historico dele");
         ImGui::SameLine();
         if (ImGui::SmallButton(ab.side == 0 ? "Copiar A -> B" : "Copiar B -> A")) copyToOtherSide(app, part);
+        ImGui::SameLine(0, 18);
+        DrawDx7Import(app, part);
     }
     // re-varre a pasta de vez em quando: pega arquivos copiados/apagados por fora do app
     if (ImGui::GetTime() - app.lastPatchScan > 2.0) rescanPatches(app);
@@ -2219,6 +2286,7 @@ int main(int, char**) {
     app.settings = dx7fm_app::loadSettings();
     rebuildCcTable(app);
     app.tuningBrowser.exts = {".scl", ".kbm"};
+    app.dx7Browser.exts = {".syx"};
     app.synth.init(kSampleRate, kMaxVoices, app.settings.oversample);
     app.synth.setWorkerThreads(audioWorkerThreads());
     // Por padrao so a parte A toca; B-D comecam desligadas (senao cada nota,
