@@ -120,6 +120,23 @@ struct AppState {
         bool statusOk = true;
     } patchUi[kNumParts];
     std::vector<PatchEntry> patchList;     // compartilhada pelas 4 partes
+    // [ADICIONADO em 2026-10-24] desfazer/refazer por parte: estados completos da
+    // parte (as ondas da Wavetable sao shared_ptr: copiar nao duplica memoria).
+    // committed = ultimo estado empilhado; pending = houve edicao ainda nao empilhada.
+    struct PartHistory {
+        std::vector<PartParams> undo, redo;
+        PartParams committed;
+        bool pending = false;
+    };
+    // A/B: o "outro" lado (so o som; o roteamento da parte fica) e o historico dele
+    struct ABState {
+        PartParams other;
+        PartHistory otherHist;
+        bool haveOther = false;
+        int side = 0; // 0 = A, 1 = B
+    };
+    PartHistory hist[kNumParts];
+    ABState ab[kNumParts];
     ui::EnvelopeGraphState envGraph[kNumParts]; // visibilidade das curvas / arrasto, por parte
     double lastPatchScan = -1e9;
 };
@@ -1024,6 +1041,81 @@ void initPatchUi(AppState& app, int part) {
     auto& ui = app.patchUi[part];
     std::snprintf(ui.name, sizeof(ui.name), "%s", app.synth.part(part).name.c_str());
     markPatchClean(app, part);
+    app.hist[part].committed = app.synth.part(part);
+}
+
+// --- desfazer/refazer + A/B ([2026-10-24]) -----------------------------------
+constexpr size_t kMaxUndo = 100;
+
+bool sameState(const PartParams& a, const PartParams& b) {
+    return partParamsToJson(a).dump() == partParamsToJson(b).dump();
+}
+
+// empilha o estado anterior (committed) se a parte mudou desde ele
+void historyCommit(AppState& app, int part) {
+    auto& h = app.hist[part];
+    const PartParams& now = app.synth.part(part);
+    h.pending = false;
+    if (sameState(h.committed, now)) return;
+    h.undo.push_back(h.committed);
+    if (h.undo.size() > kMaxUndo) h.undo.erase(h.undo.begin());
+    h.redo.clear();
+    h.committed = now;
+}
+
+void sendPatchMacros(AppState& app, int part);
+void publishPart(AppState& app, int part);
+
+// coloca um estado inteiro na parte e publica (motor, macros, indicador de "nao salvo")
+void restorePart(AppState& app, int part, const PartParams& p) {
+    app.synth.part(part) = p;
+    publishPart(app, part);
+    sendPatchMacros(app, part);
+    auto& ui = app.patchUi[part];
+    std::snprintf(ui.name, sizeof(ui.name), "%s", p.name.c_str());
+    ui.dirty = patchFingerprint(app.synth.part(part)) != ui.baseline;
+}
+
+void undoPart(AppState& app, int part) {
+    auto& h = app.hist[part];
+    if (h.pending) historyCommit(app, part);
+    if (h.undo.empty()) return;
+    h.redo.push_back(app.synth.part(part));
+    restorePart(app, part, h.undo.back());
+    h.undo.pop_back();
+    h.committed = app.synth.part(part);
+}
+
+void redoPart(AppState& app, int part) {
+    auto& h = app.hist[part];
+    if (h.redo.empty()) return;
+    h.undo.push_back(app.synth.part(part));
+    restorePart(app, part, h.redo.back());
+    h.redo.pop_back();
+    h.committed = app.synth.part(part);
+}
+
+// troca A <-> B: so o som (o roteamento da parte continua o mesmo); cada lado tem o seu historico
+void switchAB(AppState& app, int part) {
+    auto& ab = app.ab[part];
+    historyCommit(app, part);
+    PartParams current = app.synth.part(part);
+    if (!ab.haveOther) { ab.other = current; ab.otherHist = {}; ab.otherHist.committed = current; ab.haveOther = true; }
+    PartParams next = current;
+    copyPatchKeepingRouting(next, ab.other);
+    restorePart(app, part, next);
+    ab.other = current;
+    std::swap(app.hist[part], ab.otherHist);
+    app.hist[part].committed = app.synth.part(part);
+    ab.side ^= 1;
+}
+
+void copyToOtherSide(AppState& app, int part) {
+    auto& ab = app.ab[part];
+    ab.other = app.synth.part(part);
+    ab.otherHist = {};
+    ab.otherHist.committed = ab.other;
+    ab.haveOther = true;
 }
 
 void publishPart(AppState& app, int part) {
@@ -1054,9 +1146,11 @@ void doLoadPatch(AppState& app, int part, const std::filesystem::path& path) {
         rescanPatches(app);
         return;
     }
+    historyCommit(app, part);
     copyPatchKeepingRouting(app.synth.part(part), loaded);
     publishPart(app, part);
     sendPatchMacros(app, part);
+    historyCommit(app, part); // carregar e um passo de desfazer
     std::snprintf(ui.name, sizeof(ui.name), "%s", app.synth.part(part).name.c_str());
     ui.currentFile = path;
     ui.selected = path;
@@ -1066,9 +1160,11 @@ void doLoadPatch(AppState& app, int part, const std::filesystem::path& path) {
 
 void doInitPatch(AppState& app, int part) {
     auto& ui = app.patchUi[part];
+    historyCommit(app, part);
     copyPatchKeepingRouting(app.synth.part(part), PartParams{});
     publishPart(app, part);
     sendPatchMacros(app, part);
+    historyCommit(app, part);
     std::snprintf(ui.name, sizeof(ui.name), "%s", app.synth.part(part).name.c_str());
     ui.currentFile.clear();
     markPatchClean(app, part);
@@ -1176,6 +1272,31 @@ void DrawPatchConfirmPopup(AppState& app, int part) {
 void DrawPatchSection(AppState& app, int part) {
     auto& ui = app.patchUi[part];
     auto& pp = app.synth.part(part);
+    { // [2026-10-24] desfazer/refazer + A/B
+        auto& h = app.hist[part];
+        ImGui::BeginDisabled(h.undo.empty() && !h.pending);
+        if (ImGui::SmallButton("Desfazer")) undoPart(app, part);
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Ctrl+Z (%zu passos)", h.undo.size() + (h.pending ? 1 : 0));
+        ImGui::SameLine();
+        ImGui::BeginDisabled(h.redo.empty());
+        if (ImGui::SmallButton("Refazer")) redoPart(app, part);
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Ctrl+Y ou Ctrl+Shift+Z");
+        ImGui::SameLine(0, 18);
+        auto& ab = app.ab[part];
+        for (int sd = 0; sd < 2; ++sd) {
+            if (sd) ImGui::SameLine(0, 2);
+            const bool on = ab.side == sd;
+            ImGui::PushStyleColor(ImGuiCol_Button, on ? ui::col::kAccent : ui::rgb(40, 44, 56));
+            ImGui::PushStyleColor(ImGuiCol_Text, on ? ui::rgb(14, 16, 22) : ui::col::kText);
+            if (ImGui::SmallButton(sd ? "B" : "A") && !on) switchAB(app, part);
+            ImGui::PopStyleColor(2);
+        }
+        ImGui::SetItemTooltip("Compara duas versoes do som: o outro lado guarda o som e o historico dele");
+        ImGui::SameLine();
+        if (ImGui::SmallButton(ab.side == 0 ? "Copiar A -> B" : "Copiar B -> A")) copyToOtherSide(app, part);
+    }
     // re-varre a pasta de vez em quando: pega arquivos copiados/apagados por fora do app
     if (ImGui::GetTime() - app.lastPatchScan > 2.0) rescanPatches(app);
 
@@ -1472,6 +1593,16 @@ void DrawPartPanel(AppState& app, int partIndex) {
         publishPart(app, partIndex);
         auto& ui = app.patchUi[partIndex];
         ui.dirty = patchFingerprint(pp) != ui.baseline; // desfazer uma edicao volta a "nao modificado"
+        app.hist[partIndex].pending = true;
+    }
+    // a edicao vira um passo de desfazer quando termina (arrastar um knob = 1 passo)
+    if (app.hist[partIndex].pending && !ImGui::IsAnyItemActive()) historyCommit(app, partIndex);
+
+    // Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z (fora de campos de texto)
+    const ImGuiIO& io = ImGui::GetIO();
+    if (io.KeyCtrl && !io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) { if (io.KeyShift) redoPart(app, partIndex); else undoPart(app, partIndex); }
+        else if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) redoPart(app, partIndex);
     }
 }
 // [REESCRITO em 2026-10-18] Efeitos globais: cadeia reordenavel + painel
@@ -2056,7 +2187,7 @@ int main(int, char**) {
             // So o KEYDOWN respeita WantCaptureKeyboard. O KEYUP e sempre
             // tratado: se o foco foi pra um campo de texto com a tecla
             // apertada, a nota ainda precisa ser solta.
-            if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && !io.WantCaptureKeyboard)
+            if (event.type == SDL_KEYDOWN && event.key.repeat == 0 && !io.WantCaptureKeyboard && !(SDL_GetModState() & KMOD_CTRL))
                 handlePianoKeyDown(app, event.key.keysym.scancode);
             else if (event.type == SDL_KEYUP)
                 handlePianoKeyUp(app, event.key.keysym.scancode);
