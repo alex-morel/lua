@@ -499,6 +499,7 @@ inline JsonValue lfoParamsToJson(const LFOParams& l) {
     v.set("tempoSync", JsonValue::makeBool(l.tempoSync));
     v.set("division", JsonValue::makeString(lfoDivisionName(l.division)));
     v.set("steps", JsonValue::makeNumber(l.steps));
+    v.set("global", JsonValue::makeBool(l.global));
     return v;
 }
 inline LFOParams lfoParamsFromJson(const JsonValue* j) {
@@ -514,6 +515,7 @@ inline LFOParams lfoParamsFromJson(const JsonValue* j) {
     const std::string div = j->stringAt("division", lfoDivisionName(l.division));
     for (int d = 0; d < kNumLfoDivisions; ++d) if (div == lfoDivisionName(d)) l.division = static_cast<uint8_t>(d);
     l.steps = clampCast<uint8_t>(j->numberAt("steps", l.steps));
+    l.global = j->boolAt("global", l.global);
     return l;
 }
 

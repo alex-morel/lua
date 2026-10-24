@@ -86,6 +86,10 @@ struct LFOParams {
     // [ADICIONADO em 2026-10-24] quantizacao em degraus: 0 = suave; 2..32 =
     // numero de niveis entre -1 e 1 (escada), aplicado depois da forma
     uint8_t steps = 0;
+    // [ADICIONADO em 2026-10-24] global: UM LFO por parte, compartilhado por
+    // todas as vozes dela (acordes ondulam juntos). Com tempoSync, a fase vem
+    // da posicao de batida do Synth (alinhado ao compasso / clock MIDI).
+    bool global = false;
 };
 
 struct KeyLevelScaling {

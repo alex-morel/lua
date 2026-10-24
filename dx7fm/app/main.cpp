@@ -19,6 +19,8 @@
 #include "op_fx_ui.h"
 #include "wavetable_editor.h"
 #include "settings.h"
+#include "midi_clock.h"
+#include <chrono>
 #include "viz.h"
 #include "patch_browser.h"
 
@@ -94,6 +96,12 @@ struct AppState {
     std::atomic<int> learnedCc{-1};
     int learnPending = -1; // so UI: alvo do learn em andamento
     float macroSeen[kNumParts][VoiceParams::kNumMacros] = {}; // ultimo valor ao vivo visto pela UI
+    // [2026-10-24] clock MIDI: estimador so na thread MIDI; BPM e hora do ultimo
+    // pulso publicados em atomicos; followClock = settings.midiClock (copia da UI)
+    dx7fm_app::ClockEstimator clockEst;
+    std::atomic<float> clockBpm{0.0f};
+    std::atomic<int64_t> clockLastNs{0};
+    std::atomic<bool> followClock{true};
     int selectedOp = 0;
     int selectedAlgo = 0; // indice (0-based) no combo de presets de algoritmo
     int algoSlot = 0;          // [2026-10-24] slot do morph de algoritmos em edicao (0 = slot 1)
@@ -136,7 +144,18 @@ static int audioWorkerThreads() {
     return std::clamp(hw / 2 - 1, hw > 1 ? 1 : 0, 7);
 }
 
+inline int64_t monoNowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// clock MIDI chegando (ultimo pulso ha menos de 0.5s) e o usuario quer segui-lo
+bool clockActive(const AppState& app) {
+    return app.followClock.load(std::memory_order_relaxed) && app.clockBpm.load(std::memory_order_relaxed) > 0.0f &&
+           monoNowNs() - app.clockLastNs.load(std::memory_order_relaxed) < 500'000'000;
+}
+
 void audioRenderCallback(AppState& app, float* interleaved, int frames) {
+    if (clockActive(app)) app.synth.setTempoBpm(std::round(app.clockBpm.load(std::memory_order_relaxed) * 10.0f) / 10.0f);
     static std::vector<AppEvent> events;
     events.clear();
     app.eventQueue.drainInto(events);
@@ -196,6 +215,26 @@ inline float volumeDbFromGain(float g) { return g <= 0.0f ? -60.0f : std::clamp(
 inline float gainFromVolumeDb(float db) { return db <= -60.0f ? 0.0f : dbToLinear(db); }
 
 void onMidiEvent(AppState& app, const MidiEvent& ev) {
+    switch (ev.type) { // [2026-10-24] tempo real: clock/start (nao viram eventos de nota)
+        case MidiEvent::Type::Clock: {
+            const int64_t now = monoNowNs();
+            app.clockEst.tick(static_cast<double>(now) * 1e-9);
+            app.clockBpm.store(static_cast<float>(app.clockEst.bpm()), std::memory_order_relaxed);
+            app.clockLastNs.store(now, std::memory_order_relaxed);
+            return;
+        }
+        case MidiEvent::Type::Start: {
+            app.clockEst.reset();
+            AppEvent t;
+            t.kind = AppEvent::Kind::TransportStart;
+            app.eventQueue.push(t);
+            return;
+        }
+        case MidiEvent::Type::Continue:
+        case MidiEvent::Type::Stop:
+            return;
+        default: break;
+    }
     AppEvent ae;
     ae.part = -1;
     ae.channel1to16 = ev.channel + 1; // convencao do motor: 0=omni, 1..16=canal especifico
@@ -264,6 +303,11 @@ void onMidiEvent(AppState& app, const MidiEvent& ev) {
                 return; // CC nao mapeado, ignora
             }
             break;
+        case MidiEvent::Type::Clock:
+        case MidiEvent::Type::Start:
+        case MidiEvent::Type::Continue:
+        case MidiEvent::Type::Stop:
+            return; // tratados no inicio da funcao
     }
     app.eventQueue.push(ae);
 }
@@ -1306,6 +1350,13 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
                 char name[8];
                 std::snprintf(name, sizeof name, "LFO %d", k + 1);
                 ImGui::TextDisabled("%s", name);
+                ImGui::SameLine();
+                ImGui::PushID(k);
+                changed |= ImGui::Checkbox("Global", &pp.voice.lfo(k).global);
+                ImGui::PopID();
+                ImGui::SetItemTooltip("Um LFO so pra parte inteira: todas as notas ondulam juntas (acordes).\n"
+                                      "Com Sync, fica alinhado ao compasso (e ao Start do clock MIDI).\n"
+                                      "Key sync reinicia na primeira nota tocada; LfoRate da matriz nao se aplica.");
                 changed |= DrawLfo(name, pp.voice.lfo(k));
             }
             ImGui::EndTable();
@@ -1747,8 +1798,12 @@ void DrawTopBar(AppState& app) {
         ks.size = 34.0f;
         // [2026-10-22] BPM global dos LFOs com Sync (estado do app, nao do patch)
         float bpm = app.synth.tempoBpm();
-        if (ui::Knob("BPM", &bpm, 20.0f, 300.0f, 120.0f, "%.0f", ks)) app.synth.setTempoBpm(std::round(bpm));
-        ImGui::SetItemTooltip("Tempo dos LFOs com Sync (todas as partes). Arraste, ou botao direito pra digitar.");
+        const bool ext = clockActive(app);
+        ImGui::BeginDisabled(ext);
+        if (ui::Knob(ext ? "BPM (MIDI)" : "BPM", &bpm, 20.0f, 300.0f, 120.0f, ext ? "%.1f" : "%.0f", ks)) app.synth.setTempoBpm(std::round(bpm));
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip(ext ? "Seguindo o clock MIDI (desligue em Configuracoes)"
+                                  : "Tempo dos LFOs/envelopes com Sync e do arpejador (todas as partes).\nArraste, ou botao direito pra digitar.");
         ImGui::SameLine();
         if (ui::Knob("Volume", &volumeDb, -60.0f, 6.0f, 0.0f, volumeDb <= -60.0f ? "mudo" : "%.1f dB", ks))
             app.synth.setMasterVolume(gainFromVolumeDb(volumeDb));
@@ -1862,6 +1917,7 @@ void DrawVisualizers(AppState& app) {
 // aberta (0..3 = partes, 4 = FX globais) -- usado pelo harness de screenshot.
 void DrawMainUi(AppState& app, int forceTab = -1) {
     PollMidiLearn(app);
+    app.followClock.store(app.settings.midiClock, std::memory_order_relaxed);
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
     ImGui::Begin("dx7fm", nullptr,

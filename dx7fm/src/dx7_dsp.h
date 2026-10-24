@@ -161,9 +161,31 @@ public:
         phase_ += rate / sampleRate_;
         if (phase_ >= 1.0) {
             phase_ -= std::floor(phase_);
-            if (params_.wave == LfoWave::SampleHold) shValue_ = dist_(rng_);
-            if (params_.wave == LfoWave::SmoothRandom) { smoothFrom_ = smoothTo_; smoothTo_ = dist_(rng_); }
+            newCycle();
         }
+        return output(fade);
+    }
+
+    // [2026-10-24] LFO global com sync: a fase vem de fora (posicao de batida);
+    // quando ela volta pra tras, comeca um ciclo novo (S&H/SmoothRandom sorteiam)
+    float processAtPhase(double phase01) {
+        float fade = 1.0f;
+        if (params_.delaySec > 0.0f) {
+            delayTimer_ += static_cast<float>(1.0 / sampleRate_);
+            fade = std::clamp(delayTimer_ / params_.delaySec, 0.0f, 1.0f);
+        }
+        if (phase01 < phase_) newCycle();
+        phase_ = phase01;
+        return output(fade);
+    }
+
+private:
+    void newCycle() {
+        if (params_.wave == LfoWave::SampleHold) shValue_ = dist_(rng_);
+        if (params_.wave == LfoWave::SmoothRandom) { smoothFrom_ = smoothTo_; smoothTo_ = dist_(rng_); }
+    }
+
+    float output(float fade) const {
         float v = waveValue(phase_);
         if (params_.steps >= 2) { // escada de `steps` niveis em -1..1
             const float n = static_cast<float>(params_.steps - 1);
@@ -172,7 +194,6 @@ public:
         return v * fade;
     }
 
-private:
     float waveValue(double phase01) const {
         float t = static_cast<float>(phase01);
         switch (params_.wave) {

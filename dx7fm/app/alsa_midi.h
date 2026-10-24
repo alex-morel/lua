@@ -12,7 +12,8 @@
 namespace dx7fm_app {
 
 struct MidiEvent {
-    enum class Type { NoteOn, NoteOff, ControlChange, PitchBend, ChannelAftertouch, PolyAftertouch };
+    enum class Type { NoteOn, NoteOff, ControlChange, PitchBend, ChannelAftertouch, PolyAftertouch,
+                      Clock, Start, Continue, Stop }; // [2026-10-24] mensagens de tempo real (clock MIDI)
     Type type = Type::NoteOn;
     int channel = 0;  // 0..15
     int data1 = 0;    // nota ou numero do CC
@@ -130,6 +131,10 @@ private:
                 me.data1 = ev->data.note.note;
                 me.data2 = ev->data.note.velocity; // pressao
                 break;
+            case SND_SEQ_EVENT_CLOCK:    me.type = MidiEvent::Type::Clock; break;
+            case SND_SEQ_EVENT_START:    me.type = MidiEvent::Type::Start; break;
+            case SND_SEQ_EVENT_CONTINUE: me.type = MidiEvent::Type::Continue; break;
+            case SND_SEQ_EVENT_STOP:     me.type = MidiEvent::Type::Stop; break;
             case SND_SEQ_EVENT_CHANPRESS:
                 me.type = MidiEvent::Type::ChannelAftertouch;
                 me.channel = ev->data.control.channel;

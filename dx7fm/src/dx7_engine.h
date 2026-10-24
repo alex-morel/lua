@@ -273,11 +273,24 @@ public:
     // (o Synth chama junto com noteOn/rebind). nullptr = operadores Wavetable soam seno.
     void bindWavetables(const WavetableBanks* banks) { wavetables_ = banks; }
 
+    // [2026-10-24] LFOs globais da parte: buffer do pedaco (uma amostra por
+    // process()) pra cada LFO global, nullptr nos que sao da voz. O Synth chama
+    // antes de cada pedaco; o indice volta a 0.
+    void bindGlobalLfos(const float* const bufs[kNumLfos]) {
+        for (int k = 0; k < kNumLfos; ++k) globalLfo_[k] = bufs[k];
+        globalIdx_ = 0;
+    }
+
     // Uma amostra na taxa BASE (nao superamostrada). Se oversampleFactor_>1,
     // roda processOneSample() internamente a taxa superamostrada e decima
     // com HalfbandDecimator2x (cascateado pra 4x) antes de devolver.
     float process() {
-        if (oversampleFactor_ <= 1) return processOneSample();
+        if (oversampleFactor_ <= 1) {
+            float out = processOneSample();
+            ++globalIdx_;
+            return out;
+        }
+        ++globalIdx_; // (as sub-amostras leem a mesma amostra do LFO global: idx - 1)
 
         float finalOut = 0.0f;
         for (int k = 0; k < oversampleFactor_; ++k) {
@@ -446,6 +459,11 @@ private:
         float lfoV[kNumLfos] = {};
         for (int k = 0; k < kNumLfos; ++k) {
             if (!lfoUsed_[k]) continue;
+            if (globalLfo_[k]) { // LFO da parte (o rate vindo da matriz nao se aplica)
+                lfoV[k] = globalLfo_[k][oversampleFactor_ <= 1 ? globalIdx_ : globalIdx_ - 1];
+                if (lfoDepthMul_[k] != 1.0f) lfoV[k] *= lfoDepthMul_[k];
+                continue;
+            }
             lfoV[k] = lfos_[k].process(lfoRateMul_[k]);
             if (lfoDepthMul_[k] != 1.0f) lfoV[k] *= lfoDepthMul_[k];
         }
@@ -768,6 +786,8 @@ private:
 
     const VoiceParams* patch_ = nullptr;
     const WavetableBanks* wavetables_ = nullptr;
+    const float* globalLfo_[kNumLfos] = {};
+    int globalIdx_ = 0;
     const CompiledAlgorithm* compiled_ = nullptr;
     double baseSampleRate_ = 0.0; // taxa "externa"; 0 ate o primeiro setSampleRate()
     double sampleRate_ = 48000.0; // taxa INTERNA (= baseSampleRate_ * oversampleFactor_)

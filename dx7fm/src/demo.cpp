@@ -17,6 +17,7 @@
 #include "../app/additive_presets.h"
 #include "../app/op_fx_math.h"
 #include "../app/settings.h"
+#include "../app/midi_clock.h"
 
 #include <algorithm>
 #include <atomic>
@@ -3273,6 +3274,88 @@ static void testMacros() {
           "macros: valor e nome sobrevivem ao JSON do patch");
 }
 
+// --- [ADICIONADO em 2026-10-24] clock MIDI, posicao de batida e LFO global ---
+static void testMidiClockEstimator() {
+    using dx7fm_app::ClockEstimator;
+    auto run = [](double bpm, double jitter) {
+        ClockEstimator c;
+        const double dt = 60.0 / (bpm * 24.0);
+        for (int i = 0; i < 200; ++i) c.tick(i * dt + ((i * 7919) % 13 - 6) / 6.0 * jitter); // jitter +-
+        return c.bpm();
+    };
+    double a = run(120.0, 0.0), b = run(97.5, 0.0), j = run(120.0, 0.0005);
+    ClockEstimator stopped;
+    stopped.tick(0.0);
+    stopped.tick(0.02);
+    std::printf("  (clock MIDI: 120 -> %.3f, 97.5 -> %.3f, 120 com jitter de 0.5ms -> %.2f)\n", a, b, j);
+    check(std::fabs(a - 120.0) < 1e-6 && std::fabs(b - 97.5) < 1e-6 && std::fabs(j - 120.0) < 0.5 && stopped.bpm() == 0.0,
+          "clock MIDI: media de uma batida de pulsos da o BPM (tambem com jitter); poucos pulsos = sem estimativa");
+}
+
+// Mede o ganho (1 + LFO x 0.5) de cada nota ao longo do tempo: duas notas de alturas
+// diferentes, a 2a entrando 0.3s depois; Goertzel em janelas de 40ms.
+static std::pair<std::vector<float>, std::vector<float>> twoNoteGains(bool global, bool sync, bool resetMid) {
+    auto render = [&](bool route) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        synth.setTempoBpm(120.0f);
+        VoiceParams v;
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f;
+        v.op[0].outputLevel = 80;
+        v.lfo1.wave = LfoWave::Square;
+        v.lfo1.rate = 2.0f;
+        v.lfo1.keySync = true;
+        v.lfo1.global = global;
+        v.lfo1.tempoSync = sync;
+        v.lfo1.division = 6; // 1/4 = 0.5s a 120 BPM
+        if (route) v.modMatrix[0] = ModRoute{ModSource::LFO1, ModDest::VoiceLevel, 0, 0.5f};
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        std::vector<float> out(48000 * 2);
+        for (int i = 0; i < static_cast<int>(out.size()); i += 240) {
+            if (i == 4800) synth.noteOn(0, 69, 100);  // 0.1s: 440Hz
+            if (i == 19200) synth.noteOn(0, 76, 100); // 0.4s: 659Hz
+            if (resetMid && i == 28800) synth.resetTransport(); // 0.6s
+            float r[240];
+            synth.renderBlock(&out[static_cast<size_t>(i)], r, 240);
+        }
+        return out;
+    };
+    auto a = render(true), b = render(false);
+    std::vector<float> ga, gb;
+    for (int w = 0; w < 48; ++w) { // janelas de 40ms a partir de 0.42s
+        size_t at = static_cast<size_t>((0.42 + w * 0.025) * 48000);
+        std::vector<float> wa(a.begin() + static_cast<long>(at), a.begin() + static_cast<long>(at + 1920));
+        std::vector<float> wb(b.begin() + static_cast<long>(at), b.begin() + static_cast<long>(at + 1920));
+        ga.push_back(mag(wa, 440.0) / mag(wb, 440.0));
+        gb.push_back(mag(wa, 659.26) / mag(wb, 659.26));
+    }
+    return {ga, gb};
+}
+
+static void testGlobalLfo() {
+    auto [ga, gb] = twoNoteGains(true, false, false);
+    auto [la, lb] = twoNoteGains(false, false, false);
+    float diffGlobal = 0.0f, diffLocal = 0.0f;
+    for (size_t i = 0; i < ga.size(); ++i) { diffGlobal = std::max(diffGlobal, std::fabs(ga[i] - gb[i])); diffLocal = std::max(diffLocal, std::fabs(la[i] - lb[i])); }
+    std::printf("  (2 notas entrando em tempos diferentes: maior diferenca de ganho -- LFO global %.3f, LFO por voz %.3f)\n", diffGlobal, diffLocal);
+    check(diffGlobal < 0.02f && diffLocal > 0.5f, "LFO global: notas que entram em tempos diferentes ondulam juntas (por voz, nao)");
+
+    // global + sync 1/4: alinhado a batida (0.5s), nao ao inicio da nota (0.1s);
+    // resetTransport em 0.6s realinha o compasso ali
+    auto [sa, sb] = twoNoteGains(true, true, false);
+    auto [ra, rb] = twoNoteGains(true, true, true);
+    auto at = [](const std::vector<float>& g, double sec) { return g[static_cast<size_t>(std::lround((sec - 0.42) / 0.025))]; };
+    // 0.80s: na grade original (meias batidas a partir de 0) cai no trecho baixo
+    // (0.75..1.0); na grade realinhada em 0.6s, no alto (0.6..0.85)
+    std::printf("  (sync 1/4: ganho em 0.52/0.77/0.80s = %.2f/%.2f/%.2f; com Start em 0.6s, em 0.80/0.92s = %.2f/%.2f)\n", at(sa, 0.52),
+                at(sa, 0.77), at(sa, 0.80), at(ra, 0.80), at(ra, 0.92));
+    check(at(sa, 0.52) > 1.45f && at(sa, 0.77) < 0.55f && at(sa, 0.80) < 0.55f && at(sa, 1.02) > 1.45f && at(ra, 0.80) > 1.45f &&
+              at(ra, 0.92) < 0.55f,
+          "LFO global com sync: fase na grade das batidas; Start do transporte (clock MIDI) realinha");
+}
+
 static void testAdditiveSilentWhenAllAmpsZero() {
     auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
     bool ok = true;
@@ -3896,6 +3979,8 @@ int main() {
     testAlgoMorphCost();
     testAppSettings();
     testMacros();
+    testMidiClockEstimator();
+    testGlobalLfo();
     testNewModDestinations();
     testModulationJson();
     testAdditiveEditorAxes();

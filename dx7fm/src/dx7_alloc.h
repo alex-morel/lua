@@ -85,6 +85,11 @@ struct PartRuntime {
     float modWheel = 0.0f;
     // [2026-10-24] macros: a audio thread escreve (setMacro), a UI le pra mostrar
     std::atomic<float> macro[VoiceParams::kNumMacros] = {};
+    // [2026-10-24] LFOs globais (LFOParams::global): um por parte, calculados
+    // pelo Synth a cada pedaco em glfoBuf; key sync reinicia na 1a nota presa
+    LFO glfo[kNumLfos];
+    float glfoBuf[kNumLfos][256] = {};
+    bool glfoRestart = false;
     float channelAT = 0.0f;
 };
 
@@ -108,6 +113,7 @@ public:
             s.voice.setSampleRate(sampleRate);
         }
         for (int p = 0; p < kNumParts; ++p) recompile(p);
+        for (auto& pr : parts_) for (auto& g : pr.glfo) g.setSampleRate(sampleRate);
         fxChain_.setSampleRate(sampleRate);
     }
 
@@ -205,6 +211,7 @@ public:
             releaseAllHeld(part);
             pr.runMode = pr.params.voiceMode;
         }
+        if (pr.heldStack.empty()) pr.glfoRestart = true; // 1a nota presa: key sync dos LFOs globais
         switch (pr.runMode) {
             case VoiceMode::Poly:   polyNoteOn(part, note, velocity); break;
             case VoiceMode::Mono:   monoGroupNoteOn(part, note, velocity, 1); break;
@@ -314,14 +321,22 @@ public:
     // recompile() publicado no meio do pedaco so vale no pedaco seguinte
     // (<= 256 amostras, ~5ms).
     static constexpr int kRenderChunk = 256;
+    static_assert(sizeof(PartRuntime::glfoBuf[0]) / sizeof(float) >= kRenderChunk, "buffer do LFO global menor que o pedaco");
 
     void renderBlock(float* outL, float* outR, int n) {
         for (int done = 0; done < n;) {
             int len = std::min(kRenderChunk, n - done);
             renderChunk(outL + done, outR + done, len);
+            beatPos_ += len * static_cast<double>(tempoBpm_.load(std::memory_order_relaxed)) / (60.0 * sampleRate_);
             done += len;
         }
     }
+
+    // [ADICIONADO em 2026-10-24] posicao de batida (seminimas desde o ultimo
+    // Start): avanca com o BPM; LFOs globais com sync usam pra ficar no compasso.
+    // Chamar da thread do audio (Start do clock MIDI -> evento TransportStart).
+    void resetTransport() { beatPos_ = 0.0; }
+    double beatPosition() const { return beatPos_; }
 
     // Threads de audio ALEM da que chama renderBlock() (0 = tudo serial, o
     // padrao). Chamar fora da audio thread so com o audio parado.
@@ -611,6 +626,34 @@ private:
         }
         const float bpm = tempoBpm_.load(std::memory_order_relaxed);
 
+        // LFOs globais: uma conta por parte pro pedaco inteiro, antes das vozes
+        const float* glfoPtr[kNumParts][kNumLfos] = {};
+        const double beatsPerSample = bpm / (60.0 * sampleRate_);
+        for (int p = 0; p < kNumParts; ++p) {
+            auto& pr = parts_[p];
+            const bool restart = pr.glfoRestart;
+            pr.glfoRestart = false;
+            for (int k = 0; k < kNumLfos; ++k) {
+                const LFOParams& lp = live[p]->voice.lfo(k);
+                if (!lp.global) continue;
+                LFO& g = pr.glfo[k];
+                g.configure(lp);
+                g.setTempo(bpm);
+                if (restart) g.noteOn();
+                float* buf = pr.glfoBuf[k];
+                if (lp.tempoSync) {
+                    const double cycle = lfoDivisionBeats(lp.division);
+                    for (int i = 0; i < len; ++i) {
+                        const double b = (beatPos_ + i * beatsPerSample) / cycle;
+                        buf[i] = g.processAtPhase(b - std::floor(b));
+                    }
+                } else {
+                    for (int i = 0; i < len; ++i) buf[i] = g.process();
+                }
+                glfoPtr[p][k] = buf;
+            }
+        }
+
         jobs_.clear();
         for (size_t idx = 0; idx < slots_.size(); ++idx) {
             auto& s = slots_[idx];
@@ -620,6 +663,7 @@ private:
             s.voice.rebind(&snap->voice, &snap->compiled, snap->generation); // "ao vivo": pega qualquer recompile() publicado ate agora
             s.voice.bindWavetables(&snap->wavetables);
             s.voice.setTempo(bpm);
+            s.voice.bindGlobalLfos(glfoPtr[s.ownerPart]);
             float pan = std::clamp(pr.params.pan + s.subPan, -1.0f, 1.0f);
             jobs_.push_back({static_cast<int>(idx), 1.0f - std::max(0.0f, pan), 1.0f + std::min(0.0f, pan), pr.params.level, 0,
                              panRoutes[s.ownerPart], pr.params.pan + s.subPan});
@@ -704,6 +748,7 @@ private:
     float polySmoothCoef_ = 0.0f, volumeSmoothCoef_ = 0.0f;
     std::atomic<float> masterVolume_{1.0f}; // alvo, escrito pela UI (setMasterVolume)
     std::atomic<float> tempoBpm_{120.0f};    // setTempoBpm (LFOs com tempoSync)
+    double beatPos_ = 0.0;                   // so a audio thread (resetTransport, renderBlock)
     float masterGain_ = 1.0f;               // valor suavizado, so a audio thread toca
 
     // renderBlock: buffers por voz (alocados em init, nunca na audio thread)
