@@ -82,6 +82,8 @@ struct AppState {
     int pcKeyboardChannel = 1;
     int selectedOp = 0;
     int selectedAlgo = 0; // indice (0-based) no combo de presets de algoritmo
+    int algoSlot = 0;          // [2026-10-24] slot do morph de algoritmos em edicao (0 = slot 1)
+    bool algoMorphView = false; // diagrama mostra a posicao do morph em vez do slot em edicao
     // [ADICIONADO em 2026-09-23] estado do navegador de patches (so UI thread)
     struct PatchUi {
         char name[128] = {};
@@ -427,7 +429,9 @@ bool DrawOperatorFx(VoiceParams& v, int opIndex) {
 // depende de layout topologico dinamico (que teria que lidar com ciclos
 // de feedback arbitrarios): as 8 caixas ficam em posicoes FIXAS (grade
 // 4x2), so as setas entre elas mudam. Ver ARQUITETURA.txt secao 13/14.
-void DrawAlgorithmDiagram(const VoiceParams& v, int& selectedOp) {
+// [2026-10-24] desenha a matriz `m` (o slot em edicao ou o ponto interpolado
+// do morph); weighted: espessura/opacidade das setas pelo peso (|PM|).
+void DrawAlgorithmDiagram(const VoiceParams& v, const AlgorithmMatrix& m, int& selectedOp, bool weighted = false) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 origin = ImGui::GetCursorScreenPos();
     const int cols = 4;
@@ -445,7 +449,7 @@ void DrawAlgorithmDiagram(const VoiceParams& v, int& selectedOp) {
 
     ImGui::InvisibleButton("##algodiagram", ImVec2(canvasW, canvasH));
     bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-    ImVec2 m = ImGui::GetIO().MousePos;
+    ImVec2 mouse = ImGui::GetIO().MousePos;
 
     dl->AddLine(ImVec2(origin.x + 4, outputY), ImVec2(origin.x + canvasW, outputY), ui::col::kAccent, 2.0f);
     dl->AddText(ImVec2(origin.x + canvasW - 38.0f, outputY - 16.0f), ui::col::kAccent, "saida");
@@ -454,13 +458,14 @@ void DrawAlgorithmDiagram(const VoiceParams& v, int& selectedOp) {
     for (int i = 0; i < kNumOps; ++i) {
         for (int j = 0; j < kNumOps; ++j) {
             if (i == j) continue;
-            bool hasMod = v.matrix.mod[i][j] != 0.0f;
-            bool hasRing = v.matrix.ring[i][j];
+            bool hasMod = m.mod[i][j] != 0.0f;
+            bool hasRing = m.ring[i][j];
             if (!hasMod && !hasRing) continue;
             ImVec2 from(boxPos[j].x + boxW * 0.5f, boxPos[j].y + boxH * 0.5f);
             ImVec2 to(boxPos[i].x + boxW * 0.5f, boxPos[i].y + boxH * 0.5f);
-            ImU32 color = hasRing ? ui::col::kAccent2 : ui::opColor(j, 190);
-            dl->AddLine(from, to, color, hasRing ? 2.5f : 1.8f);
+            const float w = weighted && !hasRing ? std::min(1.0f, std::fabs(m.mod[i][j])) : 1.0f;
+            ImU32 color = hasRing ? ui::col::kAccent2 : ui::opColor(j, static_cast<int>(40 + 150 * w));
+            dl->AddLine(from, to, color, hasRing ? 2.5f : 0.8f + 2.0f * w);
             float dx = to.x - from.x, dy = to.y - from.y;
             float len = std::sqrt(dx * dx + dy * dy);
             if (len > 1.0f) {
@@ -474,13 +479,13 @@ void DrawAlgorithmDiagram(const VoiceParams& v, int& selectedOp) {
     }
 
     for (int i = 0; i < kNumOps; ++i) {
-        bool isCarrier = v.matrix.outputMix[i] > 0.0f;
-        bool hasFeedback = (v.matrix.mod[i][i] != 0.0f) || (v.op[i].feedback > 0.0f);
+        bool isCarrier = m.outputMix[i] > 0.0f;
+        bool hasFeedback = (m.mod[i][i] != 0.0f) || (v.op[i].feedback > 0.0f);
         ImVec2 p0 = boxPos[i];
         ImVec2 p1(p0.x + boxW, p0.y + boxH);
-        bool hot = m.x >= p0.x && m.x <= p1.x && m.y >= p0.y && m.y <= p1.y;
+        bool hot = mouse.x >= p0.x && mouse.x <= p1.x && mouse.y >= p0.y && mouse.y <= p1.y;
         if (clicked && hot) selectedOp = i;
-        dl->AddRectFilled(p0, p1, ui::opColor(i, isCarrier ? 90 : 40), 6.0f);
+        dl->AddRectFilled(p0, p1, ui::opColor(i, isCarrier ? static_cast<int>(40 + 50 * (weighted ? std::min(1.0f, m.outputMix[i]) : 1.0f)) : 40), 6.0f);
         dl->AddRect(p0, p1, ui::opColor(i, hot || i == selectedOp ? 255 : 160), 6.0f, 0, i == selectedOp ? 2.5f : 1.2f);
 
         char label[8];
@@ -494,6 +499,87 @@ void DrawAlgorithmDiagram(const VoiceParams& v, int& selectedOp) {
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Clique num operador pra seleciona-lo");
     ImGui::TextDisabled("Preenchido = portadora | setas = modulacao | circulo laranja = feedback | laranja = ring mod");
 }
+// [ADICIONADO em 2026-10-24] Morph entre algoritmos: fileira de slots (qual
+// editar, +/-), regua da posicao (arrastavel, com os slots marcados), Saltar
+// e "Ver posicao" (o diagrama mostra o ponto interpolado).
+bool DrawAlgoSlots(AppState& app, VoiceParams& v) {
+    bool changed = false;
+    int n = v.activeAlgos();
+    app.algoSlot = std::clamp(app.algoSlot, 0, n - 1);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Algoritmos");
+    ImGui::SetItemTooltip("Ate 8 algoritmos por patch: a posicao do morph passa por eles em ordem,\n"
+                          "interpolando as conexoes. Clique num numero pra editar aquele algoritmo.");
+    for (int s = 0; s < n; ++s) {
+        ImGui::SameLine(0, 4);
+        char b[8];
+        std::snprintf(b, sizeof b, "%d", s + 1);
+        const bool sel = s == app.algoSlot;
+        ImGui::PushStyleColor(ImGuiCol_Button, sel ? ui::col::kAccent : ui::rgb(40, 44, 56));
+        ImGui::PushStyleColor(ImGuiCol_Text, sel ? ui::rgb(14, 16, 22) : ui::col::kText);
+        ImGui::PushID(s);
+        if (ImGui::SmallButton(b)) { app.algoSlot = s; app.algoMorphView = false; }
+        ImGui::PopID();
+        ImGui::PopStyleColor(2);
+    }
+    ImGui::SameLine(0, 10);
+    ImGui::BeginDisabled(n >= kMaxAlgoSlots);
+    if (ImGui::SmallButton("+")) { // novo slot = copia do que esta em edicao, logo depois dele
+        for (int s = n; s > app.algoSlot + 1; --s) v.algo(s) = v.algo(s - 1);
+        v.algo(app.algoSlot + 1) = v.algo(app.algoSlot);
+        v.numAlgos = static_cast<uint8_t>(n + 1);
+        ++app.algoSlot;
+        changed = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Novo algoritmo (copia do que esta em edicao)");
+    ImGui::SameLine(0, 4);
+    ImGui::BeginDisabled(n <= 1);
+    if (ImGui::SmallButton("-")) { // remove o slot em edicao
+        for (int s = app.algoSlot; s < n - 1; ++s) v.algo(s) = v.algo(s + 1);
+        v.algo(n - 1) = AlgorithmMatrix{};
+        v.numAlgos = static_cast<uint8_t>(n - 1);
+        app.algoSlot = std::min(app.algoSlot, n - 2);
+        changed = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Remove o algoritmo em edicao");
+    n = v.activeAlgos();
+    if (n < 2) return changed;
+
+    // regua da posicao: 0 = algoritmo 1, 1 = o ultimo; arrastar move o morph
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float w = std::max(160.0f, ImGui::GetContentRegionAvail().x - 170.0f), h = 26.0f;
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##morphruler", ImVec2(w, h));
+    const float x0 = p0.x + 10, x1 = p0.x + w - 10, cy = p0.y + 9;
+    if (ImGui::IsItemActive()) {
+        float pos = std::clamp((ImGui::GetIO().MousePos.x - x0) / (x1 - x0), 0.0f, 1.0f);
+        if (pos != v.algoMorph) { v.algoMorph = pos; changed = true; }
+        app.algoMorphView = true;
+    }
+    dl->AddLine(ImVec2(x0, cy), ImVec2(x1, cy), ui::rgb(90, 96, 110), 3.0f);
+    for (int s = 0; s < n; ++s) {
+        float x = x0 + (x1 - x0) * static_cast<float>(s) / static_cast<float>(n - 1);
+        dl->AddCircleFilled(ImVec2(x, cy), s == app.algoSlot ? 5.0f : 3.5f, s == app.algoSlot ? ui::col::kAccent : ui::rgb(150, 156, 170));
+        char b[4];
+        std::snprintf(b, sizeof b, "%d", s + 1);
+        dl->AddText(ImVec2(x - ImGui::CalcTextSize(b).x * 0.5f, cy + 5), ui::col::kTextDim, b);
+    }
+    const float hx = x0 + (x1 - x0) * v.algoMorph;
+    dl->AddTriangleFilled(ImVec2(hx, cy - 2), ImVec2(hx - 6, cy - 10), ImVec2(hx + 6, cy - 10), ui::col::kAccent2);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("posicao do morph: %.0f%% (arraste). A matriz de modulacao soma no destino AlgoMorph.", v.algoMorph * 100.0f);
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    changed |= ImGui::Checkbox("Saltar", &v.algoStep);
+    ImGui::SetItemTooltip("Pula de algoritmo em algoritmo em vez de passar pelo meio");
+    ImGui::Checkbox("Ver posicao", &app.algoMorphView);
+    ImGui::SetItemTooltip("Diagrama mostra o ponto do morph (setas mais grossas = conexao mais forte)\nem vez do algoritmo em edicao");
+    ImGui::EndGroup();
+    return changed;
+}
+
 bool DrawMatrix(AlgorithmMatrix& m) {
     bool changed = false;
     ImGui::TextDisabled("mod[i][j]: quanto op j modula op i; diagonal = feedback; caixa = ring mod");
@@ -550,8 +636,8 @@ bool DrawLfo(const char* label, LFOParams& lfo) {
     ImGui::SetItemTooltip("Velocidade em divisoes do BPM (knob BPM no topo) em vez de Hz");
     ui::KnobStyle ks;
     ks.color = ui::col::kAccent2;
-    ks.size = 38.0f;
-    ks.cellWidth = 56.0f; // 4 knobs em meia coluna
+    ks.size = 32.0f;
+    ks.cellWidth = 48.0f; // 5 knobs em meia coluna
     ui::KnobStyle ksLog = ks;
     ksLog.logarithmic = true;
     if (lfo.tempoSync) {
@@ -560,9 +646,16 @@ bool DrawLfo(const char* label, LFOParams& lfo) {
     } else {
         changed |= ui::Knob("Rate", &lfo.rate, 0.01f, 50.0f, 5.0f, "%.2f Hz", ksLog);
     }
-    ImGui::SameLine(); changed |= ui::Knob("Delay", &lfo.delaySec, 0.0f, 10.0f, 0.0f, "%.2f s", ks);
-    ImGui::SameLine(); changed |= ui::Knob("Pitch", &lfo.pitchDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
-    ImGui::SameLine(); changed |= ui::Knob("Amp", &lfo.ampDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
+    const float gap = 4.0f; // 5 knobs em meia coluna: espaco menor entre eles
+    ImGui::SameLine(0, gap); changed |= ui::Knob("Delay", &lfo.delaySec, 0.0f, 10.0f, 0.0f, "%.2f s", ks);
+    ImGui::SameLine(0, gap); changed |= ui::Knob("Pitch", &lfo.pitchDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
+    ImGui::SameLine(0, gap); changed |= ui::Knob("Amp", &lfo.ampDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
+    ImGui::SameLine(0, gap);
+    {
+        int steps = lfo.steps;
+        if (ui::KnobInt("Degraus", &steps, 0, 32, 0, steps < 2 ? "suave" : "%d", ks)) { lfo.steps = static_cast<uint8_t>(steps == 1 ? 0 : steps); changed = true; }
+        ImGui::SetItemTooltip("Quantiza o LFO em N niveis (escada); 0 = suave");
+    }
     ImGui::PopID();
     return changed;
 }
@@ -578,7 +671,7 @@ bool DrawPeg(PEGParams& peg) {
 // [ADICIONADO em 2026-10-22] Envelopes de modulacao (estilo DX, comecam no
 // level 4 como o PEG): uma aba por envelope, curva + knobs. So fontes da
 // matriz (Env1..Env3) -- sozinhos nao fazem nada.
-void DrawEnvCurve(const EGParams& eg, ImU32 color, ImVec2 size) {
+void DrawEnvCurve(const EGParams& eg, ImU32 color, ImVec2 size, bool loop = false, const char* syncDiv = nullptr) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImGui::Dummy(size);
@@ -599,8 +692,17 @@ void DrawEnvCurve(const EGParams& eg, ImU32 color, ImVec2 size) {
     pts[5] = pt(sec + t.stage[3], eg.level[3]);
     dl->AddPolyline(pts, 6, color, 0, 2.0f);
     dl->AddLine(ImVec2(pts[4].x, p0.y + 3), ImVec2(pts[4].x, p1.y - 3), ui::rgb(255, 255, 255, 50));
+    if (loop) { // trecho que repete (do inicio do estagio 1 ao sustain), com seta de volta
+        const ImU32 lc = (color & 0x00FFFFFF) | (0x30u << 24);
+        dl->AddRectFilled(ImVec2(pts[0].x, p0.y + 2), ImVec2(pts[3].x, p1.y - 2), lc);
+        const float y = p1.y - 8; // seta de volta no pe do trecho, longe da curva e do texto
+        dl->AddLine(ImVec2(pts[3].x, y), ImVec2(pts[0].x + 6, y), color, 1.5f);
+        dl->AddTriangleFilled(ImVec2(pts[0].x, y), ImVec2(pts[0].x + 7, y - 4), ImVec2(pts[0].x + 7, y + 4), color);
+        dl->AddText(ImVec2(pts[3].x + 4, y - ImGui::GetTextLineHeight() * 0.5f), color, "loop");
+    }
     char lbl[48];
-    std::snprintf(lbl, sizeof lbl, "%.2fs ate o sustain", t.untilSustain());
+    if (syncDiv) std::snprintf(lbl, sizeof lbl, "sync: ciclo do loop = %s do BPM", syncDiv);
+    else std::snprintf(lbl, sizeof lbl, "%.2fs ate o sustain", t.untilSustain());
     dl->AddText(ImVec2(p0.x + 6, p0.y + 3), ui::col::kTextDim, lbl);
 }
 
@@ -613,7 +715,25 @@ bool DrawModEnvelopes(VoiceParams& v) {
             std::snprintf(tab, sizeof tab, "Env %d", k + 1);
             if (ImGui::BeginTabItem(tab)) {
                 ImGui::PushID(k);
-                DrawEnvCurve(v.modEnv[k], ui::col::kAccent2, ImVec2(ImGui::GetContentRegionAvail().x, 70.0f));
+                auto& e = v.modEnv[k];
+                DrawEnvCurve(e, ui::col::kAccent2, ImVec2(ImGui::GetContentRegionAvail().x, 70.0f), e.loop,
+                             e.tempoSync ? lfoDivisionName(e.division) : nullptr);
+                changed |= ImGui::Checkbox("Loop", &e.loop);
+                ImGui::SetItemTooltip("Enquanto a nota esta presa, volta do sustain (L3) pro estagio 1: L3 -> L1 -> L2 -> L3 ...\n"
+                                      "O note off sai do loop e faz o release normal.");
+                ImGui::SameLine();
+                changed |= ImGui::Checkbox("Sync", &e.tempoSync);
+                ImGui::SetItemTooltip("O envelope anda mais rapido ou devagar pro ciclo L3 -> L1 -> L2 -> L3 durar a divisao do BPM");
+                if (e.tempoSync) {
+                    ImGui::SameLine();
+                    int div = e.division;
+                    ImGui::SetNextItemWidth(90);
+                    if (ImGui::SliderInt("##div", &div, 0, kNumLfoDivisions - 1, lfoDivisionName(div), ImGuiSliderFlags_AlwaysClamp)) {
+                        e.division = static_cast<uint8_t>(div);
+                        changed = true;
+                    }
+                    ImGui::SetItemTooltip("duracao do ciclo (4/1 = 4 compassos ... 1/32)");
+                }
                 static const uint8_t kDefRate[4] = {60, 45, 45, 45}, kDefLevel[4] = {99, 70, 50, 0};
                 changed |= DrawEGKnobs("modenv", v.modEnv[k].rate, v.modEnv[k].level, ui::col::kAccent2, true, kDefRate, kDefLevel);
                 ImGui::PopID();
@@ -630,14 +750,15 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
     static const char* kSrc[] = {"None", "LFO1", "LFO2", "ModWheel", "ChannelAT", "PolyAT", "PitchBend", "Nota", "Velocity",
                                  "LFO3", "LFO4", "Env1", "Env2", "Env3"};
     static const char* kDst[] = {"None", "OperatorLevel", "OperatorFx1", "OperatorFeedback", "VoicePitch", "OperatorMorph",
-                                 "VoicePan", "VoiceLevel", "OperatorPitch", "OperatorFx2", "LfoRate", "LfoDepth"};
+                                 "VoicePan", "VoiceLevel", "OperatorPitch", "OperatorFx2", "LfoRate", "LfoDepth", "AlgoMorph"};
     static const char* kDstTip[] = {"", "nivel do operador x (1 + quantidade)", "FX1 do operador x (1 + quantidade): corte, taxa, afinacao, drive",
                                     "feedback do operador + quantidade", "afinacao da voz inteira, quantidade x 12 semitons",
                                     "morph A->B da Additive/Wavetable + quantidade", "pan da voz + quantidade (-1 esquerda, +1 direita)",
                                     "volume da voz x (1 + quantidade)", "afinacao SO do operador, quantidade x 12 semitons",
                                     "FX2 do operador x (1 + quantidade): Q, drive, bits, feedback, simetria",
                                     "velocidade do LFO escolhido x 2^(3 x quantidade): +-3 oitavas",
-                                    "saida do LFO escolhido x (1 + quantidade): -1 desliga"};
+                                    "saida do LFO escolhido x (1 + quantidade): -1 desliga",
+                                    "posicao do morph entre algoritmos (card Algoritmo) + quantidade"};
     // so as rotas em uso + 1 vazia (as 16 com o checkbox)
     static bool showAll = false;
     int lastUsed = -1;
@@ -1028,17 +1149,41 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
             for (int n = 1; n <= kNumAlgorithms; ++n) names.push_back(std::to_string(n) + ": " + algorithmName(n));
             for (auto& str : names) namePtrs.push_back(str.c_str());
         }
+        changed |= DrawAlgoSlots(app, pp.voice);
+        const int nAlgo = pp.voice.activeAlgos();
         ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 80.0f));
         ImGui::Combo("##algo", &app.selectedAlgo, namePtrs.data(), static_cast<int>(namePtrs.size()));
         ImGui::SetItemTooltip("Design proprio de 32 algoritmos p/ 8 operadores (nao e a lista oficial do DX7\n"
                               "nem do Montage) -- ver ARQUITETURA.txt secao 14.");
         ImGui::SameLine();
         if (ImGui::Button("Aplicar")) {
-            applyAlgorithm(pp.voice, app.selectedAlgo + 1);
+            if (nAlgo == 1) applyAlgorithm(pp.voice, app.selectedAlgo + 1);
+            else applyAlgorithmToMatrix(pp.voice.algo(app.algoSlot), app.selectedAlgo + 1);
             changed = true;
         }
-        ImGui::SetItemTooltip("Sobrescreve a matriz e o feedback de todos os operadores");
-        DrawAlgorithmDiagram(pp.voice, app.selectedOp);
+        if (nAlgo == 1) ImGui::SetItemTooltip("Sobrescreve a matriz e o feedback de todos os operadores");
+        else ImGui::SetItemTooltip("Sobrescreve so o algoritmo %d (o feedback do preset vai pra diagonal dele, pra fazer morph junto;\n"
+                                   "o Feedback de cada operador na tabela continua valendo em todos os algoritmos)", app.algoSlot + 1);
+        if (nAlgo > 1 && app.algoMorphView) {
+            // ponto interpolado na posicao do knob (como o motor faz, sem a modulacao)
+            const auto& v = pp.voice;
+            float x = v.algoMorph * static_cast<float>(nAlgo - 1);
+            int sl = std::min(static_cast<int>(x), nAlgo - 2);
+            float t = x - static_cast<float>(sl);
+            if (v.algoStep) t = t < 0.5f ? 0.0f : 1.0f;
+            AlgorithmMatrix mid;
+            const auto &a = v.algo(sl), &b = v.algo(sl + 1);
+            for (int i = 0; i < kNumOps; ++i) {
+                for (int j = 0; j < kNumOps; ++j) {
+                    mid.mod[i][j] = a.mod[i][j] + (b.mod[i][j] - a.mod[i][j]) * t;
+                    mid.ring[i][j] = t < 0.5f ? a.ring[i][j] : b.ring[i][j];
+                }
+                mid.outputMix[i] = a.outputMix[i] + (b.outputMix[i] - a.outputMix[i]) * t;
+            }
+            DrawAlgorithmDiagram(pp.voice, mid, app.selectedOp, true);
+        } else {
+            DrawAlgorithmDiagram(pp.voice, pp.voice.algo(app.algoSlot), app.selectedOp);
+        }
     }
     ui::EndCard();
 
@@ -1100,7 +1245,10 @@ bool DrawPartLeftColumn(AppState& app, int partIndex) {
     ui::EndCard();
 
     if (ui::BeginCard("##card_matrix", nullptr)) {
-        if (ImGui::CollapsingHeader("MATRIZ DE ALGORITMO (avancado)")) changed |= DrawMatrix(pp.voice.matrix);
+        char hdr[64];
+        if (pp.voice.activeAlgos() > 1) std::snprintf(hdr, sizeof hdr, "MATRIZ DE ALGORITMO (avancado) -- algoritmo %d###mtx", app.algoSlot + 1);
+        else std::snprintf(hdr, sizeof hdr, "MATRIZ DE ALGORITMO (avancado)###mtx");
+        if (ImGui::CollapsingHeader(hdr)) changed |= DrawMatrix(pp.voice.algo(std::min(app.algoSlot, pp.voice.activeAlgos() - 1)));
         else ImGui::TextDisabled("Roteamento livre entre os 8 operadores e output mix -- os presets do card Algoritmo ja preenchem isto.");
     }
     ui::EndCard();

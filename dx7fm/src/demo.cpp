@@ -2867,7 +2867,8 @@ static void testModEnvelopeAsSource() {
     const uint8_t rate = 30;
     const double T = dx7fm_app::egStageSeconds(0.0f, 99.0f, rate);
     auto x = renderVoice([&](VoiceParams& v) {
-        v.modEnv[0] = EGParams{};
+        v.modEnv[0] = ModEnvParams{};
+        for (int k = 0; k < 4; ++k) { v.modEnv[0].rate[k] = 99; v.modEnv[0].level[k] = 99; } // EG padrao
         v.modEnv[0].rate[0] = rate;
         v.modEnv[0].level[3] = 0;
         v.modMatrix[15] = ModRoute{ModSource::Env1, ModDest::OperatorLevel, 0, 1.0f}; // ultima das 16 rotas
@@ -3002,6 +3003,206 @@ static void testModulationJson() {
     check(txt.find("lfo3") == std::string::npos && loaded.modMatrix[2].src == ModSource::ModWheel && !loaded.lfo3.tempoSync &&
               loaded.modEnv[0].rate[0] == defaults.modEnv[0].rate[0] && loaded.modMatrix[12].src == ModSource::None,
           "patch sem LFO3/4 e envelopes de modulacao carrega com os padroes");
+}
+
+static void testLfoSteps() {
+    auto values = [](uint8_t steps, LfoWave wave) {
+        LFOParams p;
+        p.wave = wave;
+        p.rate = 3.0f;
+        p.steps = steps;
+        LFO lfo;
+        lfo.setSampleRate(48000.0);
+        lfo.configure(p);
+        std::vector<float> seen;
+        for (int i = 0; i < 48000; ++i) {
+            float v = lfo.process();
+            bool known = false;
+            for (float s : seen) known |= std::fabs(s - v) < 1e-6f;
+            if (!known && seen.size() < 100) seen.push_back(v);
+        }
+        std::sort(seen.begin(), seen.end());
+        return seen;
+    };
+    auto four = values(4, LfoWave::Sine), three = values(3, LfoWave::SmoothRandom), smooth = values(0, LfoWave::Sine);
+    bool ok = four.size() == 4 && std::fabs(four.front() + 1.0f) < 1e-6f && std::fabs(four.back() - 1.0f) < 1e-6f &&
+              std::fabs(four[1] + 1.0f / 3.0f) < 1e-6f && three.size() <= 3 && smooth.size() == 100;
+    std::printf("  (LFO seno com 4 degraus: %zu valores; SmoothRandom com 3: %zu; suave: %zu+)\n", four.size(), three.size(), smooth.size());
+    check(ok, "LFO quantizado: 4 degraus = exatamente -1, -1/3, 1/3, 1; 0 = suave como antes");
+}
+
+// Env1 em loop -> VoiceLevel +1: ganho (1 + env) medido contra o mesmo som sem a rota.
+// Ciclo: L3=0 -> L1=99 -> L2=0 -> L3=0 (picos de ganho 2 no meio do ciclo).
+static std::vector<float> loopGain(bool loop, bool sync, float bpm, double noteOffSec, double seconds) {
+    auto render = [&](bool withRoute) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        synth.setTempoBpm(bpm);
+        VoiceParams v;
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f;
+        v.op[0].outputLevel = 80;
+        v.op[0].ampEG.rate[3] = 10; // release longo: ainda soa depois do note off
+        auto& e = v.modEnv[0];
+        for (int k = 0; k < 4; ++k) e.rate[k] = 50;
+        e.level[0] = 99; e.level[1] = 0; e.level[2] = 0; e.level[3] = 0;
+        e.loop = loop;
+        e.tempoSync = sync;
+        e.division = 6; // 1/4
+        if (withRoute) v.modMatrix[0] = ModRoute{ModSource::Env1, ModDest::VoiceLevel, 0, 1.0f};
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        synth.noteOn(0, 69, 100);
+        std::vector<float> out;
+        for (int i = 0; i < static_cast<int>(seconds * 48000); ++i) {
+            if (i == static_cast<int>(noteOffSec * 48000)) synth.noteOff(0, 69);
+            float l, r;
+            synth.renderStereo(l, r);
+            out.push_back(l);
+        }
+        return out;
+    };
+    auto a = render(true), b = render(false);
+    std::vector<float> gain; // um valor a cada 10 ms
+    for (size_t at = 0; at + 480 <= a.size(); at += 480) gain.push_back(computeRms(a, at, 480) / std::max(computeRms(b, at, 480), 1e-9f));
+    return gain;
+}
+static float gainAt(const std::vector<float>& g, double sec) { return g[std::min(g.size() - 1, static_cast<size_t>(sec / 0.01))]; }
+
+static void testModEnvelopeLoop() {
+    const double half = 99.0 / egRateToSpeed(50.0f); // 0 -> 99 no rate 50
+    auto loop = loopGain(true, false, 120.0f, 1.6, 2.6), once = loopGain(false, false, 120.0f, 1.6, 2.6);
+    const double p1 = half, p2 = 3 * half, p3 = 5 * half; // picos: meio de cada ciclo (ciclo = 2 x half)
+    std::printf("  (loop: picos em %.2f/%.2f/%.2fs = %.2f %.2f %.2f; sem loop no 2o pico %.2f; depois do note off %.2f)\n", p1, p2, p3,
+                gainAt(loop, p1), gainAt(loop, p2), gainAt(loop, p3), gainAt(once, p2), gainAt(loop, 2.3));
+    check(gainAt(loop, p1) > 1.93f && gainAt(loop, p2) > 1.93f && gainAt(loop, p3) > 1.93f && gainAt(loop, 2 * half) < 1.07f &&
+              gainAt(once, p2) < 1.02f && std::fabs(gainAt(loop, 2.3) - 1.0f) < 0.02f,
+          "envelope de modulacao em loop: repete L3->L1->L2->L3 enquanto a nota esta presa e para no note off");
+
+    // sync em 1/4: o ciclo dura uma batida
+    bool ok = true;
+    for (float bpm : {120.0f, 90.0f}) {
+        auto g = loopGain(true, true, bpm, 5.0, 2.0);
+        const double beat = 60.0 / bpm;
+        float peak1 = gainAt(g, beat * 0.5), trough = gainAt(g, beat), peak2 = gainAt(g, beat * 1.5);
+        std::printf("  (sync 1/4 a %.0f BPM: pico %.2f, vale %.2f, pico %.2f)\n", bpm, peak1, trough, peak2);
+        ok &= peak1 > 1.93f && peak2 > 1.93f && trough < 1.07f;
+    }
+    check(ok, "envelope de modulacao com sync: o ciclo do loop dura a divisao do BPM (120 e 90 BPM)");
+}
+
+// --- [ADICIONADO em 2026-10-24] morph entre algoritmos ---
+static std::vector<float> renderAlgo(const std::function<void(VoiceParams&)>& setup, int vel = 100, int samples = 24000) {
+    Synth synth;
+    synth.init(48000.0, 4);
+    VoiceParams v;
+    for (auto& op : v.op) op.outputLevel = 85;
+    setup(v);
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.noteOn(0, 57, vel);
+    std::vector<float> out;
+    for (int i = 0; i < samples; ++i) { float l, r; synth.renderStereo(l, r); out.push_back(l); }
+    return out;
+}
+
+static void testAlgoMorphTwoSlots() {
+    // slot 1: op1 modula op0 (FM); slot 2: so op0 (seno puro)
+    auto setup = [](float pos, bool step) {
+        return [=](VoiceParams& v) {
+            v.matrix = AlgorithmMatrix{};
+            v.matrix.outputMix[0] = 1.0f;
+            v.matrix.mod[0][1] = 1.0f;
+            v.algoSlot[0] = AlgorithmMatrix{};
+            v.algoSlot[0].outputMix[0] = 1.0f;
+            v.numAlgos = 2;
+            v.algoMorph = pos;
+            v.algoStep = step;
+        };
+    };
+    auto single = [](float w) {
+        return [=](VoiceParams& v) { v.matrix = AlgorithmMatrix{}; v.matrix.outputMix[0] = 1.0f; v.matrix.mod[0][1] = w; };
+    };
+    float d0 = maxAbsDiff(renderAlgo(setup(0.0f, false)), renderAlgo(single(1.0f)));
+    float dHalf = maxAbsDiff(renderAlgo(setup(0.5f, false)), renderAlgo(single(0.5f)));
+    float d1 = maxAbsDiff(renderAlgo(setup(1.0f, false)), renderAlgo(single(0.0f)));
+    float dStep = maxAbsDiff(renderAlgo(setup(0.4f, true)), renderAlgo(single(1.0f)));
+    std::printf("  (morph 2 slots: diferenca na posicao 0 %.1e, 0.5 %.1e, 1 %.1e; saltar em 0.4 %.1e)\n", d0, dHalf, d1, dStep);
+    check(d0 == 0.0f && dHalf == 0.0f && d1 == 0.0f && dStep == 0.0f,
+          "morph de algoritmos: pontas = cada algoritmo, meio = pesos interpolados (indice de FM pela metade), Saltar = slot mais proximo");
+
+    // a mod matrix move o morph (Velocity -> AlgoMorph +1: posicao 1 = seno puro)
+    auto viaMatrix = renderAlgo([&](VoiceParams& v) { setup(0.0f, false)(v); v.modMatrix[0] = ModRoute{ModSource::Velocity, ModDest::AlgoMorph, 0, 1.0f}; }, 127);
+    std::vector<float> tail(viaMatrix.begin() + 12000, viaMatrix.end());
+    check(mag(tail, 440.0) < 0.001f * mag(tail, 220.0), "morph de algoritmos: destino AlgoMorph da matriz move a posicao");
+}
+
+static void testAlgoMorphEightSlots() {
+    // 8 topologias sem lacos entre operadores (so arestas de indice maior pra menor):
+    // a ordem de avaliacao nao muda o resultado, entao cada ponta tem que ser
+    // identica ao algoritmo sozinho
+    auto slotMatrix = [](int s) {
+        AlgorithmMatrix m;
+        m.outputMix[0] = 1.0f;
+        if (s % 2) m.outputMix[1] = 0.5f;
+        for (int j = 1; j < kNumOps; ++j)
+            if ((s + j) % 3 == 0) m.mod[0][j] = 0.2f + 0.1f * static_cast<float>((s + j) % 4);
+        m.mod[1][2 + s % 6] = 0.4f;
+        m.mod[s % kNumOps][s % kNumOps] = 0.2f; // feedback na diagonal
+        return m;
+    };
+    float worst = 0.0f;
+    for (int k = 0; k < kMaxAlgoSlots; ++k) {
+        auto morph = renderAlgo([&](VoiceParams& v) {
+            for (int s = 0; s < kMaxAlgoSlots; ++s) v.algo(s) = slotMatrix(s);
+            v.numAlgos = kMaxAlgoSlots;
+            v.algoMorph = static_cast<float>(k) / (kMaxAlgoSlots - 1);
+        }, 100, 9600);
+        auto alone = renderAlgo([&](VoiceParams& v) { v.matrix = slotMatrix(k); }, 100, 9600);
+        worst = std::max(worst, maxAbsDiff(morph, alone));
+    }
+    std::printf("  (8 slots: maior diferenca entre a posicao k/7 e o algoritmo k sozinho %.1e)\n", worst);
+    check(worst < 1e-6f, "morph de 8 algoritmos: a posicao de cada slot soa igual ao algoritmo dele sozinho");
+
+    VoiceParams v;
+    for (int s = 0; s < kMaxAlgoSlots; ++s) v.algo(s) = slotMatrix(s);
+    v.numAlgos = 5;
+    v.algoMorph = 0.35f;
+    v.algoStep = true;
+    VoiceParams back = voiceParamsFromJson(JsonValue::parse(voiceParamsToJson(v).dump()));
+    bool same = back.numAlgos == 5 && back.algoMorph == 0.35f && back.algoStep;
+    for (int s = 0; s < 5; ++s) same &= std::memcmp(&back.algo(s), &v.algo(s), sizeof(AlgorithmMatrix)) == 0;
+    VoiceParams old = voiceParamsFromJson(JsonValue::parse(voiceParamsToJson(VoiceParams{}).dump()));
+    check(same && old.numAlgos == 1 && voiceParamsToJson(VoiceParams{}).dump().find("algorithms") == std::string::npos,
+          "morph de algoritmos: slots sobrevivem ao JSON; patch sem morph nao grava nem le slots");
+}
+
+static void testAlgoMorphCost() {
+    // mesmos 8 slots (a uniao das topologias e a mesma), posicao parada x
+    // modulada por LFO: o que muda e so o recalculo dos pesos a cada amostra
+    auto timeIt = [](bool moving) {
+        Synth synth;
+        synth.init(48000.0, 64);
+        VoiceParams v;
+        applyAlgorithm(v, 1);
+        for (auto& op : v.op) op.outputLevel = 80;
+        for (int s = 1; s < kMaxAlgoSlots; ++s) applyAlgorithmToMatrix(v.algo(s), 1 + s * 4);
+        v.numAlgos = kMaxAlgoSlots;
+        v.algoMorph = 0.5f;
+        v.lfo1.rate = 3.0f;
+        v.modMatrix[0] = ModRoute{ModSource::LFO1, moving ? ModDest::AlgoMorph : ModDest::VoiceLevel, 0, moving ? 0.5f : 0.0f};
+        synth.part(0).voice = v;
+        synth.recompile(0);
+        for (int n = 0; n < 64; ++n) synth.noteOn(0, 30 + n, 100);
+        float sink = 0.0f, L[256], R[256];
+        auto t0 = std::chrono::steady_clock::now();
+        for (int b = 0; b < 48000 / 256; ++b) { synth.renderBlock(L, R, 256); sink += L[0]; }
+        double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        return sink == 12345.0f ? 0.0 : sec;
+    };
+    double still = std::min(timeIt(false), timeIt(false)), moving = std::min(timeIt(true), timeIt(true));
+    std::printf("  (64 vozes, 8 slots: posicao parada %.3fs, modulada a cada amostra %.3fs, razao %.2fx)\n", still, moving, moving / still);
+    check(moving < still * 1.3, "morph de algoritmos: mover a posicao a cada amostra custa menos que 1.3x a posicao parada");
 }
 
 static void testAdditiveSilentWhenAllAmpsZero() {
@@ -3620,6 +3821,11 @@ int main() {
     testModEnvelopeAsSource();
     testLfoTempoSync();
     testLfoSmoothRandom();
+    testLfoSteps();
+    testModEnvelopeLoop();
+    testAlgoMorphTwoSlots();
+    testAlgoMorphEightSlots();
+    testAlgoMorphCost();
     testNewModDestinations();
     testModulationJson();
     testAdditiveEditorAxes();

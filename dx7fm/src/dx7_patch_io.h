@@ -374,6 +374,7 @@ inline const char* modDestName(ModDest d) {
         case ModDest::OperatorFx2:      return "OperatorFx2";
         case ModDest::LfoRate:          return "LfoRate";
         case ModDest::LfoDepth:         return "LfoDepth";
+        case ModDest::AlgoMorph:        return "AlgoMorph";
     }
     return "None";
 }
@@ -389,6 +390,7 @@ inline ModDest modDestFromName(const std::string& s) {
     if (s == "OperatorFx2")      return ModDest::OperatorFx2;
     if (s == "LfoRate")          return ModDest::LfoRate;
     if (s == "LfoDepth")         return ModDest::LfoDepth;
+    if (s == "AlgoMorph")        return ModDest::AlgoMorph;
     return ModDest::None;
 }
 
@@ -488,6 +490,7 @@ inline JsonValue lfoParamsToJson(const LFOParams& l) {
     v.set("ampDepth", JsonValue::makeNumber(l.ampDepth));
     v.set("tempoSync", JsonValue::makeBool(l.tempoSync));
     v.set("division", JsonValue::makeString(lfoDivisionName(l.division)));
+    v.set("steps", JsonValue::makeNumber(l.steps));
     return v;
 }
 inline LFOParams lfoParamsFromJson(const JsonValue* j) {
@@ -502,6 +505,7 @@ inline LFOParams lfoParamsFromJson(const JsonValue* j) {
     l.tempoSync = j->boolAt("tempoSync", l.tempoSync);
     const std::string div = j->stringAt("division", lfoDivisionName(l.division));
     for (int d = 0; d < kNumLfoDivisions; ++d) if (div == lfoDivisionName(d)) l.division = static_cast<uint8_t>(d);
+    l.steps = clampCast<uint8_t>(j->numberAt("steps", l.steps));
     return l;
 }
 
@@ -692,13 +696,27 @@ inline JsonValue voiceParamsToJson(const VoiceParams& v) {
     for (int i = 0; i < kNumOps; ++i) ops.push(operatorParamsToJson(v.op[i]));
     j.set("op", std::move(ops));
     j.set("matrix", algorithmMatrixToJson(v.matrix));
+    // [2026-10-24] morph entre algoritmos: slots 2..numAlgos (o 1 e "matrix")
+    if (v.activeAlgos() > 1) {
+        JsonValue slots = JsonValue::makeArray();
+        for (int k = 1; k < v.activeAlgos(); ++k) slots.push(algorithmMatrixToJson(v.algo(k)));
+        j.set("algorithms", std::move(slots));
+        j.set("algoMorph", JsonValue::makeNumber(v.algoMorph));
+        j.set("algoStep", JsonValue::makeBool(v.algoStep));
+    }
     j.set("peg", pegParamsToJson(v.peg));
     j.set("lfo1", lfoParamsToJson(v.lfo1));
     j.set("lfo2", lfoParamsToJson(v.lfo2));
     j.set("lfo3", lfoParamsToJson(v.lfo3));
     j.set("lfo4", lfoParamsToJson(v.lfo4));
     JsonValue envs = JsonValue::makeArray();
-    for (const auto& e : v.modEnv) envs.push(egParamsToJson(e));
+    for (const auto& e : v.modEnv) {
+        JsonValue ej = egParamsToJson(e);
+        ej.set("loop", JsonValue::makeBool(e.loop));
+        ej.set("sync", JsonValue::makeBool(e.tempoSync));
+        ej.set("division", JsonValue::makeString(lfoDivisionName(e.division)));
+        envs.push(std::move(ej));
+    }
     j.set("modEnv", std::move(envs));
     JsonValue mm = JsonValue::makeArray();
     for (int i = 0; i < kNumModRoutes; ++i) mm.push(modRouteToJson(v.modMatrix[i]));
@@ -715,6 +733,13 @@ inline VoiceParams voiceParamsFromJson(const JsonValue& j) {
     // incompleto (de uma versao antiga, por ex.) apagaria os defaults acima
     // com uma AlgorithmMatrix vazia em vez de preserva-los.
     if (auto* matrix = j.find("matrix")) v.matrix = algorithmMatrixFromJson(matrix);
+    if (auto* slots = j.find("algorithms")) { // ausente (patch antigo) = 1 algoritmo, sem morph
+        int n = std::min<int>(static_cast<int>(slots->arraySize()), kMaxAlgoSlots - 1);
+        for (int k = 0; k < n; ++k) v.algoSlot[k] = algorithmMatrixFromJson(&slots->at(static_cast<size_t>(k)));
+        v.numAlgos = static_cast<uint8_t>(n + 1);
+        v.algoMorph = clampCast<float>(j.numberAt("algoMorph", v.algoMorph));
+        v.algoStep = j.boolAt("algoStep", v.algoStep);
+    }
     if (auto* peg = j.find("peg")) v.peg = pegParamsFromJson(peg);
     if (auto* lfo1 = j.find("lfo1")) v.lfo1 = lfoParamsFromJson(lfo1);
     if (auto* lfo2 = j.find("lfo2")) v.lfo2 = lfoParamsFromJson(lfo2);
@@ -722,7 +747,14 @@ inline VoiceParams voiceParamsFromJson(const JsonValue& j) {
     if (auto* lfo4 = j.find("lfo4")) v.lfo4 = lfoParamsFromJson(lfo4);
     if (auto* envs = j.find("modEnv"))
         for (int k = 0; k < kNumModEnvs && k < static_cast<int>(envs->arraySize()); ++k)
-            v.modEnv[k] = egParamsFromJson(&envs->at(static_cast<size_t>(k)));
+        {
+            const JsonValue* ej = &envs->at(static_cast<size_t>(k));
+            static_cast<EGParams&>(v.modEnv[k]) = egParamsFromJson(ej);
+            v.modEnv[k].loop = ej->boolAt("loop", false);
+            v.modEnv[k].tempoSync = ej->boolAt("sync", false);
+            const std::string div = ej->stringAt("division", lfoDivisionName(6));
+            for (int d = 0; d < kNumLfoDivisions; ++d) if (div == lfoDivisionName(d)) v.modEnv[k].division = static_cast<uint8_t>(d);
+        }
     if (auto* mm = j.find("modMatrix"))
         for (int i = 0; i < kNumModRoutes && i < static_cast<int>(mm->arraySize()); ++i)
             v.modMatrix[i] = modRouteFromJson(&mm->at(static_cast<size_t>(i)));

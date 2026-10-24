@@ -89,7 +89,7 @@ struct PatchSnapshot {
     WavetableBanks wavetables{}; // [2026-10-22] montadas a partir de voice (ver makeWavetableBank)
 };
 inline PatchSnapshot makeSnapshot(const VoiceParams& v) {
-    PatchSnapshot s{v, compileAlgorithm(v.matrix), 0, {}};
+    PatchSnapshot s{v, compileAlgorithm(algoUnion(v)), 0, {}};
     for (int i = 0; i < kNumOps; ++i) s.wavetables[static_cast<size_t>(i)] = makeWavetableBank(v.op[i]);
     return s;
 }
@@ -207,6 +207,7 @@ public:
             }
             for (int k = 0; k < kNumModEnvs; ++k) { // comecam no level[3], como o PEG
                 modEnv_[k].configure(patch_->modEnv[k].rate, patch_->modEnv[k].level);
+                modEnv_[k].setLoop(patch_->modEnv[k].loop);
                 modEnv_[k].noteOn(0.0f, static_cast<float>(patch_->modEnv[k].level[3]));
             }
         }
@@ -235,7 +236,10 @@ public:
     // o Synth soma no pan da parte quando o patch usa esse destino
     float panMod() const { return panMod_; }
     // BPM global pros LFOs sincronizados (o Synth atualiza a cada bloco)
-    void setTempo(float bpm) { for (auto& l : lfos_) l.setTempo(bpm); }
+    void setTempo(float bpm) {
+        for (auto& l : lfos_) l.setTempo(bpm);
+        tempoBpm_ = bpm;
+    }
 
     // Estimativa de "quanto essa voz pesa" no mix (0..1): maior amplitude de
     // envelope entre as portadoras. Usada pela compensacao de polifonia, pra
@@ -244,7 +248,7 @@ public:
         if (!active_ || !patch_) return 0.0f;
         float m = 0.0f;
         for (int i = 0; i < kNumOps; ++i)
-            if (patch_->matrix.outputMix[i] != 0.0f) m = std::max(m, ops_[i].lastAmp);
+            if (isCarrier(i)) m = std::max(m, ops_[i].lastAmp);
         return m;
     }
     bool isReleasing() const { return releasing_; }
@@ -312,19 +316,28 @@ private:
         int nRing = 0;
         uint8_t ringSrc[kNumOps];
         bool ringDelayed[kNumOps];
+        bool ringOn[kNumOps];     // [2026-10-24] morph de algoritmos: ring do slot mais proximo
+        // [2026-10-24] morph de algoritmos (numAlgos > 1): peso de cada aresta em
+        // cada slot; modAmt/selfMod/ringOn sao refeitos quando a posicao muda
+        float modAmtSlot[kNumOps][kMaxAlgoSlots];
+        float selfModSlot[kMaxAlgoSlots];
+        bool ringSlot[kNumOps][kMaxAlgoSlots];
     };
 
     void rebuildCache() {
         const VoiceParams& v = *patch_;
         // operadores usados: portadoras + tudo que alimenta (PM, ring, fxRingMod) algo usado
+        // [2026-10-24] topologia = uniao dos slots do morph (com 1 algoritmo, a matriz)
+        const int nAlgo = v.activeAlgos();
+        const AlgorithmMatrix topo = algoUnion(v);
         bool used[kNumOps] = {};
-        for (int i = 0; i < kNumOps; ++i) used[i] = v.matrix.outputMix[i] != 0.0f;
+        for (int i = 0; i < kNumOps; ++i) used[i] = topo.outputMix[i] != 0.0f;
         for (bool grew = true; grew;) {
             grew = false;
             for (int i = 0; i < kNumOps; ++i) {
                 if (!used[i]) continue;
                 for (int j = 0; j < kNumOps; ++j) {
-                    bool feeds = j != i && (v.matrix.mod[i][j] != 0.0f || v.matrix.ring[i][j]);
+                    bool feeds = j != i && (topo.mod[i][j] != 0.0f || topo.ring[i][j]);
                     if (v.op[i].fxType == FxType::RingMod && v.op[i].ringModSource == j) feeds = true;
                     if (feeds && !used[j]) { used[j] = true; grew = true; }
                 }
@@ -347,23 +360,30 @@ private:
             levelDb += (static_cast<float>(velocity_) - 127.0f) / 127.0f * (o.velocitySens / 7.0f) * 12.0f;
             c.staticGain = dbToLinear(std::min(levelDb, 0.0f)); // teto de 0dB (= outputLevel 99), como no DX7
             c.selfMod = v.matrix.mod[i][i];
+            for (int s = 0; s < nAlgo; ++s) c.selfModSlot[s] = v.algo(s).mod[i][i];
             c.nMod = c.nRing = 0;
             for (int j = 0; j < kNumOps; ++j) {
                 if (j == i) continue;
                 bool delayed = compiled_->feedbackEdge[i][j];
-                if (v.matrix.mod[i][j] != 0.0f) {
+                if (topo.mod[i][j] != 0.0f) {
                     c.modSrc[c.nMod] = static_cast<uint8_t>(j);
                     c.modAmt[c.nMod] = v.matrix.mod[i][j];
                     c.modDelayed[c.nMod] = delayed;
+                    for (int s = 0; s < nAlgo; ++s) c.modAmtSlot[c.nMod][s] = v.algo(s).mod[i][j];
                     ++c.nMod;
                 }
-                if (v.matrix.ring[i][j]) {
+                if (topo.ring[i][j]) {
                     c.ringSrc[c.nRing] = static_cast<uint8_t>(j);
                     c.ringDelayed[c.nRing] = delayed;
+                    c.ringOn[c.nRing] = v.matrix.ring[i][j];
+                    for (int s = 0; s < nAlgo; ++s) c.ringSlot[c.nRing][s] = v.algo(s).ring[i][j];
                     ++c.nRing;
                 }
             }
         }
+        for (int i = 0; i < kNumOps; ++i) outMix_[i] = v.matrix.outputMix[i];
+        numAlgos_ = nAlgo;
+        morphPos_ = -1.0f; // forca o calculo dos pesos na 1a amostra
         cachedPatch_ = patch_;
         cachedCompiled_ = compiled_;
         cachedGeneration_ = generation_;
@@ -384,6 +404,15 @@ private:
             if (route.src == ModSource::Env1) envUsed_[0] = true;
             if (route.src == ModSource::Env2) envUsed_[1] = true;
             if (route.src == ModSource::Env3) envUsed_[2] = true;
+        }
+        // duracao natural do ciclo dos envelopes com sync (0 = sem sync)
+        for (int k = 0; k < kNumModEnvs; ++k) {
+            const auto& e = v.modEnv[k];
+            envCycleSec_[k] = 0.0f;
+            if (!e.tempoSync) continue;
+            const float l1 = e.level[0], l2 = e.level[1], l3 = e.level[2];
+            envCycleSec_[k] = std::fabs(l1 - l3) / egRateToSpeed(e.rate[0]) + std::fabs(l2 - l1) / egRateToSpeed(e.rate[1]) +
+                              std::fabs(l3 - l2) / egRateToSpeed(e.rate[2]);
         }
         cacheValid_ = true;
     }
@@ -423,7 +452,14 @@ private:
         // envelopes de modulacao (fontes Env1..Env3, 0..1)
         float envV[kNumModEnvs] = {};
         for (int k = 0; k < kNumModEnvs; ++k)
-            if (envUsed_[k]) envV[k] = modEnv_[k].process(sampleRate_) * (1.0f / 99.0f);
+            if (envUsed_[k]) {
+                // sync: o EG anda `mul` vezes mais rapido (passo = velocidade / taxa,
+                // entao divide a taxa) pro ciclo L3->L1->L2->L3 durar a divisao do BPM
+                double rate = sampleRate_;
+                if (envCycleSec_[k] > 0.0f)
+                    rate /= envCycleSec_[k] * tempoBpm_ / (60.0f * lfoDivisionBeats(patch_->modEnv[k].division));
+                envV[k] = modEnv_[k].process(rate) * (1.0f / 99.0f);
+            }
 
         // 3. PEG
         float pegRaw = peg_.process(sampleRate_);
@@ -437,7 +473,7 @@ private:
         float fbTrim[kNumOps] = {};
         float opPitchTrimSemis[kNumOps] = {};
         float fx2Trim[kNumOps] = {};
-        float voicePitchTrimSemis = 0.0f, voicePanTrim = 0.0f, voiceLevelTrim = 0.0f;
+        float voicePitchTrimSemis = 0.0f, voicePanTrim = 0.0f, voiceLevelTrim = 0.0f, algoMorphTrim = 0.0f;
         float lfoRateTrim[kNumLfos] = {}, lfoDepthTrim[kNumLfos] = {};
 
         for (int ri = 0; ri < numRoutes_; ++ri) {
@@ -473,6 +509,7 @@ private:
                 case ModDest::OperatorFx2:      if (oi >= 0 && oi < kNumOps) fx2Trim[oi] += amount; break;
                 case ModDest::LfoRate:          if (oi >= 0 && oi < kNumLfos) lfoRateTrim[oi] += amount; break;
                 case ModDest::LfoDepth:         if (oi >= 0 && oi < kNumLfos) lfoDepthTrim[oi] += amount; break;
+                case ModDest::AlgoMorph:        algoMorphTrim += amount; break;
                 default: break;
             }
         }
@@ -491,6 +528,7 @@ private:
                 lfoDepthMul_[k] = std::max(0.0f, 1.0f + lfoDepthTrim[k]);
             }
         panMod_ = voicePanTrim;
+        if (numAlgos_ > 1) applyAlgoMorph(std::clamp(patch_->algoMorph + algoMorphTrim, 0.0f, 1.0f));
         const double invSr = 1.0 / sampleRate_;
 
         // 5. operadores, na ordem compilada
@@ -559,6 +597,7 @@ private:
 
             // d. ring modulation entre operadores (conexoes da matriz marcadas ring=true)
             for (int k = 0; k < c.nRing; ++k) {
+                if (!c.ringOn[k]) continue; // morph de algoritmos: conexao ausente no slot atual
                 const auto& src = ops_[c.ringSrc[k]];
                 raw *= c.ringDelayed[k] ? src.prevOut : src.signal;
             }
@@ -649,7 +688,7 @@ private:
 
         // 6. soma outputMix, depois propaga signal -> prevOut para TODOS de uma vez
         float sum = 0.0f;
-        for (int i = 0; i < kNumOps; ++i) sum += ops_[i].signal * patch_->matrix.outputMix[i];
+        for (int i = 0; i < kNumOps; ++i) sum += ops_[i].signal * outMix_[i];
         for (auto& op : ops_) { op.prevPrevOut = op.prevOut; op.prevOut = op.signal; }
         if (voiceLevelTrim != 0.0f) sum *= std::max(0.0f, 1.0f + voiceLevelTrim); // ModDest::VoiceLevel
 
@@ -671,10 +710,43 @@ public:
     }
 
 private:
+    // Portadora em algum slot ativo do morph. Le do patch (nao do cache): o
+    // Synth pergunta isActive() de uma voz recem-disparada antes do cache dela
+    // ser refeito.
+    bool isCarrier(int i) const {
+        const int n = patch_->activeAlgos();
+        for (int s = 0; s < n; ++s)
+            if (patch_->algo(s).outputMix[i] != 0.0f) return true;
+        return false;
+    }
+
+    // [2026-10-24] pesos do ponto `pos` (0..1) do morph entre algoritmos:
+    // interpola PM, diagonal e outputMix entre os 2 slots vizinhos; ring
+    // (liga/desliga) vem do mais proximo. So refaz quando a posicao muda.
+    void applyAlgoMorph(float pos) {
+        const int n = numAlgos_;
+        float x = pos * static_cast<float>(n - 1);
+        const int s = std::min(static_cast<int>(x), n - 2);
+        float t = x - static_cast<float>(s);
+        if (patch_->algoStep) t = t < 0.5f ? 0.0f : 1.0f;
+        const float key = static_cast<float>(s) + t;
+        if (key == morphPos_) return;
+        morphPos_ = key;
+        const bool nearB = t >= 0.5f;
+        for (int i = 0; i < kNumOps; ++i) {
+            OpCache& c = cache_[i];
+            for (int k = 0; k < c.nMod; ++k) c.modAmt[k] = c.modAmtSlot[k][s] + (c.modAmtSlot[k][s + 1] - c.modAmtSlot[k][s]) * t;
+            c.selfMod = c.selfModSlot[s] + (c.selfModSlot[s + 1] - c.selfModSlot[s]) * t;
+            for (int k = 0; k < c.nRing; ++k) c.ringOn[k] = c.ringSlot[k][nearB ? s + 1 : s];
+            const float a = patch_->algo(s).outputMix[i], b = patch_->algo(s + 1).outputMix[i];
+            outMix_[i] = a + (b - a) * t;
+        }
+    }
+
     bool anyCarrierSounding() const {
         if (!patch_) return false;
         for (int i = 0; i < kNumOps; ++i)
-            if (patch_->matrix.outputMix[i] != 0.0f && !ops_[i].ampEG.isSilent()) return true;
+            if (isCarrier(i) && !ops_[i].ampEG.isSilent()) return true;
         return false;
     }
 
@@ -715,6 +787,12 @@ private:
     uint8_t routes_[kNumModRoutes] = {};
     int numRoutes_ = 0;
     bool lfoUsed_[kNumLfos] = {}, envUsed_[kNumModEnvs] = {};
+    float envCycleSec_[kNumModEnvs] = {}; // ciclo natural dos envelopes com sync (rebuildCache)
+    // morph de algoritmos: outputMix atual (com 1 algoritmo = o da matriz), slots e ultima posicao
+    float outMix_[kNumOps] = {};
+    int numAlgos_ = 1;
+    float morphPos_ = -1.0f;
+    float tempoBpm_ = 120.0f;
 
     OperatorState ops_[kNumOps];
     SegmentEG peg_;

@@ -86,6 +86,9 @@ public:
         idle_ = false;
     }
 
+    // [2026-10-24] loop do sustain de volta ao estagio 0 (envelopes de modulacao)
+    void setLoop(bool loop) { loop_ = loop; }
+
     float process(double controlRateHz) {
         if (idle_) return current_;
         float target = static_cast<float>(level_[stage_]);
@@ -103,6 +106,8 @@ public:
         if (current_ == target) {
             if (stage_ < 2) {
                 ++stage_;
+            } else if (stage_ == 2 && loop_) {
+                stage_ = 0; // de novo L1 -> L2 -> L3, partindo daqui
             } else if (stage_ == 3) {
                 idle_ = true;
             }
@@ -124,6 +129,7 @@ private:
     int stage_ = 2;
     float current_ = 0.0f;
     bool idle_ = true;
+    bool loop_ = false;
     // cache do passo por amostra do estagio atual
     float step_ = 0.0f;
     int stepStage_ = -1;
@@ -158,7 +164,12 @@ public:
             if (params_.wave == LfoWave::SampleHold) shValue_ = dist_(rng_);
             if (params_.wave == LfoWave::SmoothRandom) { smoothFrom_ = smoothTo_; smoothTo_ = dist_(rng_); }
         }
-        return waveValue(phase_) * fade;
+        float v = waveValue(phase_);
+        if (params_.steps >= 2) { // escada de `steps` niveis em -1..1
+            const float n = static_cast<float>(params_.steps - 1);
+            v = std::round((v + 1.0f) * 0.5f * n) / n * 2.0f - 1.0f;
+        }
+        return v * fade;
     }
 
 private:

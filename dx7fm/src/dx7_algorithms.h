@@ -123,41 +123,56 @@ inline const char* algorithmName(int number) {
 // Aplica o algoritmo `number` (1..32) em v.matrix + v.op[*].feedback.
 // NAO mexe em outputLevel/ampEG/waveform/etc dos operadores -- so a
 // topologia (quem modula quem, quem e portadora, onde tem feedback).
-inline void applyAlgorithm(VoiceParams& v, int number) {
+// Escreve a topologia do algoritmo `number` em `m`; os operadores no fim de
+// cada cadeia ganham feedback 0.3 via setFeedback(op). [2026-10-24: separado
+// de applyAlgorithm pra servir tambem os slots do morph de algoritmos.]
+template <typename SetFeedback>
+inline bool writeAlgorithm(AlgorithmMatrix& m, int number, SetFeedback setFeedback) {
     const auto& t = algorithmTable();
-    if (number < 1 || number > static_cast<int>(t.size())) return;
+    if (number < 1 || number > static_cast<int>(t.size())) return false;
     const AlgorithmDef& def = t[static_cast<size_t>(number - 1)];
-
-    v.matrix = AlgorithmMatrix{};
-    for (auto& op : v.op) op.feedback = 0.0f;
-
+    m = AlgorithmMatrix{};
     for (const auto& chain : def.chains) {
         if (chain.empty()) continue;
-        v.matrix.outputMix[chain[0]] = 1.0f;
-        for (size_t i = 0; i + 1 < chain.size(); ++i) v.matrix.mod[chain[i]][chain[i + 1]] = 1.0f;
-        v.op[chain.back()].feedback = 0.3f;
+        m.outputMix[chain[0]] = 1.0f;
+        for (size_t i = 0; i + 1 < chain.size(); ++i) m.mod[chain[i]][chain[i + 1]] = 1.0f;
+        setFeedback(chain.back());
     }
     for (const auto& fork : def.forks) {
         if (fork.modChain.empty()) continue;
         int sharedMod = fork.modChain[0];
         for (int carrier : fork.carriers) {
-            v.matrix.outputMix[carrier] = 1.0f;
-            v.matrix.mod[carrier][sharedMod] = 1.0f;
+            m.outputMix[carrier] = 1.0f;
+            m.mod[carrier][sharedMod] = 1.0f;
         }
         for (size_t i = 0; i + 1 < fork.modChain.size(); ++i)
-            v.matrix.mod[fork.modChain[i]][fork.modChain[i + 1]] = 1.0f;
-        v.op[fork.modChain.back()].feedback = 0.3f;
+            m.mod[fork.modChain[i]][fork.modChain[i + 1]] = 1.0f;
+        setFeedback(fork.modChain.back());
     }
     for (const auto& merge : def.merges) {
-        v.matrix.outputMix[merge.carrier] = 1.0f;
+        m.outputMix[merge.carrier] = 1.0f;
         for (const auto& modChain : merge.modChains) {
             if (modChain.empty()) continue;
-            v.matrix.mod[merge.carrier][modChain[0]] = 1.0f;
+            m.mod[merge.carrier][modChain[0]] = 1.0f;
             for (size_t i = 0; i + 1 < modChain.size(); ++i)
-                v.matrix.mod[modChain[i]][modChain[i + 1]] = 1.0f;
-            v.op[modChain.back()].feedback = 0.3f;
+                m.mod[modChain[i]][modChain[i + 1]] = 1.0f;
+            setFeedback(modChain.back());
         }
     }
+    return true;
+}
+
+// Slot 1 (VoiceParams::matrix): feedback vai pro op.feedback de cada operador (como sempre foi).
+inline void applyAlgorithm(VoiceParams& v, int number) {
+    if (number < 1 || number > static_cast<int>(algorithmTable().size())) return;
+    for (auto& op : v.op) op.feedback = 0.0f;
+    writeAlgorithm(v.matrix, number, [&](int op) { v.op[op].feedback = 0.3f; });
+}
+
+// Qualquer slot do morph: feedback na DIAGONAL da matriz (soma com op.feedback
+// no motor), pra ele fazer morph junto com o resto da topologia.
+inline void applyAlgorithmToMatrix(AlgorithmMatrix& m, int number) {
+    writeAlgorithm(m, number, [&](int op) { m.mod[op][op] = 0.3f; });
 }
 
 } // namespace dx7fm

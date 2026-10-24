@@ -116,7 +116,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 249 checagens de sanidade em 125 funcoes de teste (nao
+    demo.cpp        - 257 checagens de sanidade em 130 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -185,8 +185,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     que incluem os headers do motor pelo nome)
     ./demo
 
-Isso deve imprimir 249 linhas "[PASS] ..." e no final:
-    == Resultado: 249 passaram, 0 falharam ==
+Isso deve imprimir 257 linhas "[PASS] ..." e no final:
+    == Resultado: 257 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -520,6 +520,7 @@ ou um leitor de arquivo preencheria.
         OperatorFx2   fxParam2 x (1 + quantidade): Q, drive, bits, feedback, simetria
         LfoRate       velocidade do LFO opIndex (0..3) x 2^(3 x quantidade)
         LfoDepth      saida do LFO opIndex x max(0, 1 + quantidade)
+        AlgoMorph     [2026-10-24] posicao do morph entre algoritmos + quantidade
       LfoRate/LfoDepth valem a partir da amostra SEGUINTE (um LFO pode
       modular o proprio rate). modDestPerOperator/modDestPerLfo dizem o que
       opIndex significa (a UI troca o seletor Op por LFO1..LFO4).
@@ -535,6 +536,43 @@ ou um leitor de arquivo preencheria.
       mais com 64 vozes; com o cache, o custo ficou igual ao de antes.
       Um LFO/envelope sem uso fica parado: se uma edicao ao vivo o ligar no
       meio da nota, ele continua de onde parou.
+  [ADICIONADO em 2026-10-24] LFOParams::steps: 0 = suave; 2..32 = escada
+      de N niveis em -1..1 (aplicada depois da forma, inclusive SmoothRandom).
+  [ADICIONADO em 2026-10-24] VoiceParams::modEnv e ModEnvParams (herda de
+      EGParams + loop, tempoSync, division):
+        - loop: SegmentEG::setLoop -- ao chegar no sustain (L3) volta ao
+          estagio 0 a partir do nivel atual (ciclo L3 -> L1 -> L2 -> L3) ate o
+          note off, que vai pro release normal;
+        - tempoSync: a duracao natural do ciclo (|L1-L3|/v1 + |L2-L1|/v2 +
+          |L3-L2|/v3, v = egRateToSpeed) e calculada no rebuildCache; por
+          amostra o EG recebe taxa/k, k = ciclo natural / divisao do BPM,
+          entao o envelope inteiro (inclusive ataque e release) escala.
+  [ADICIONADO em 2026-10-24] MORPH ENTRE ALGORITMOS (como o ASM Leviasynth):
+      VoiceParams::algoSlot[7] + numAlgos (1..8; slot 1 = `matrix`, por
+      compatibilidade), algoMorph (0..1) e algoStep (salta pro slot mais
+      proximo). Posicao = algoMorph + ModDest::AlgoMorph; percorre os slots
+      em ordem, numAlgos-1 trechos iguais.
+        - Synth::recompile compila (8!) a UNIAO dos slots (algoUnion: conexao
+          presente em algum slot). Uma ordem so vale pra qualquer ponto do
+          morph, nada e recompilado durante a nota. Consequencia: num slot
+          com laco entre operadores, uma conexao pode sair com 1 amostra de
+          atraso que o algoritmo sozinho nao teria (sem lacos, a posicao de
+          cada slot e bit a bit igual ao algoritmo sozinho -- testado).
+        - OpCache guarda o peso de cada aresta da uniao em cada slot
+          (modAmtSlot, selfModSlot, ringSlot); Voice::applyAlgoMorph
+          interpola PM, diagonal e outputMix entre os 2 slots vizinhos e
+          liga/desliga o ring pelo slot mais proximo -- so quando a posicao
+          muda. Custo: posicao parada ~1.06x, mexendo toda amostra ~1.15x.
+        - isCarrier/anyCarrierSounding leem do patch (portadora em QUALQUER
+          slot), nao do cache: o Synth pergunta isActive() de uma voz recem-
+          disparada antes do cache dela ser refeito.
+        - Presets: writeAlgorithm (dx7_algorithms.h) escreve qualquer matriz;
+          applyAlgorithm (slot 1, feedback no op.feedback, como sempre) e
+          applyAlgorithmToMatrix (outros slots, feedback na DIAGONAL, pra
+          fazer morph junto). op.feedback continua valendo em todos os slots.
+        - JSON: "algorithms" (slots 2..n), "algoMorph", "algoStep" -- so
+          gravados com numAlgos > 1; ausente = sem morph.
+        - numAlgos = 1: caminho e saida identicos a antes (golden).
   ModRoute { src, dest, opIndex, depth(-1..1) }
       Uma matriz de modulacao generica (16 slots, kNumModRoutes; eram 8 --
       patches antigos carregam nas 8 primeiras).
@@ -1982,7 +2020,7 @@ mudancas de cada porta estao no comentario de cabecalho do bloco.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 249 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 257 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).

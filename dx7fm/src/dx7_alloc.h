@@ -161,10 +161,13 @@ public:
         // A busca de 8! permutacoes custa ms; a UI chama recompile a cada
         // frame enquanto um slider e arrastado, entao so recompila a
         // topologia quando a matriz de fato mudou.
-        if (!pr.hasCompiledCache ||
-            std::memcmp(&pr.compiledFor, &pr.params.voice.matrix, sizeof(AlgorithmMatrix)) != 0) {
-            pr.compiledCache = compileAlgorithm(pr.params.voice.matrix);
-            pr.compiledFor = pr.params.voice.matrix;
+        // [2026-10-24] com morph entre algoritmos, compila a UNIAO dos slots:
+        // uma ordem so serve pra qualquer ponto do morph (nada e recompilado
+        // durante a nota). Com 1 algoritmo, algoUnion devolve a propria matriz.
+        const AlgorithmMatrix topo = algoUnion(pr.params.voice);
+        if (!pr.hasCompiledCache || std::memcmp(&pr.compiledFor, &topo, sizeof(AlgorithmMatrix)) != 0) {
+            pr.compiledCache = compileAlgorithm(topo);
+            pr.compiledFor = topo;
             pr.hasCompiledCache = true;
         }
         int newIdx = pr.stagingIndex_;

@@ -12,6 +12,7 @@ constexpr int kNumOps = 8;
 constexpr int kNumModRoutes = 16; // [2026-10-22] era 8; patches antigos carregam as 8 primeiras
 constexpr int kNumLfos = 4;       // [2026-10-22] lfo1..lfo4 (eram 2)
 constexpr int kNumModEnvs = 3;    // [2026-10-22] envelopes de modulacao (so fontes da matriz)
+constexpr int kMaxAlgoSlots = 8;  // [2026-10-24] algoritmos por patch pro morph (slot 1 = VoiceParams::matrix)
 constexpr int kNumPartials = 64; // osciladores senoidais da forma de onda Additive (multiplo de 8: kernel SIMD)
 constexpr float kMaxPartialRatio = 128.0f; // razao maxima de um parcial (64 harmonicos impares chegam a 127)
 constexpr int kWaveSize = 2048; // amostras de UM ciclo de onda da Waveform::Wavetable (= frame do Serum/Vital)
@@ -82,6 +83,9 @@ struct LFOParams {
     // um ciclo dura lfoDivisionBeats(division) batidas
     bool tempoSync = false;
     uint8_t division = 6;       // indice em lfoDivisionName (6 = 1/4)
+    // [ADICIONADO em 2026-10-24] quantizacao em degraus: 0 = suave; 2..32 =
+    // numero de niveis entre -1 e 1 (escada), aplicado depois da forma
+    uint8_t steps = 0;
 };
 
 struct KeyLevelScaling {
@@ -177,7 +181,8 @@ enum class ModSource : uint8_t { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, 
 // LfoRate/LfoDepth usam os valores da amostra ANTERIOR (um LFO pode modular o
 // proprio rate sem ciclo dentro da mesma amostra).
 enum class ModDest : uint8_t { None, OperatorLevel, OperatorFx1, OperatorFeedback, VoicePitch,
-                               OperatorMorph, VoicePan, VoiceLevel, OperatorPitch, OperatorFx2, LfoRate, LfoDepth };
+                               OperatorMorph, VoicePan, VoiceLevel, OperatorPitch, OperatorFx2, LfoRate, LfoDepth,
+                               AlgoMorph }; // [2026-10-24] soma na posicao do morph entre algoritmos (0..1)
 inline bool modDestPerOperator(ModDest d) {
     return d == ModDest::OperatorLevel || d == ModDest::OperatorFx1 || d == ModDest::OperatorFeedback || d == ModDest::OperatorMorph ||
            d == ModDest::OperatorPitch || d == ModDest::OperatorFx2;
@@ -197,6 +202,28 @@ struct AlgorithmMatrix {
     float outputMix[kNumOps] = {};      // quanto de cada operador vai pro bus de saida da voz
 };
 
+// [ADICIONADO em 2026-10-24] envelope de modulacao = EG estilo DX + loop e sync.
+// loop: ao chegar no sustain (L3) volta ao estagio 1 a partir do nivel atual
+// (ciclo L3 -> L1 -> L2 -> L3) ate o note off, que faz o release normal.
+// tempoSync: o envelope inteiro anda mais rapido/devagar pra esse ciclo durar
+// lfoDivisionBeats(division) batidas do BPM global (mesmas divisoes dos LFOs).
+struct ModEnvParams : EGParams {
+    bool loop = false;
+    bool tempoSync = false;
+    uint8_t division = 6; // 1/4
+    // padrao: sobe em ~0.3s, decai pra 50 e solta em ~1s
+    ModEnvParams() {
+        rate[0] = 60; rate[1] = 45; rate[2] = 45; rate[3] = 45;
+        level[0] = 99; level[1] = 70; level[2] = 50; level[3] = 0;
+    }
+};
+
+// Topologia que vale pra QUALQUER ponto do morph: conexao presente em algum
+// slot ativo (pesos 1/0; so a existencia importa pra ordem de avaliacao e pros
+// operadores usados). Com 1 algoritmo, e a propria matriz.
+struct VoiceParams;
+AlgorithmMatrix algoUnion(const VoiceParams& v);
+
 struct VoiceParams {
     OperatorParams op[kNumOps];
     AlgorithmMatrix matrix;
@@ -204,8 +231,21 @@ struct VoiceParams {
     LFOParams lfo1, lfo2, lfo3, lfo4; // lfo3/lfo4 [2026-10-22]: mesmos campos (tambem tem pitch/amp depth)
     // [ADICIONADO em 2026-10-22] envelopes de modulacao (estilo DX: 4 rates/4
     // levels, comecam no level[3] como o PEG); fontes Env1..Env3 da matriz.
-    EGParams modEnv[kNumModEnvs];
+    ModEnvParams modEnv[kNumModEnvs];
     ModRoute modMatrix[kNumModRoutes];
+    // [ADICIONADO em 2026-10-24] morph entre algoritmos: ate kMaxAlgoSlots
+    // matrizes (slot 1 = `matrix`, slots 2.. = algoSlot[0..]); a posicao
+    // 0..1 percorre os slots em ordem (numAlgos - 1 trechos iguais) e os pesos
+    // (PM, diagonal/feedback, outputMix) sao interpolados entre os vizinhos.
+    // algoStep: salta pro slot mais proximo em vez de passar pelo meio.
+    AlgorithmMatrix algoSlot[kMaxAlgoSlots - 1];
+    uint8_t numAlgos = 1; // 1 = sem morph (como antes)
+    float algoMorph = 0.0f;
+    bool algoStep = false;
+
+    AlgorithmMatrix& algo(int s) { return s == 0 ? matrix : algoSlot[s - 1]; }
+    const AlgorithmMatrix& algo(int s) const { return s == 0 ? matrix : algoSlot[s - 1]; }
+    int activeAlgos() const { return std::clamp<int>(numAlgos, 1, kMaxAlgoSlots); }
 
     LFOParams& lfo(int i) { return i == 0 ? lfo1 : i == 1 ? lfo2 : i == 2 ? lfo3 : lfo4; }
     const LFOParams& lfo(int i) const { return i == 0 ? lfo1 : i == 1 ? lfo2 : i == 2 ? lfo3 : lfo4; }
@@ -215,13 +255,25 @@ struct VoiceParams {
         matrix.outputMix[0] = 1.0f;
         matrix.mod[0][1] = 1.0f;
         op[1].outputLevel = 60;
-        // envelopes de modulacao: sobe em ~0.3s, decai pra 50 e solta em ~1s
-        for (auto& e : modEnv) {
-            const uint8_t r[4] = {60, 45, 45, 45}, l[4] = {99, 70, 50, 0};
-            for (int k = 0; k < 4; ++k) { e.rate[k] = r[k]; e.level[k] = l[k]; }
-        }
     }
 };
+
+inline AlgorithmMatrix algoUnion(const VoiceParams& v) {
+    const int n = v.activeAlgos();
+    if (n == 1) return v.matrix;
+    AlgorithmMatrix u;
+    for (int s = 0; s < n; ++s) {
+        const auto& m = v.algo(s);
+        for (int i = 0; i < kNumOps; ++i) {
+            for (int j = 0; j < kNumOps; ++j) {
+                if (m.mod[i][j] != 0.0f) u.mod[i][j] = 1.0f;
+                u.ring[i][j] = u.ring[i][j] || m.ring[i][j];
+            }
+            if (m.outputMix[i] != 0.0f) u.outputMix[i] = 1.0f;
+        }
+    }
+    return u;
+}
 
 enum class VoiceMode : uint8_t { Poly, Mono, Unison };
 
@@ -468,22 +520,31 @@ inline void sanitize(LFOParams& l) {
     l.ampDepth = sanF(l.ampDepth, 0.0f, 1.0f, 0.0f);
     l.wave = sanEnum(l.wave, LfoWave::SmoothRandom);
     l.division = static_cast<uint8_t>(std::min<int>(l.division, kNumLfoDivisions - 1));
+    l.steps = l.steps == 1 ? 0 : std::min<uint8_t>(l.steps, 32);
 }
 
 inline void sanitize(VoiceParams& v) {
     using namespace detail;
     for (auto& o : v.op) sanitize(o);
-    for (int i = 0; i < kNumOps; ++i) {
-        for (int j = 0; j < kNumOps; ++j) v.matrix.mod[i][j] = sanF(v.matrix.mod[i][j], -1.0f, 1.0f, 0.0f);
-        v.matrix.outputMix[i] = sanF(v.matrix.outputMix[i], 0.0f, 1.0f, 0.0f);
+    v.numAlgos = static_cast<uint8_t>(std::clamp<int>(v.numAlgos, 1, kMaxAlgoSlots));
+    v.algoMorph = sanF(v.algoMorph, 0.0f, 1.0f, 0.0f);
+    for (int s = 0; s < kMaxAlgoSlots; ++s) {
+        auto& m = v.algo(s);
+        for (int i = 0; i < kNumOps; ++i) {
+            for (int j = 0; j < kNumOps; ++j) m.mod[i][j] = sanF(m.mod[i][j], -1.0f, 1.0f, 0.0f);
+            m.outputMix[i] = sanF(m.outputMix[i], 0.0f, 1.0f, 0.0f);
+        }
     }
     sanEG(v.peg.rate, v.peg.level);
     v.peg.rangeOctaves = sanF(v.peg.rangeOctaves, 0.1f, 8.0f, 4.0f);
     for (int i = 0; i < kNumLfos; ++i) sanitize(v.lfo(i));
-    for (auto& e : v.modEnv) sanEG(e.rate, e.level);
+    for (auto& e : v.modEnv) {
+        sanEG(e.rate, e.level);
+        e.division = static_cast<uint8_t>(std::min<int>(e.division, kNumLfoDivisions - 1));
+    }
     for (auto& r : v.modMatrix) {
         r.src = sanEnum(r.src, ModSource::Env3);
-        r.dest = sanEnum(r.dest, ModDest::LfoDepth);
+        r.dest = sanEnum(r.dest, ModDest::AlgoMorph);
         r.opIndex = std::clamp(r.opIndex, 0, modDestPerLfo(r.dest) ? kNumLfos - 1 : kNumOps - 1);
         r.depth = sanF(r.depth, -1.0f, 1.0f, 0.0f);
     }
