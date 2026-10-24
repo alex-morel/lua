@@ -116,7 +116,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 240 checagens de sanidade em 120 funcoes de teste (nao
+    demo.cpp        - 249 checagens de sanidade em 125 funcoes de teste (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -185,8 +185,8 @@ e OBRIGATORIO: demo.cpp usa std::thread no teste de concorrencia):
     que incluem os headers do motor pelo nome)
     ./demo
 
-Isso deve imprimir 240 linhas "[PASS] ..." e no final:
-    == Resultado: 240 passaram, 0 falharam ==
+Isso deve imprimir 249 linhas "[PASS] ..." e no final:
+    == Resultado: 249 passaram, 0 falharam ==
 
 Opcional, pra validar o mecanismo de troca atomica de patch com uma
 ferramenta de verdade (o teste normal so confirma "nao crashou", nao prova
@@ -501,12 +501,43 @@ ou um leitor de arquivo preencheria.
       KeyNote = (nota - 60)/60 clampado -1..1 (0 no C4, +1 no C9);
       Velocity = velocity/127. Fixos durante a nota. JSON: "KeyNote",
       "Velocity"; UI: "Nota", "Velocity".
+      [LFO3, LFO4, Env1, Env2, Env3 ADICIONADOS em 2026-10-22, no fim]:
+      LFOs -1..1; Env1..Env3 = envelopes de modulacao (VoiceParams::modEnv,
+      estilo DX, comecam no level[3] como o PEG) em level/99, 0..1.
   ModDest   { None, OperatorLevel, OperatorFx1, OperatorFeedback,
-              VoicePitch, OperatorMorph }
+              VoicePitch, OperatorMorph, VoicePan, VoiceLevel,
+              OperatorPitch, OperatorFx2, LfoRate, LfoDepth }
       [OperatorMorph ADICIONADO em 2026-10-18]: somado na posicao do morph
-      A->B da onda Additive do operador opIndex (ex.: mod wheel -> morph).
+      A->B da onda Additive/Wavetable do operador opIndex.
+      [ADICIONADOS em 2026-10-22, no fim]:
+        VoicePan      pan da voz + quantidade. O pan e aplicado no Synth
+                      (mixagem), entao a Voice expoe panMod() e o renderJob
+                      guarda o pan por amostra (panBuf_) SO quando o patch tem
+                      uma rota pra VoicePan -- sem ela, o caminho antigo de
+                      ganhos fixos no pedaco (saida bit a bit igual a antes).
+        VoiceLevel    soma da voz x max(0, 1 + quantidade)
+        OperatorPitch semitons SO no operador opIndex (quantidade x 12)
+        OperatorFx2   fxParam2 x (1 + quantidade): Q, drive, bits, feedback, simetria
+        LfoRate       velocidade do LFO opIndex (0..3) x 2^(3 x quantidade)
+        LfoDepth      saida do LFO opIndex x max(0, 1 + quantidade)
+      LfoRate/LfoDepth valem a partir da amostra SEGUINTE (um LFO pode
+      modular o proprio rate). modDestPerOperator/modDestPerLfo dizem o que
+      opIndex significa (a UI troca o seletor Op por LFO1..LFO4).
+  LFOParams: [2026-10-22] tempoSync + division (16 divisoes: 4/1 .. 1/32,
+      pontuadas e tercinas; lfoDivisionBeats = batidas por ciclo) com o BPM
+      global Synth::setTempoBpm (atomico, 20..300, passado as vozes 1x por
+      bloco; estado do app, nao do patch). LfoWave::SmoothRandom (fim do
+      enum): valor aleatorio novo por ciclo com transicao em cosseno.
+      VoiceParams tem lfo1..lfo4 (lfo(i)); os 4 tem pitch/amp depth.
+  Custo: a Voice guarda no cache do patch (rebuildCache) a lista de rotas
+      ativas e quais LFOs/envelopes alguem usa; so esses rodam por amostra.
+      Sem isso, as 16 rotas vazias + 4 LFOs + 3 envelopes custavam ~20% a
+      mais com 64 vozes; com o cache, o custo ficou igual ao de antes.
+      Um LFO/envelope sem uso fica parado: se uma edicao ao vivo o ligar no
+      meio da nota, ele continua de onde parou.
   ModRoute { src, dest, opIndex, depth(-1..1) }
-      Uma matriz de modulacao pequena e generica (8 slots, kNumModRoutes).
+      Uma matriz de modulacao generica (16 slots, kNumModRoutes; eram 8 --
+      patches antigos carregam nas 8 primeiras).
       Cada ModRoute liga uma fonte a um destino com uma profundidade.
       E aqui que voce liga, por exemplo, Poly Aftertouch -> corte do
       filtro do operador 3. Ver testPolyAftertouch() em demo.cpp para um
@@ -1951,7 +1982,7 @@ mudancas de cada porta estao no comentario de cabecalho do bloco.
                               roubo de voz), confirma que
                               activeVoiceCount() NUNCA excede 64.
 
-  Todas as 240 checagens (`check(condicao, nome)`) passam no estado
+  Todas as 249 checagens (`check(condicao, nome)`) passam no estado
   atual do codigo. `g_pass`/`g_fail` sao contadores globais simples;
   o programa retorna exit code 1 se qualquer uma falhar (util pra
   rodar em CI no futuro, embora nao haja CI configurado ainda).

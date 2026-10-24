@@ -310,6 +310,7 @@ inline const char* lfoWaveName(LfoWave w) {
         case LfoWave::Square:     return "Square";
         case LfoWave::Sine:       return "Sine";
         case LfoWave::SampleHold: return "SampleHold";
+        case LfoWave::SmoothRandom: return "SmoothRandom";
     }
     return "Triangle";
 }
@@ -319,6 +320,7 @@ inline LfoWave lfoWaveFromName(const std::string& s) {
     if (s == "Square")     return LfoWave::Square;
     if (s == "Sine")       return LfoWave::Sine;
     if (s == "SampleHold") return LfoWave::SampleHold;
+    if (s == "SmoothRandom") return LfoWave::SmoothRandom;
     return LfoWave::Triangle;
 }
 
@@ -333,6 +335,11 @@ inline const char* modSourceName(ModSource s) {
         case ModSource::PitchBend: return "PitchBend";
         case ModSource::KeyNote:   return "KeyNote";
         case ModSource::Velocity:  return "Velocity";
+        case ModSource::LFO3:      return "LFO3";
+        case ModSource::LFO4:      return "LFO4";
+        case ModSource::Env1:      return "Env1";
+        case ModSource::Env2:      return "Env2";
+        case ModSource::Env3:      return "Env3";
     }
     return "None";
 }
@@ -345,6 +352,11 @@ inline ModSource modSourceFromName(const std::string& s) {
     if (s == "PitchBend") return ModSource::PitchBend;
     if (s == "KeyNote") return ModSource::KeyNote;
     if (s == "Velocity") return ModSource::Velocity;
+    if (s == "LFO3")      return ModSource::LFO3;
+    if (s == "LFO4")      return ModSource::LFO4;
+    if (s == "Env1")      return ModSource::Env1;
+    if (s == "Env2")      return ModSource::Env2;
+    if (s == "Env3")      return ModSource::Env3;
     return ModSource::None;
 }
 
@@ -356,6 +368,12 @@ inline const char* modDestName(ModDest d) {
         case ModDest::OperatorFeedback: return "OperatorFeedback";
         case ModDest::VoicePitch:       return "VoicePitch";
         case ModDest::OperatorMorph:    return "OperatorMorph";
+        case ModDest::VoicePan:         return "VoicePan";
+        case ModDest::VoiceLevel:       return "VoiceLevel";
+        case ModDest::OperatorPitch:    return "OperatorPitch";
+        case ModDest::OperatorFx2:      return "OperatorFx2";
+        case ModDest::LfoRate:          return "LfoRate";
+        case ModDest::LfoDepth:         return "LfoDepth";
     }
     return "None";
 }
@@ -365,6 +383,12 @@ inline ModDest modDestFromName(const std::string& s) {
     if (s == "OperatorFeedback") return ModDest::OperatorFeedback;
     if (s == "VoicePitch")       return ModDest::VoicePitch;
     if (s == "OperatorMorph")    return ModDest::OperatorMorph;
+    if (s == "VoicePan")         return ModDest::VoicePan;
+    if (s == "VoiceLevel")       return ModDest::VoiceLevel;
+    if (s == "OperatorPitch")    return ModDest::OperatorPitch;
+    if (s == "OperatorFx2")      return ModDest::OperatorFx2;
+    if (s == "LfoRate")          return ModDest::LfoRate;
+    if (s == "LfoDepth")         return ModDest::LfoDepth;
     return ModDest::None;
 }
 
@@ -462,6 +486,8 @@ inline JsonValue lfoParamsToJson(const LFOParams& l) {
     v.set("keySync", JsonValue::makeBool(l.keySync));
     v.set("pitchDepth", JsonValue::makeNumber(l.pitchDepth));
     v.set("ampDepth", JsonValue::makeNumber(l.ampDepth));
+    v.set("tempoSync", JsonValue::makeBool(l.tempoSync));
+    v.set("division", JsonValue::makeString(lfoDivisionName(l.division)));
     return v;
 }
 inline LFOParams lfoParamsFromJson(const JsonValue* j) {
@@ -473,6 +499,9 @@ inline LFOParams lfoParamsFromJson(const JsonValue* j) {
     l.keySync = j->boolAt("keySync", l.keySync);
     l.pitchDepth = clampCast<float>(j->numberAt("pitchDepth", l.pitchDepth));
     l.ampDepth = clampCast<float>(j->numberAt("ampDepth", l.ampDepth));
+    l.tempoSync = j->boolAt("tempoSync", l.tempoSync);
+    const std::string div = j->stringAt("division", lfoDivisionName(l.division));
+    for (int d = 0; d < kNumLfoDivisions; ++d) if (div == lfoDivisionName(d)) l.division = static_cast<uint8_t>(d);
     return l;
 }
 
@@ -666,6 +695,11 @@ inline JsonValue voiceParamsToJson(const VoiceParams& v) {
     j.set("peg", pegParamsToJson(v.peg));
     j.set("lfo1", lfoParamsToJson(v.lfo1));
     j.set("lfo2", lfoParamsToJson(v.lfo2));
+    j.set("lfo3", lfoParamsToJson(v.lfo3));
+    j.set("lfo4", lfoParamsToJson(v.lfo4));
+    JsonValue envs = JsonValue::makeArray();
+    for (const auto& e : v.modEnv) envs.push(egParamsToJson(e));
+    j.set("modEnv", std::move(envs));
     JsonValue mm = JsonValue::makeArray();
     for (int i = 0; i < kNumModRoutes; ++i) mm.push(modRouteToJson(v.modMatrix[i]));
     j.set("modMatrix", std::move(mm));
@@ -684,6 +718,11 @@ inline VoiceParams voiceParamsFromJson(const JsonValue& j) {
     if (auto* peg = j.find("peg")) v.peg = pegParamsFromJson(peg);
     if (auto* lfo1 = j.find("lfo1")) v.lfo1 = lfoParamsFromJson(lfo1);
     if (auto* lfo2 = j.find("lfo2")) v.lfo2 = lfoParamsFromJson(lfo2);
+    if (auto* lfo3 = j.find("lfo3")) v.lfo3 = lfoParamsFromJson(lfo3); // ausentes (patch antigo) = defaults
+    if (auto* lfo4 = j.find("lfo4")) v.lfo4 = lfoParamsFromJson(lfo4);
+    if (auto* envs = j.find("modEnv"))
+        for (int k = 0; k < kNumModEnvs && k < static_cast<int>(envs->arraySize()); ++k)
+            v.modEnv[k] = egParamsFromJson(&envs->at(static_cast<size_t>(k)));
     if (auto* mm = j.find("modMatrix"))
         for (int i = 0; i < kNumModRoutes && i < static_cast<int>(mm->arraySize()); ++i)
             v.modMatrix[i] = modRouteFromJson(&mm->at(static_cast<size_t>(i)));

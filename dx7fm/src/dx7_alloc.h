@@ -100,6 +100,7 @@ public:
         jobs_.reserve(static_cast<size_t>(maxVoices));
         voiceBuf_.assign(static_cast<size_t>(maxVoices) * kRenderChunk, 0.0f);
         loudBuf_.assign(static_cast<size_t>(maxVoices) * kRenderChunk, 0.0f);
+        panBuf_.assign(static_cast<size_t>(maxVoices) * kRenderChunk, 0.0f);
         for (auto& s : slots_) {
             s.voice.setOversample(oversample);
             s.voice.setSampleRate(sampleRate);
@@ -137,6 +138,14 @@ public:
         masterVolume_.store(std::clamp(gain, 0.0f, 2.0f), std::memory_order_relaxed);
     }
     float masterVolume() const { return masterVolume_.load(std::memory_order_relaxed); }
+
+    // [ADICIONADO em 2026-10-22] BPM global (20..300) dos LFOs com tempoSync.
+    // Atomico como o volume: a UI escreve, a audio thread le 1x por bloco.
+    void setTempoBpm(float bpm) {
+        if (!std::isfinite(bpm)) return;
+        tempoBpm_.store(std::clamp(bpm, 20.0f, 300.0f), std::memory_order_relaxed);
+    }
+    float tempoBpm() const { return tempoBpm_.load(std::memory_order_relaxed); }
 
     // Publica params.voice (staging) como o novo patch AO VIVO: recompila o
     // algoritmo, escreve o par (voice, compiled) casado num slot de buffer
@@ -547,6 +556,11 @@ private:
         int slot;
         float gL, gR, level;
         int activeLen; // amostras do pedaco em que a voz estava ativa
+        // [2026-10-22] patch com rota pra ModDest::VoicePan: o pan muda por
+        // amostra (panBuf_) e os ganhos sao calculados na mixagem. Sem a rota,
+        // o caminho antigo (ganhos fixos no pedaco) -- saida identica a antes.
+        bool panMod;
+        float basePan; // pan da parte + subPan do unison (sem clamp)
     };
 
     static void renderJob(void* ctx, int index) {
@@ -555,6 +569,7 @@ private:
         Voice& v = self->slots_[static_cast<size_t>(job.slot)].voice;
         float* smp = &self->voiceBuf_[static_cast<size_t>(index) * kRenderChunk];
         float* loud = &self->loudBuf_[static_cast<size_t>(index) * kRenderChunk];
+        float* pan = &self->panBuf_[static_cast<size_t>(index) * kRenderChunk];
         const int len = self->chunkLen_;
         int i = 0;
         // isActive() e checado ANTES de cada amostra, como no laco antigo:
@@ -562,6 +577,7 @@ private:
         for (; i < len && v.isActive(); ++i) {
             smp[i] = v.process();
             loud[i] = v.loudness();
+            if (job.panMod) pan[i] = v.panMod();
         }
         job.activeLen = i;
     }
@@ -571,6 +587,13 @@ private:
         const PatchSnapshot* live[kNumParts];
         for (int p = 0; p < kNumParts; ++p) live[p] = parts_[p].live();
 
+        bool panRoutes[kNumParts];
+        for (int p = 0; p < kNumParts; ++p) {
+            panRoutes[p] = false;
+            for (const auto& r : live[p]->voice.modMatrix) panRoutes[p] |= r.dest == ModDest::VoicePan && r.src != ModSource::None;
+        }
+        const float bpm = tempoBpm_.load(std::memory_order_relaxed);
+
         jobs_.clear();
         for (size_t idx = 0; idx < slots_.size(); ++idx) {
             auto& s = slots_[idx];
@@ -579,8 +602,10 @@ private:
             const PatchSnapshot* snap = live[s.ownerPart];
             s.voice.rebind(&snap->voice, &snap->compiled, snap->generation); // "ao vivo": pega qualquer recompile() publicado ate agora
             s.voice.bindWavetables(&snap->wavetables);
+            s.voice.setTempo(bpm);
             float pan = std::clamp(pr.params.pan + s.subPan, -1.0f, 1.0f);
-            jobs_.push_back({static_cast<int>(idx), 1.0f - std::max(0.0f, pan), 1.0f + std::min(0.0f, pan), pr.params.level, 0});
+            jobs_.push_back({static_cast<int>(idx), 1.0f - std::max(0.0f, pan), 1.0f + std::min(0.0f, pan), pr.params.level, 0,
+                             panRoutes[s.ownerPart], pr.params.pan + s.subPan});
         }
         chunkLen_ = len;
         const int count = static_cast<int>(jobs_.size());
@@ -596,8 +621,14 @@ private:
                 const size_t at = static_cast<size_t>(j) * kRenderChunk + static_cast<size_t>(i);
                 voiceLoad += loudBuf_[at];
                 float lvl = job.level * voiceBuf_[at];
-                l += lvl * job.gL;
-                r += lvl * job.gR;
+                if (job.panMod) {
+                    float p = std::clamp(job.basePan + panBuf_[at], -1.0f, 1.0f);
+                    l += lvl * (1.0f - std::max(0.0f, p));
+                    r += lvl * (1.0f + std::min(0.0f, p));
+                } else {
+                    l += lvl * job.gL;
+                    r += lvl * job.gR;
+                }
             }
             mixSample(l, r, voiceLoad);
             outL[i] = l;
@@ -655,11 +686,12 @@ private:
     float polyphonyGain_ = 1.0f; // suavizado, ver renderStereo() (compensacao 1/sqrt(N))
     float polySmoothCoef_ = 0.0f, volumeSmoothCoef_ = 0.0f;
     std::atomic<float> masterVolume_{1.0f}; // alvo, escrito pela UI (setMasterVolume)
+    std::atomic<float> tempoBpm_{120.0f};    // setTempoBpm (LFOs com tempoSync)
     float masterGain_ = 1.0f;               // valor suavizado, so a audio thread toca
 
     // renderBlock: buffers por voz (alocados em init, nunca na audio thread)
     std::vector<RenderJob> jobs_;
-    std::vector<float> voiceBuf_, loudBuf_;
+    std::vector<float> voiceBuf_, loudBuf_, panBuf_;
     int chunkLen_ = 0;
     WorkerPool pool_; // ultimo membro: destruido primeiro (para as threads antes do resto)
 };

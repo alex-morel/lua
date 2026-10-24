@@ -2836,6 +2836,174 @@ static void testWavetableCost() {
     check(wt < sine * 2.0, "Wavetable custa menos que 2x o operador Sine");
 }
 
+// --- [ADICIONADO em 2026-10-22] envelopes de modulacao, LFO3/4 com sync e destinos novos ---
+// Op0 Sine sozinho (nivel 80), estereo, com BPM escolhido.
+struct StereoRender { std::vector<float> l, r; };
+static StereoRender renderVoice(const std::function<void(VoiceParams&)>& setup, int note, int velocity, double seconds, float bpm = 120.0f) {
+    Synth synth;
+    synth.init(48000.0, 4);
+    synth.setTempoBpm(bpm);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.op[0].outputLevel = 80;
+    setup(v);
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.noteOn(0, note, velocity);
+    StereoRender out;
+    const int n = static_cast<int>(seconds * 48000.0);
+    out.l.resize(static_cast<size_t>(n));
+    out.r.resize(static_cast<size_t>(n));
+    for (int i = 0; i < n; i += 256) synth.renderBlock(&out.l[static_cast<size_t>(i)], &out.r[static_cast<size_t>(i)], std::min(256, n - i));
+    return out;
+}
+static float rmsAt(const std::vector<float>& x, double centerSec, double widthSec = 0.04) {
+    return computeRms(x, static_cast<size_t>((centerSec - widthSec / 2) * 48000.0), static_cast<size_t>(widthSec * 48000.0));
+}
+
+static void testModEnvelopeAsSource() {
+    // Env1 sobe de 0 a 99 em T segundos (rate 30); Env1 -> nivel do op0 com +1: ganho 1 -> 2
+    const uint8_t rate = 30;
+    const double T = dx7fm_app::egStageSeconds(0.0f, 99.0f, rate);
+    auto x = renderVoice([&](VoiceParams& v) {
+        v.modEnv[0] = EGParams{};
+        v.modEnv[0].rate[0] = rate;
+        v.modEnv[0].level[3] = 0;
+        v.modMatrix[15] = ModRoute{ModSource::Env1, ModDest::OperatorLevel, 0, 1.0f}; // ultima das 16 rotas
+    }, 69, 100, T + 0.3);
+    // referencia: o mesmo som sem a rota, na mesma janela (o ataque do Amp EG fica fora da conta)
+    auto ref = renderVoice([](VoiceParams&) {}, 69, 100, T + 0.3);
+    float mid = rmsAt(x.l, T / 2) / rmsAt(ref.l, T / 2), end = rmsAt(x.l, T + 0.2) / rmsAt(ref.l, T + 0.2);
+    std::printf("  (Env1 -> nivel: T=%.2fs, ganho no meio x%.3f, no fim x%.3f)\n", T, mid, end);
+    check(std::fabs(mid - 1.5f) < 0.02f && std::fabs(end - 2.0f) < 0.01f,
+          "envelope de modulacao: Env1 sobe no tempo do rate e modula o nivel (rota 16 da matriz)");
+}
+
+static void testLfoTempoSync() {
+    // LFO3 quadrado sincronizado em 1/4 -> VoiceLevel 0.5: ganho 1.5 na 1a metade do ciclo, 0.5 na 2a
+    auto at = [](float bpm) {
+        auto x = renderVoice([](VoiceParams& v) {
+            v.lfo3.wave = LfoWave::Square;
+            v.lfo3.keySync = true;
+            v.lfo3.tempoSync = true;
+            v.lfo3.division = 6; // 1/4
+            v.modMatrix[0] = ModRoute{ModSource::LFO3, ModDest::VoiceLevel, 0, 0.5f};
+        }, 69, 100, 1.0, bpm);
+        const double beat = 60.0 / bpm; // 1/4 = uma batida
+        return std::pair<float, float>(rmsAt(x.l, beat * 0.25, beat * 0.3), rmsAt(x.l, beat * 0.75, beat * 0.3));
+    };
+    auto [hi120, lo120] = at(120.0f);
+    auto [hi240, lo240] = at(240.0f);
+    std::printf("  (LFO3 1/4 sincronizado: 120 BPM alto/baixo = %.2f, 240 BPM = %.2f)\n", hi120 / lo120, hi240 / lo240);
+    check(std::fabs(hi120 / lo120 - 3.0f) < 0.1f && std::fabs(hi240 / lo240 - 3.0f) < 0.1f,
+          "LFO sincronizado: 1/4 dura uma batida do BPM global (120 e 240 BPM)");
+}
+
+static void testLfoSmoothRandom() {
+    LFOParams p;
+    p.wave = LfoWave::SmoothRandom;
+    p.rate = 10.0f;
+    LFO lfo;
+    lfo.setSampleRate(48000.0);
+    lfo.configure(p);
+    float lo = 0.0f, hi = 0.0f, prev = lfo.process(), maxStep = 0.0f;
+    for (int i = 0; i < 96000; ++i) {
+        float v = lfo.process();
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+        maxStep = std::max(maxStep, std::fabs(v - prev));
+        prev = v;
+    }
+    std::printf("  (SmoothRandom 10 Hz: faixa %.2f..%.2f, maior passo %.5f)\n", lo, hi, maxStep);
+    check(lo >= -1.0f && hi <= 1.0f && hi - lo > 0.5f && maxStep < 0.01f, "LFO SmoothRandom: aleatorio dentro de -1..1, sem degraus");
+}
+
+static void testNewModDestinations() {
+    // VoicePan: velocity 127 x +1 = toda pra direita
+    auto panned = renderVoice([](VoiceParams& v) { v.modMatrix[0] = ModRoute{ModSource::Velocity, ModDest::VoicePan, 0, 1.0f}; }, 69, 127, 0.3);
+    auto center = renderVoice([](VoiceParams&) {}, 69, 127, 0.3);
+    float pl = rmsAt(panned.l, 0.2), pr = rmsAt(panned.r, 0.2), cl = rmsAt(center.l, 0.2);
+    check(pl < 1e-6f && std::fabs(pr - cl) < 1e-4f, "destino VoicePan: modulacao leva a voz pro lado (velocity -> pan direita)");
+
+    // OperatorPitch: +12 semitons no op0
+    auto up = renderVoice([](VoiceParams& v) { v.modMatrix[0] = ModRoute{ModSource::Velocity, ModDest::OperatorPitch, 0, 1.0f}; }, 69, 127, 0.3);
+    std::vector<float> w(up.l.begin() + 4800, up.l.end());
+    check(mag(w, 880.0) > 50.0f * mag(w, 440.0), "destino OperatorPitch: +1 = uma oitava acima so naquele operador");
+
+    // OperatorFx2: Q do passa-baixa (no corte, ganho = Q): x2 = +6 dB
+    auto lpq = [](float depth) {
+        auto x = renderVoice([&](VoiceParams& v) {
+            v.op[0].fxType = FxType::LowPass;
+            v.op[0].fxParam1 = 440.0f;
+            v.op[0].fxParam2 = 0.707f;
+            v.modMatrix[0] = ModRoute{ModSource::Velocity, ModDest::OperatorFx2, 0, depth};
+        }, 69, 127, 0.4);
+        return rmsAt(x.l, 0.3, 0.1);
+    };
+    float dB = 20.0f * std::log10(lpq(1.0f) / lpq(0.0f));
+    std::printf("  (OperatorFx2 dobrando o Q no corte: %+.2f dB, esperado %+.2f)\n", dB, 20.0f * std::log10(2.0f));
+    check(std::fabs(dB - 6.02f) < 0.2f, "destino OperatorFx2: multiplica o 2o parametro do efeito (Q do filtro)");
+
+    // LfoRate / LfoDepth no LFO2 (quadrado 2 Hz -> VoiceLevel 0.5)
+    auto lfo2 = [](const std::function<void(VoiceParams&)>& extra) {
+        auto x = renderVoice([&](VoiceParams& v) {
+            v.lfo2.wave = LfoWave::Square;
+            v.lfo2.keySync = true;
+            v.lfo2.rate = 2.0f;
+            v.modMatrix[0] = ModRoute{ModSource::LFO2, ModDest::VoiceLevel, 0, 0.5f};
+            extra(v);
+        }, 69, 127, 0.6);
+        return std::array<float, 2>{rmsAt(x.l, 0.0625, 0.08), rmsAt(x.l, 0.1875, 0.08)}; // 1a e 2a metade de um ciclo de 4 Hz
+    };
+    auto base = lfo2([](VoiceParams&) {});
+    auto fast = lfo2([](VoiceParams& v) { v.modMatrix[1] = ModRoute{ModSource::Velocity, ModDest::LfoRate, 1, 1.0f / 3.0f}; });
+    auto flat = lfo2([](VoiceParams& v) { v.modMatrix[1] = ModRoute{ModSource::Velocity, ModDest::LfoDepth, 1, -1.0f}; });
+    std::printf("  (LFO2 2 Hz: alto/baixo em 4 Hz -- normal %.2f, LfoRate x2 %.2f, LfoDepth -1 %.2f)\n", base[0] / base[1],
+                fast[0] / fast[1], flat[0] / flat[1]);
+    check(std::fabs(base[0] / base[1] - 1.0f) < 0.05f && std::fabs(fast[0] / fast[1] - 3.0f) < 0.15f && std::fabs(flat[0] / flat[1] - 1.0f) < 0.02f,
+          "destinos LfoRate (+1/3 = dobro da velocidade) e LfoDepth (-1 = LFO desligado)");
+}
+
+static void testModulationJson() {
+    VoiceParams v;
+    v.lfo3.tempoSync = true;
+    v.lfo3.division = 11; // 1/8T
+    v.lfo4.wave = LfoWave::SmoothRandom;
+    v.modEnv[2].rate[1] = 12;
+    v.modEnv[2].level[2] = 33;
+    v.modMatrix[13] = ModRoute{ModSource::Env3, ModDest::LfoRate, 3, -0.25f};
+    v.modMatrix[14] = ModRoute{ModSource::LFO4, ModDest::OperatorFx2, 5, 0.5f};
+    VoiceParams back = voiceParamsFromJson(JsonValue::parse(voiceParamsToJson(v).dump()));
+    bool ok = back.lfo3.tempoSync && back.lfo3.division == 11 && back.lfo4.wave == LfoWave::SmoothRandom && back.modEnv[2].rate[1] == 12 &&
+              back.modEnv[2].level[2] == 33 && back.modMatrix[13].src == ModSource::Env3 && back.modMatrix[13].dest == ModDest::LfoRate &&
+              back.modMatrix[13].opIndex == 3 && back.modMatrix[14].dest == ModDest::OperatorFx2;
+    check(ok, "LFO3/4 (sync, divisao, SmoothRandom), envelopes de modulacao e 16 rotas sobrevivem ao JSON");
+    // patch antigo: 8 rotas, sem lfo3/lfo4/modEnv
+    VoiceParams oldStyle;
+    oldStyle.modMatrix[2] = ModRoute{ModSource::ModWheel, ModDest::OperatorLevel, 1, 0.3f};
+    JsonValue j = voiceParamsToJson(oldStyle);
+    std::string txt = j.dump();
+    auto cut = [&](const char* key) { // apaga "key": {...} ou [...] do texto
+        size_t at = txt.find(std::string("\"") + key + "\"");
+        if (at == std::string::npos) return;
+        size_t open = txt.find_first_of("{[", at);
+        int depth = 0;
+        size_t i = open;
+        for (; i < txt.size(); ++i) { if (txt[i] == '{' || txt[i] == '[') ++depth; if (txt[i] == '}' || txt[i] == ']') if (--depth == 0) break; }
+        size_t end = txt.find_first_not_of(" \n,", i + 1);
+        txt.erase(at, end - at);
+    };
+    cut("lfo3");
+    cut("lfo4");
+    cut("modEnv");
+    VoiceParams loaded = voiceParamsFromJson(JsonValue::parse(txt));
+    const VoiceParams defaults;
+    check(txt.find("lfo3") == std::string::npos && loaded.modMatrix[2].src == ModSource::ModWheel && !loaded.lfo3.tempoSync &&
+              loaded.modEnv[0].rate[0] == defaults.modEnv[0].rate[0] && loaded.modMatrix[12].src == ModSource::None,
+          "patch sem LFO3/4 e envelopes de modulacao carrega com os padroes");
+}
+
 static void testAdditiveSilentWhenAllAmpsZero() {
     auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
     bool ok = true;
@@ -3449,6 +3617,11 @@ int main() {
     testWavegenImport();
     testWavetableBankCache();
     testWavetableCost();
+    testModEnvelopeAsSource();
+    testLfoTempoSync();
+    testLfoSmoothRandom();
+    testNewModDestinations();
+    testModulationJson();
     testAdditiveEditorAxes();
     testAdditivePaintStroke();
     testAdditivePresetsAreValid();

@@ -139,8 +139,7 @@ public:
     void setSampleRate(double sr) {
         baseSampleRate_ = sr;
         sampleRate_ = sr * oversampleFactor_;
-        lfo1_.setSampleRate(sampleRate_);
-        lfo2_.setSampleRate(sampleRate_);
+        for (auto& l : lfos_) l.setSampleRate(sampleRate_);
         for (auto& op : ops_) {
             op.filter.setSampleRate(sampleRate_);
             op.crusher.setSampleRate(sampleRate_);
@@ -201,10 +200,15 @@ public:
             }
             peg_.configure(patch_->peg.rate, patch_->peg.level);
             peg_.noteOn(0.0f, static_cast<float>(patch_->peg.level[3]));
-            lfo1_.configure(patch_->lfo1);
-            lfo2_.configure(patch_->lfo2);
-            lfo1_.noteOn();
-            lfo2_.noteOn();
+            for (int k = 0; k < kNumLfos; ++k) {
+                lfos_[k].configure(patch_->lfo(k));
+                lfos_[k].noteOn();
+                lfoRateMul_[k] = lfoDepthMul_[k] = 1.0f;
+            }
+            for (int k = 0; k < kNumModEnvs; ++k) { // comecam no level[3], como o PEG
+                modEnv_[k].configure(patch_->modEnv[k].rate, patch_->modEnv[k].level);
+                modEnv_[k].noteOn(0.0f, static_cast<float>(patch_->modEnv[k].level[3]));
+            }
         }
     }
 
@@ -216,6 +220,7 @@ public:
             if (patch_->op[i].fxEGReleaseWithAmp) ops_[i].fxEG.noteOff();
         }
         peg_.noteOff();
+        for (auto& e : modEnv_) e.noteOff();
     }
 
     void setGlide(bool enabled, float timeSec) { glideEnabled_ = enabled; glideTimeSec_ = timeSec; }
@@ -225,6 +230,12 @@ public:
     // nao contam: sem portadora audivel a voz e silencio, mesmo que um
     // modulador ainda esteja no release.
     bool isActive() const { return active_ && anyCarrierSounding(); }
+
+    // [2026-10-22] pan vindo da matriz (ModDest::VoicePan) na ultima amostra;
+    // o Synth soma no pan da parte quando o patch usa esse destino
+    float panMod() const { return panMod_; }
+    // BPM global pros LFOs sincronizados (o Synth atualiza a cada bloco)
+    void setTempo(float bpm) { for (auto& l : lfos_) l.setTempo(bpm); }
 
     // Estimativa de "quanto essa voz pesa" no mix (0..1): maior amplitude de
     // envelope entre as portadoras. Usada pela compensacao de polifonia, pra
@@ -356,6 +367,24 @@ private:
         cachedPatch_ = patch_;
         cachedCompiled_ = compiled_;
         cachedGeneration_ = generation_;
+        // [2026-10-22] modulacao: so as rotas ativas e so os LFOs/envelopes que
+        // alguem usa rodam por amostra (a matriz tem 16 rotas, quase sempre vazias)
+        numRoutes_ = 0;
+        for (int k = 0; k < kNumLfos; ++k) lfoRateMul_[k] = lfoDepthMul_[k] = 1.0f; // rota removida: nao fica preso no valor antigo
+        for (int k = 0; k < kNumLfos; ++k) lfoUsed_[k] = v.lfo(k).pitchDepth != 0.0f || v.lfo(k).ampDepth != 0.0f;
+        for (bool& e : envUsed_) e = false;
+        for (int r = 0; r < kNumModRoutes; ++r) {
+            const auto& route = v.modMatrix[r];
+            if (route.src == ModSource::None || route.dest == ModDest::None) continue;
+            routes_[numRoutes_++] = static_cast<uint8_t>(r);
+            if (route.src == ModSource::LFO1) lfoUsed_[0] = true;
+            if (route.src == ModSource::LFO2) lfoUsed_[1] = true;
+            if (route.src == ModSource::LFO3) lfoUsed_[2] = true;
+            if (route.src == ModSource::LFO4) lfoUsed_[3] = true;
+            if (route.src == ModSource::Env1) envUsed_[0] = true;
+            if (route.src == ModSource::Env2) envUsed_[1] = true;
+            if (route.src == ModSource::Env3) envUsed_[2] = true;
+        }
         cacheValid_ = true;
     }
 
@@ -382,9 +411,19 @@ private:
             currentLog2_ = targetLog2_;
         }
 
-        // 2. LFOs
-        float lfo1v = lfo1_.process();
-        float lfo2v = lfo2_.process();
+        // 2. LFOs (rate/profundidade modulados pela matriz na amostra ANTERIOR)
+        // (LFO/envelope que ninguem usa nao roda -- ver rebuildCache)
+        float lfoV[kNumLfos] = {};
+        for (int k = 0; k < kNumLfos; ++k) {
+            if (!lfoUsed_[k]) continue;
+            lfoV[k] = lfos_[k].process(lfoRateMul_[k]);
+            if (lfoDepthMul_[k] != 1.0f) lfoV[k] *= lfoDepthMul_[k];
+        }
+        const float lfo1v = lfoV[0], lfo2v = lfoV[1];
+        // envelopes de modulacao (fontes Env1..Env3, 0..1)
+        float envV[kNumModEnvs] = {};
+        for (int k = 0; k < kNumModEnvs; ++k)
+            if (envUsed_[k]) envV[k] = modEnv_[k].process(sampleRate_) * (1.0f / 99.0f);
 
         // 3. PEG
         float pegRaw = peg_.process(sampleRate_);
@@ -396,11 +435,13 @@ private:
         float fx1Trim[kNumOps] = {};
         float morphTrim[kNumOps] = {};
         float fbTrim[kNumOps] = {};
-        float voicePitchTrimSemis = 0.0f;
+        float opPitchTrimSemis[kNumOps] = {};
+        float fx2Trim[kNumOps] = {};
+        float voicePitchTrimSemis = 0.0f, voicePanTrim = 0.0f, voiceLevelTrim = 0.0f;
+        float lfoRateTrim[kNumLfos] = {}, lfoDepthTrim[kNumLfos] = {};
 
-        for (int r = 0; r < kNumModRoutes; ++r) {
-            const auto& route = patch_->modMatrix[r];
-            if (route.src == ModSource::None || route.dest == ModDest::None) continue;
+        for (int ri = 0; ri < numRoutes_; ++ri) {
+            const auto& route = patch_->modMatrix[routes_[ri]];
             float srcVal = 0.0f;
             switch (route.src) {
                 case ModSource::LFO1:      srcVal = lfo1v; break;
@@ -411,6 +452,11 @@ private:
                 case ModSource::PitchBend: srcVal = controllers_.pitchBendSemis / std::max(0.01f, bendRangeSemis_); break;
                 case ModSource::KeyNote:   srcVal = std::clamp((static_cast<float>(note_) - 60.0f) / 60.0f, -1.0f, 1.0f); break;
                 case ModSource::Velocity:  srcVal = static_cast<float>(velocity_) / 127.0f; break;
+                case ModSource::LFO3:      srcVal = lfoV[2]; break;
+                case ModSource::LFO4:      srcVal = lfoV[3]; break;
+                case ModSource::Env1:      srcVal = envV[0]; break;
+                case ModSource::Env2:      srcVal = envV[1]; break;
+                case ModSource::Env3:      srcVal = envV[2]; break;
                 default: break;
             }
             float amount = srcVal * route.depth;
@@ -421,6 +467,12 @@ private:
                 case ModDest::OperatorMorph:    if (oi >= 0 && oi < kNumOps) morphTrim[oi] += amount; break;
                 case ModDest::OperatorFeedback: if (oi >= 0 && oi < kNumOps) fbTrim[oi] += amount; break;
                 case ModDest::VoicePitch:       voicePitchTrimSemis += amount * 12.0f; break;
+                case ModDest::VoicePan:         voicePanTrim += amount; break;
+                case ModDest::VoiceLevel:       voiceLevelTrim += amount; break;
+                case ModDest::OperatorPitch:    if (oi >= 0 && oi < kNumOps) opPitchTrimSemis[oi] += amount * 12.0f; break;
+                case ModDest::OperatorFx2:      if (oi >= 0 && oi < kNumOps) fx2Trim[oi] += amount; break;
+                case ModDest::LfoRate:          if (oi >= 0 && oi < kNumLfos) lfoRateTrim[oi] += amount; break;
+                case ModDest::LfoDepth:         if (oi >= 0 && oi < kNumLfos) lfoDepthTrim[oi] += amount; break;
                 default: break;
             }
         }
@@ -428,8 +480,17 @@ private:
         // pitch comum a todos os operadores da voz (bend + mod matrix) e
         // vibrato antes da sensibilidade de cada operador
         const float voiceSemis = controllers_.pitchBendSemis + voicePitchTrimSemis;
-        const float vibratoRaw = lfo1v * patch_->lfo1.pitchDepth + lfo2v * patch_->lfo2.pitchDepth;
-        const float tremoloRaw = lfo1v * patch_->lfo1.ampDepth + lfo2v * patch_->lfo2.ampDepth;
+        const float vibratoRaw = lfo1v * patch_->lfo1.pitchDepth + lfo2v * patch_->lfo2.pitchDepth +
+                                 lfoV[2] * patch_->lfo3.pitchDepth + lfoV[3] * patch_->lfo4.pitchDepth;
+        const float tremoloRaw = lfo1v * patch_->lfo1.ampDepth + lfo2v * patch_->lfo2.ampDepth +
+                                 lfoV[2] * patch_->lfo3.ampDepth + lfoV[3] * patch_->lfo4.ampDepth;
+        // rate/profundidade dos LFOs: valem a partir da PROXIMA amostra
+        if (numRoutes_ > 0)
+            for (int k = 0; k < kNumLfos; ++k) {
+                lfoRateMul_[k] = lfoRateTrim[k] != 0.0f ? std::exp2(3.0f * lfoRateTrim[k]) : 1.0f;
+                lfoDepthMul_[k] = std::max(0.0f, 1.0f + lfoDepthTrim[k]);
+            }
+        panMod_ = voicePanTrim;
         const double invSr = 1.0 / sampleRate_;
 
         // 5. operadores, na ordem compilada
@@ -453,6 +514,7 @@ private:
             // a. frequencia: 1 exp2 por operador (antes: 4 pow), e nenhuma
             // quando nao ha PEG/vibrato/bend
             float semis = voiceSemis + vibratoRaw * c.pitchSens + (c.pegApplies ? pegSemis * c.pegDepth : 0.0f);
+            if (opPitchTrimSemis[i] != 0.0f) semis += opPitchTrimSemis[i];
             float freqHz = c.fixed ? c.baseHz : currentHz_ * c.baseHz;
             if (semis != 0.0f) freqHz *= std::exp2(semis * (1.0f / 12.0f));
 
@@ -503,6 +565,7 @@ private:
 
             // e. fx slot do operador, com fxEG modulando fxParam1
             float fx1 = opParams.fxParam1 * (1.0f + fx1Trim[i]);
+            const float fx2 = fx2Trim[i] != 0.0f ? opParams.fxParam2 * (1.0f + fx2Trim[i]) : opParams.fxParam2;
             // key tracking do efeito: segue a altura ATUAL da voz (com glide;
             // sem bend/vibrato), relativa ao C4. exp2 so quando a altura muda.
             if (opParams.fxKeyTrack > 0.0f) {
@@ -518,19 +581,19 @@ private:
                 case FxType::Bypass: break;
                 case FxType::LowPass: {
                     float cutoff = std::max(20.0f, fx1 * (0.2f + 0.8f * (fxEnv / 99.0f)));
-                    op.filter.setParams(cutoff, std::max(0.1f, opParams.fxParam2));
+                    op.filter.setParams(cutoff, std::max(0.1f, fx2));
                     processed = op.filter.process(raw).lp;
                     break;
                 }
                 case FxType::BandPass: {
                     float cutoff = std::max(20.0f, fx1 * (0.2f + 0.8f * (fxEnv / 99.0f)));
-                    op.filter.setParams(cutoff, std::max(0.1f, opParams.fxParam2));
+                    op.filter.setParams(cutoff, std::max(0.1f, fx2));
                     processed = op.filter.process(raw).bp;
                     break;
                 }
                 case FxType::HighPass: {
                     float cutoff = std::max(20.0f, fx1 * (0.2f + 0.8f * (fxEnv / 99.0f)));
-                    op.filter.setParams(cutoff, std::max(0.1f, opParams.fxParam2));
+                    op.filter.setParams(cutoff, std::max(0.1f, fx2));
                     processed = op.filter.process(raw).hp;
                     break;
                 }
@@ -540,10 +603,10 @@ private:
                     processed = raw * srcSig;
                     break;
                 }
-                case FxType::Saturate: processed = softSaturate(raw, opParams.fxParam2); break;
-                case FxType::Crush:    processed = op.crusher.process(raw, fx1, opParams.fxParam2 * 16.0f); break;
+                case FxType::Saturate: processed = softSaturate(raw, fx2); break;
+                case FxType::Crush:    processed = op.crusher.process(raw, fx1, fx2 * 16.0f); break;
                 case FxType::FreqShift:processed = op.shifter.process(raw, fx1); break;
-                case FxType::Comb:     processed = op.comb.process(raw, fx1, opParams.fxParam2); break;
+                case FxType::Comb:     processed = op.comb.process(raw, fx1, fx2); break;
                 case FxType::Fold: {
                     // FX1 = drive (1 = sem dobra, ate 16), modulado pelo fxEG do
                     // mesmo jeito que o corte do filtro: 20% no nivel 0 do
@@ -553,7 +616,7 @@ private:
                     // tambem (e DC, removido pelo dcBlock).
                     float maxDrive = std::clamp(fx1, 1.0f, 16.0f);
                     float drive = 1.0f + (maxDrive - 1.0f) * (0.2f + 0.8f * (fxEnv / 99.0f));
-                    float bias = std::clamp(opParams.fxParam2, 0.0f, 1.0f);
+                    float bias = std::clamp(fx2, 0.0f, 1.0f);
                     processed = triangleFold(raw * drive + bias);
                     if (bias > 0.0f) processed = op.dcBlock.process(processed);
                     break;
@@ -588,6 +651,7 @@ private:
         float sum = 0.0f;
         for (int i = 0; i < kNumOps; ++i) sum += ops_[i].signal * patch_->matrix.outputMix[i];
         for (auto& op : ops_) { op.prevPrevOut = op.prevOut; op.prevOut = op.signal; }
+        if (voiceLevelTrim != 0.0f) sum *= std::max(0.0f, 1.0f + voiceLevelTrim); // ModDest::VoiceLevel
 
         // 7. idle check
         if (!anyCarrierSounding()) active_ = false;
@@ -647,10 +711,17 @@ private:
     const CompiledAlgorithm* cachedCompiled_ = nullptr;
     uint64_t generation_ = 0, cachedGeneration_ = 0;
     bool cacheValid_ = false;
+    // rotas ativas da matriz e LFOs/envelopes usados (rebuildCache)
+    uint8_t routes_[kNumModRoutes] = {};
+    int numRoutes_ = 0;
+    bool lfoUsed_[kNumLfos] = {}, envUsed_[kNumModEnvs] = {};
 
     OperatorState ops_[kNumOps];
     SegmentEG peg_;
-    LFO lfo1_, lfo2_;
+    SegmentEG modEnv_[kNumModEnvs];
+    LFO lfos_[kNumLfos];
+    float lfoRateMul_[kNumLfos] = {1.0f, 1.0f, 1.0f, 1.0f}, lfoDepthMul_[kNumLfos] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float panMod_ = 0.0f;
     VoiceControllers controllers_;
     std::mt19937 rng_{std::random_device{}()};
     std::uniform_real_distribution<float> dist_{-1.0f, 1.0f};

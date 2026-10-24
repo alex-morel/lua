@@ -140,16 +140,23 @@ public:
         delayTimer_ = 0.0f;
     }
 
-    float process() {
+    // [2026-10-22] BPM global pros LFOs com tempoSync (o Synth atualiza)
+    void setTempo(float bpm) { tempoBpm_ = bpm; }
+
+    // rateMul: multiplicador da velocidade (ModDest::LfoRate); 1 = sem modulacao
+    float process(float rateMul = 1.0f) {
         float fade = 1.0f;
         if (params_.delaySec > 0.0f) {
             delayTimer_ += static_cast<float>(1.0 / sampleRate_);
             fade = std::clamp(delayTimer_ / params_.delaySec, 0.0f, 1.0f);
         }
-        phase_ += params_.rate / sampleRate_;
+        double rate = params_.tempoSync ? tempoBpm_ / (60.0 * lfoDivisionBeats(params_.division)) : params_.rate;
+        if (rateMul != 1.0f) rate *= rateMul;
+        phase_ += rate / sampleRate_;
         if (phase_ >= 1.0) {
             phase_ -= std::floor(phase_);
             if (params_.wave == LfoWave::SampleHold) shValue_ = dist_(rng_);
+            if (params_.wave == LfoWave::SmoothRandom) { smoothFrom_ = smoothTo_; smoothTo_ = dist_(rng_); }
         }
         return waveValue(phase_) * fade;
     }
@@ -164,6 +171,8 @@ private:
             case LfoWave::Square:   return t < 0.5f ? 1.0f : -1.0f;
             case LfoWave::Sine:     return fastSin01(t);
             case LfoWave::SampleHold: return shValue_;
+            case LfoWave::SmoothRandom: // transicao em cosseno do valor anterior ao sorteado
+                return smoothFrom_ + (smoothTo_ - smoothFrom_) * (0.5f - 0.5f * fastSin01(0.25f + 0.5f * t));
         }
         return 0.0f;
     }
@@ -173,6 +182,8 @@ private:
     double phase_ = 0.0;
     float delayTimer_ = 0.0f;
     float shValue_ = 0.0f;
+    float smoothFrom_ = 0.0f, smoothTo_ = 0.0f;
+    double tempoBpm_ = 120.0;
     std::mt19937 rng_{std::random_device{}()};
     std::uniform_real_distribution<float> dist_{-1.0f, 1.0f};
 };

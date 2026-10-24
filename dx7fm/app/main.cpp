@@ -536,21 +536,30 @@ bool DrawMatrix(AlgorithmMatrix& m) {
 
 bool DrawLfo(const char* label, LFOParams& lfo) {
     bool changed = false;
-    static const char* kWave[] = {"Triangle", "SawUp", "SawDown", "Square", "Sine", "SampleHold"};
+    static const char* kWave[] = {"Triangle", "SawUp", "SawDown", "Square", "Sine", "SampleHold", "SmoothRandom"};
     ImGui::PushID(label);
     int wave = static_cast<int>(lfo.wave);
-    ImGui::SetNextItemWidth(110);
-    if (ImGui::Combo("##forma", &wave, kWave, IM_ARRAYSIZE(kWave))) { lfo.wave = static_cast<LfoWave>(wave); changed = true; }
-    ImGui::SetItemTooltip("Forma de onda do LFO");
+    ImGui::SetNextItemWidth(92);
+    if (ImGui::Combo("##forma", &wave, kWave, IM_ARRAYSIZE(kWave), IM_ARRAYSIZE(kWave))) { lfo.wave = static_cast<LfoWave>(wave); changed = true; }
+    ImGui::SetItemTooltip("Forma de onda do LFO (SmoothRandom = aleatorio com transicao suave)");
     ImGui::SameLine();
     changed |= ImGui::Checkbox("Key sync", &lfo.keySync);
+    ImGui::SetItemTooltip("Reinicia o ciclo a cada nota");
+    ImGui::SameLine();
+    changed |= ImGui::Checkbox("Sync", &lfo.tempoSync);
+    ImGui::SetItemTooltip("Velocidade em divisoes do BPM (knob BPM no topo) em vez de Hz");
     ui::KnobStyle ks;
     ks.color = ui::col::kAccent2;
     ks.size = 38.0f;
     ks.cellWidth = 56.0f; // 4 knobs em meia coluna
     ui::KnobStyle ksLog = ks;
     ksLog.logarithmic = true;
-    changed |= ui::Knob("Rate", &lfo.rate, 0.01f, 50.0f, 5.0f, "%.2f Hz", ksLog);
+    if (lfo.tempoSync) {
+        int div = lfo.division; // 4/1 (lento) .. 1/32 (rapido); "." = pontuada, "T" = tercina
+        if (ui::KnobInt("Divisao", &div, 0, kNumLfoDivisions - 1, 6, lfoDivisionName(div), ks)) { lfo.division = static_cast<uint8_t>(div); changed = true; }
+    } else {
+        changed |= ui::Knob("Rate", &lfo.rate, 0.01f, 50.0f, 5.0f, "%.2f Hz", ksLog);
+    }
     ImGui::SameLine(); changed |= ui::Knob("Delay", &lfo.delaySec, 0.0f, 10.0f, 0.0f, "%.2f s", ks);
     ImGui::SameLine(); changed |= ui::Knob("Pitch", &lfo.pitchDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
     ImGui::SameLine(); changed |= ui::Knob("Amp", &lfo.ampDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
@@ -566,11 +575,78 @@ bool DrawPeg(PEGParams& peg) {
     changed |= ui::Knob("Range", &peg.rangeOctaves, 0.1f, 8.0f, 4.0f, "%.1f oit", ks);
     return changed;
 }
+// [ADICIONADO em 2026-10-22] Envelopes de modulacao (estilo DX, comecam no
+// level 4 como o PEG): uma aba por envelope, curva + knobs. So fontes da
+// matriz (Env1..Env3) -- sozinhos nao fazem nada.
+void DrawEnvCurve(const EGParams& eg, ImU32 color, ImVec2 size) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(size);
+    const ImVec2 p1(p0.x + size.x, p0.y + size.y);
+    dl->AddRectFilled(p0, p1, ui::rgb(14, 16, 22), 6.0f);
+    const auto t = dx7fm_app::egTimes(eg, eg.level[3]);
+    const float hold = std::max(0.15f, 0.25f * t.untilSustain()); // trecho de sustain so pra visualizar
+    const float total = t.untilSustain() + hold + t.stage[3];
+    auto pt = [&](float sec, float level) {
+        return ImVec2(p0.x + 4 + (size.x - 8) * sec / std::max(total, 1e-3f), p1.y - 4 - (size.y - 8) * level / 99.0f);
+    };
+    float sec = 0.0f;
+    ImVec2 pts[6];
+    pts[0] = pt(0.0f, eg.level[3]);
+    for (int k = 0; k < 3; ++k) { sec += t.stage[k]; pts[k + 1] = pt(sec, eg.level[k]); }
+    sec += hold;
+    pts[4] = pt(sec, eg.level[2]);
+    pts[5] = pt(sec + t.stage[3], eg.level[3]);
+    dl->AddPolyline(pts, 6, color, 0, 2.0f);
+    dl->AddLine(ImVec2(pts[4].x, p0.y + 3), ImVec2(pts[4].x, p1.y - 3), ui::rgb(255, 255, 255, 50));
+    char lbl[48];
+    std::snprintf(lbl, sizeof lbl, "%.2fs ate o sustain", t.untilSustain());
+    dl->AddText(ImVec2(p0.x + 6, p0.y + 3), ui::col::kTextDim, lbl);
+}
+
+bool DrawModEnvelopes(VoiceParams& v) {
+    bool changed = false;
+    ImGui::TextDisabled("Fontes Env1..Env3 da matriz de modulacao (0..1 = level/99)");
+    if (ImGui::BeginTabBar("##modenvs")) {
+        for (int k = 0; k < kNumModEnvs; ++k) {
+            char tab[16];
+            std::snprintf(tab, sizeof tab, "Env %d", k + 1);
+            if (ImGui::BeginTabItem(tab)) {
+                ImGui::PushID(k);
+                DrawEnvCurve(v.modEnv[k], ui::col::kAccent2, ImVec2(ImGui::GetContentRegionAvail().x, 70.0f));
+                static const uint8_t kDefRate[4] = {60, 45, 45, 45}, kDefLevel[4] = {99, 70, 50, 0};
+                changed |= DrawEGKnobs("modenv", v.modEnv[k].rate, v.modEnv[k].level, ui::col::kAccent2, true, kDefRate, kDefLevel);
+                ImGui::PopID();
+                ImGui::EndTabItem();
+            }
+        }
+        ImGui::EndTabBar();
+    }
+    return changed;
+}
+
 bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
     bool changed = false;
-    static const char* kSrc[] = {"None", "LFO1", "LFO2", "ModWheel", "ChannelAT", "PolyAT", "PitchBend", "Nota", "Velocity"};
-    static const char* kDst[] = {"None", "OperatorLevel", "OperatorFx1", "OperatorFeedback", "VoicePitch", "OperatorMorph"};
-    ImGui::TextDisabled("LFO/aftertouch/mod wheel/nota/velocity -> parametros");
+    static const char* kSrc[] = {"None", "LFO1", "LFO2", "ModWheel", "ChannelAT", "PolyAT", "PitchBend", "Nota", "Velocity",
+                                 "LFO3", "LFO4", "Env1", "Env2", "Env3"};
+    static const char* kDst[] = {"None", "OperatorLevel", "OperatorFx1", "OperatorFeedback", "VoicePitch", "OperatorMorph",
+                                 "VoicePan", "VoiceLevel", "OperatorPitch", "OperatorFx2", "LfoRate", "LfoDepth"};
+    static const char* kDstTip[] = {"", "nivel do operador x (1 + quantidade)", "FX1 do operador x (1 + quantidade): corte, taxa, afinacao, drive",
+                                    "feedback do operador + quantidade", "afinacao da voz inteira, quantidade x 12 semitons",
+                                    "morph A->B da Additive/Wavetable + quantidade", "pan da voz + quantidade (-1 esquerda, +1 direita)",
+                                    "volume da voz x (1 + quantidade)", "afinacao SO do operador, quantidade x 12 semitons",
+                                    "FX2 do operador x (1 + quantidade): Q, drive, bits, feedback, simetria",
+                                    "velocidade do LFO escolhido x 2^(3 x quantidade): +-3 oitavas",
+                                    "saida do LFO escolhido x (1 + quantidade): -1 desliga"};
+    // so as rotas em uso + 1 vazia (as 16 com o checkbox)
+    static bool showAll = false;
+    int lastUsed = -1;
+    for (int i = 0; i < kNumModRoutes; ++i)
+        if (routes[i].src != ModSource::None || routes[i].dest != ModDest::None) lastUsed = i;
+    const int visible = showAll ? kNumModRoutes : std::min(kNumModRoutes, std::max(lastUsed + 2, 4));
+    ImGui::TextDisabled("LFOs/envelopes/controladores/nota/velocity -> parametros");
+    ImGui::SameLine();
+    ImGui::Checkbox("Mostrar as 16", &showAll);
     if (ImGui::BeginTable("modmatrix", 5, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("#");
         ImGui::TableSetupColumn("Fonte");
@@ -578,7 +654,7 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
         ImGui::TableSetupColumn("Op");
         ImGui::TableSetupColumn("Profundidade");
         ImGui::TableHeadersRow();
-        for (int i = 0; i < kNumModRoutes; ++i) {
+        for (int i = 0; i < visible; ++i) {
             auto& r = routes[i];
             ImGui::PushID(i);
             ImGui::TableNextRow();
@@ -594,14 +670,23 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
             ImGui::TableSetColumnIndex(2);
             int dst = static_cast<int>(r.dest);
             ImGui::SetNextItemWidth(140);
-            if (ImGui::Combo("##dst", &dst, kDst, IM_ARRAYSIZE(kDst))) { r.dest = static_cast<ModDest>(dst); changed = true; }
+            if (ImGui::Combo("##dst", &dst, kDst, IM_ARRAYSIZE(kDst), IM_ARRAYSIZE(kDst))) {
+                r.dest = static_cast<ModDest>(dst);
+                if (modDestPerLfo(r.dest)) r.opIndex = std::min(r.opIndex, kNumLfos - 1);
+                changed = true;
+            }
+            if (ImGui::IsItemHovered() && r.dest != ModDest::None) ImGui::SetTooltip("%s", kDstTip[static_cast<int>(r.dest)]);
             ImGui::TableSetColumnIndex(3);
             static const char* kOps[] = {"Op1", "Op2", "Op3", "Op4", "Op5", "Op6", "Op7", "Op8"};
+            static const char* kLfos[] = {"LFO1", "LFO2", "LFO3", "LFO4"};
             ImGui::SetNextItemWidth(62);
-            bool perOp = r.dest != ModDest::VoicePitch && r.dest != ModDest::None;
-            ImGui::BeginDisabled(!perOp);
-            if (ImGui::Combo("##op", &r.opIndex, kOps, kNumOps)) changed = true;
-            ImGui::EndDisabled();
+            if (modDestPerLfo(r.dest)) { // o alvo e um LFO, nao um operador
+                if (ImGui::Combo("##lfo", &r.opIndex, kLfos, kNumLfos)) changed = true;
+            } else {
+                ImGui::BeginDisabled(!modDestPerOperator(r.dest));
+                if (ImGui::Combo("##op", &r.opIndex, kOps, kNumOps)) changed = true;
+                ImGui::EndDisabled();
+            }
             ImGui::TableSetColumnIndex(4);
             ImGui::SetNextItemWidth(70);
             changed |= ImGui::DragFloat("##depth", &r.depth, 0.005f, -1.0f, 1.0f, "%+.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -958,17 +1043,21 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
     ui::EndCard();
 
     if (ui::BeginCard("##card_lfo", "LFOs", 0.0f, ui::col::kAccent2)) {
-        if (ImGui::BeginTable("##lfos", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV)) {
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            ImGui::TextDisabled("LFO 1");
-            changed |= DrawLfo("LFO 1", pp.voice.lfo1);
-            ImGui::TableSetColumnIndex(1);
-            ImGui::TextDisabled("LFO 2");
-            changed |= DrawLfo("LFO 2", pp.voice.lfo2);
+        // [2026-10-22] 4 LFOs (2x2). Pitch/Amp = vibrato/tremolo direto; os 4 tambem sao fontes da matriz
+        if (ImGui::BeginTable("##lfos", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersInnerH)) {
+            for (int k = 0; k < kNumLfos; ++k) {
+                if (k % 2 == 0) ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(k % 2);
+                char name[8];
+                std::snprintf(name, sizeof name, "LFO %d", k + 1);
+                ImGui::TextDisabled("%s", name);
+                changed |= DrawLfo(name, pp.voice.lfo(k));
+            }
             ImGui::EndTable();
         }
     }
+    ui::EndCard();
+    if (ui::BeginCard("##card_modenv", "ENVELOPES DE MODULACAO", 0.0f, ui::col::kAccent2)) changed |= DrawModEnvelopes(pp.voice);
     ui::EndCard();
     if (ui::BeginCard("##card_modm", "MATRIZ DE MODULACAO", 0.0f, ui::col::kAccent2)) changed |= DrawModMatrix(pp.voice.modMatrix);
     ui::EndCard();
@@ -1271,7 +1360,7 @@ void DrawTopBar(AppState& app) {
     if (ImGui::BeginTable("##hdr", 3, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("logo", ImGuiTableColumnFlags_WidthFixed, 150.0f);
         ImGui::TableSetupColumn("status", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("saida", ImGuiTableColumnFlags_WidthFixed, 300.0f);
+        ImGui::TableSetupColumn("saida", ImGuiTableColumnFlags_WidthFixed, 380.0f); // medidores (200) + knobs BPM e Volume
         ImGui::TableNextRow();
 
         // logo
@@ -1319,6 +1408,11 @@ void DrawTopBar(AppState& app) {
         static float volumeDb = 0.0f;
         ui::KnobStyle ks;
         ks.size = 34.0f;
+        // [2026-10-22] BPM global dos LFOs com Sync (estado do app, nao do patch)
+        float bpm = app.synth.tempoBpm();
+        if (ui::Knob("BPM", &bpm, 20.0f, 300.0f, 120.0f, "%.0f", ks)) app.synth.setTempoBpm(std::round(bpm));
+        ImGui::SetItemTooltip("Tempo dos LFOs com Sync (todas as partes). Arraste, ou botao direito pra digitar.");
+        ImGui::SameLine();
         if (ui::Knob("Volume", &volumeDb, -60.0f, 6.0f, 0.0f, volumeDb <= -60.0f ? "mudo" : "%.1f dB", ks))
             app.synth.setMasterVolume(volumeDb <= -60.0f ? 0.0f : dbToLinear(volumeDb));
         ImGui::EndTable();

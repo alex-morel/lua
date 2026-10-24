@@ -9,7 +9,9 @@
 namespace dx7fm {
 
 constexpr int kNumOps = 8;
-constexpr int kNumModRoutes = 8;
+constexpr int kNumModRoutes = 16; // [2026-10-22] era 8; patches antigos carregam as 8 primeiras
+constexpr int kNumLfos = 4;       // [2026-10-22] lfo1..lfo4 (eram 2)
+constexpr int kNumModEnvs = 3;    // [2026-10-22] envelopes de modulacao (so fontes da matriz)
 constexpr int kNumPartials = 64; // osciladores senoidais da forma de onda Additive (multiplo de 8: kernel SIMD)
 constexpr float kMaxPartialRatio = 128.0f; // razao maxima de um parcial (64 harmonicos impares chegam a 127)
 constexpr int kWaveSize = 2048; // amostras de UM ciclo de onda da Waveform::Wavetable (= frame do Serum/Vital)
@@ -51,15 +53,35 @@ enum class FxType : uint8_t {
     Fold // [ADICIONADO em 2026-09-23] wavefolder; SEMPRE no fim, pra nao renumerar os anteriores
 };
 
-enum class LfoWave : uint8_t { Triangle, SawUp, SawDown, Square, Sine, SampleHold };
+// SmoothRandom [ADICIONADO em 2026-10-22, no fim]: S&H suave (um valor
+// aleatorio novo por ciclo, com transicao em cosseno ate ele).
+enum class LfoWave : uint8_t { Triangle, SawUp, SawDown, Square, Sine, SampleHold, SmoothRandom };
+
+// [ADICIONADO em 2026-10-22] divisoes de tempo do LFO sincronizado: duracao
+// de UM ciclo em batidas (seminimas) -- 1/4 = 1 batida, 1/4. = 1.5, 1/4T = 2/3.
+constexpr int kNumLfoDivisions = 16;
+inline const char* lfoDivisionName(int d) {
+    static const char* n[kNumLfoDivisions] = {"4/1", "2/1", "1/1", "1/2", "1/2.", "1/2T", "1/4", "1/4.",
+                                              "1/4T", "1/8", "1/8.", "1/8T", "1/16", "1/16.", "1/16T", "1/32"};
+    return n[d < 0 || d >= kNumLfoDivisions ? 6 : d];
+}
+inline float lfoDivisionBeats(int d) {
+    static const float b[kNumLfoDivisions] = {16.0f, 8.0f, 4.0f, 2.0f, 3.0f, 4.0f / 3.0f, 1.0f, 1.5f,
+                                              2.0f / 3.0f, 0.5f, 0.75f, 1.0f / 3.0f, 0.25f, 0.375f, 1.0f / 6.0f, 0.125f};
+    return b[d < 0 || d >= kNumLfoDivisions ? 6 : d];
+}
 
 struct LFOParams {
-    float rate = 5.0f;          // Hz
+    float rate = 5.0f;          // Hz (quando tempoSync = false)
     LfoWave wave = LfoWave::Triangle;
     float delaySec = 0.0f;
     bool keySync = false;
     float pitchDepth = 0.0f;    // 0..1, profundidade maxima
     float ampDepth = 0.0f;      // 0..1, profundidade maxima
+    // [ADICIONADO em 2026-10-22] sincronia com o BPM global (Synth::setTempoBpm):
+    // um ciclo dura lfoDivisionBeats(division) batidas
+    bool tempoSync = false;
+    uint8_t division = 6;       // indice em lfoDivisionName (6 = 1/4)
 };
 
 struct KeyLevelScaling {
@@ -140,9 +162,27 @@ struct OperatorParams {
 // KeyNote/Velocity [ADICIONADOS em 2026-10-20, no fim pra nao renumerar patches]:
 // KeyNote = (nota - 60) / 60, clampado -1..1 (C4 = 0, +1 cinco oitavas acima);
 // Velocity = velocity / 127 (0..1). Os dois sao fixos durante a nota.
-enum class ModSource : uint8_t { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend, KeyNote, Velocity };
+// LFO3/LFO4/Env1..Env3 [ADICIONADOS em 2026-10-22, no fim]: LFOs -1..1,
+// envelopes de modulacao 0..1 (nivel/99).
+enum class ModSource : uint8_t { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend, KeyNote, Velocity,
+                                 LFO3, LFO4, Env1, Env2, Env3 };
+// OperatorMorph: [ADICIONADO em 2026-10-18], soma na posicao do morph A->B (Additive/Wavetable).
+// [ADICIONADOS em 2026-10-22, no fim]:
+//   VoicePan      soma no pan da voz (-1..1; +1 = toda pra direita)
+//   VoiceLevel    volume da voz x max(0, 1 + quantidade)
+//   OperatorPitch afinacao do operador opIndex, quantidade x 12 semitons (como VoicePitch)
+//   OperatorFx2   fxParam2 do operador x (1 + quantidade) (Q, drive, bits, feedback, simetria)
+//   LfoRate       velocidade do LFO opIndex (0..3) x 2^(3 x quantidade): +-3 oitavas
+//   LfoDepth      saida do LFO opIndex x max(0, 1 + quantidade) (em todos os usos dele)
+// LfoRate/LfoDepth usam os valores da amostra ANTERIOR (um LFO pode modular o
+// proprio rate sem ciclo dentro da mesma amostra).
 enum class ModDest : uint8_t { None, OperatorLevel, OperatorFx1, OperatorFeedback, VoicePitch,
-                               OperatorMorph }; // OperatorMorph: [ADICIONADO em 2026-10-18], soma na posicao do morph A->B (Additive)
+                               OperatorMorph, VoicePan, VoiceLevel, OperatorPitch, OperatorFx2, LfoRate, LfoDepth };
+inline bool modDestPerOperator(ModDest d) {
+    return d == ModDest::OperatorLevel || d == ModDest::OperatorFx1 || d == ModDest::OperatorFeedback || d == ModDest::OperatorMorph ||
+           d == ModDest::OperatorPitch || d == ModDest::OperatorFx2;
+}
+inline bool modDestPerLfo(ModDest d) { return d == ModDest::LfoRate || d == ModDest::LfoDepth; }
 
 struct ModRoute {
     ModSource src = ModSource::None;
@@ -161,14 +201,25 @@ struct VoiceParams {
     OperatorParams op[kNumOps];
     AlgorithmMatrix matrix;
     PEGParams peg;
-    LFOParams lfo1, lfo2;
+    LFOParams lfo1, lfo2, lfo3, lfo4; // lfo3/lfo4 [2026-10-22]: mesmos campos (tambem tem pitch/amp depth)
+    // [ADICIONADO em 2026-10-22] envelopes de modulacao (estilo DX: 4 rates/4
+    // levels, comecam no level[3] como o PEG); fontes Env1..Env3 da matriz.
+    EGParams modEnv[kNumModEnvs];
     ModRoute modMatrix[kNumModRoutes];
+
+    LFOParams& lfo(int i) { return i == 0 ? lfo1 : i == 1 ? lfo2 : i == 2 ? lfo3 : lfo4; }
+    const LFOParams& lfo(int i) const { return i == 0 ? lfo1 : i == 1 ? lfo2 : i == 2 ? lfo3 : lfo4; }
 
     VoiceParams() {
         // patch minimo tocavel: op0 e a unica portadora, op1 modula op0
         matrix.outputMix[0] = 1.0f;
         matrix.mod[0][1] = 1.0f;
         op[1].outputLevel = 60;
+        // envelopes de modulacao: sobe em ~0.3s, decai pra 50 e solta em ~1s
+        for (auto& e : modEnv) {
+            const uint8_t r[4] = {60, 45, 45, 45}, l[4] = {99, 70, 50, 0};
+            for (int k = 0; k < 4; ++k) { e.rate[k] = r[k]; e.level[k] = l[k]; }
+        }
     }
 };
 
@@ -412,10 +463,11 @@ inline void sanitize(OperatorParams& o) {
 inline void sanitize(LFOParams& l) {
     using namespace detail;
     l.rate = sanF(l.rate, 0.01f, 50.0f, 5.0f);
-    l.wave = sanEnum(l.wave, LfoWave::SampleHold);
     l.delaySec = sanF(l.delaySec, 0.0f, 10.0f, 0.0f);
     l.pitchDepth = sanF(l.pitchDepth, 0.0f, 1.0f, 0.0f);
     l.ampDepth = sanF(l.ampDepth, 0.0f, 1.0f, 0.0f);
+    l.wave = sanEnum(l.wave, LfoWave::SmoothRandom);
+    l.division = static_cast<uint8_t>(std::min<int>(l.division, kNumLfoDivisions - 1));
 }
 
 inline void sanitize(VoiceParams& v) {
@@ -427,12 +479,12 @@ inline void sanitize(VoiceParams& v) {
     }
     sanEG(v.peg.rate, v.peg.level);
     v.peg.rangeOctaves = sanF(v.peg.rangeOctaves, 0.1f, 8.0f, 4.0f);
-    sanitize(v.lfo1);
-    sanitize(v.lfo2);
+    for (int i = 0; i < kNumLfos; ++i) sanitize(v.lfo(i));
+    for (auto& e : v.modEnv) sanEG(e.rate, e.level);
     for (auto& r : v.modMatrix) {
-        r.src = sanEnum(r.src, ModSource::Velocity);
-        r.dest = sanEnum(r.dest, ModDest::OperatorMorph);
-        r.opIndex = std::clamp(r.opIndex, 0, kNumOps - 1);
+        r.src = sanEnum(r.src, ModSource::Env3);
+        r.dest = sanEnum(r.dest, ModDest::LfoDepth);
+        r.opIndex = std::clamp(r.opIndex, 0, modDestPerLfo(r.dest) ? kNumLfos - 1 : kNumOps - 1);
         r.depth = sanF(r.depth, -1.0f, 1.0f, 0.0f);
     }
 }
