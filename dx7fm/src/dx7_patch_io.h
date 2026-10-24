@@ -833,6 +833,14 @@ inline JsonValue partParamsToJson(const PartParams& p) {
     j.set("reservedVoices", JsonValue::makeNumber(p.reservedVoices));
     j.set("enabled", JsonValue::makeBool(p.enabled));
     j.set("bendRangeSemis", JsonValue::makeNumber(p.bendRangeSemis));
+    if (!p.tuning.sclText.empty() || !p.tuning.kbmText.empty() || p.tuning.a4Hz != 440.0f) {
+        JsonValue t = JsonValue::makeObject();
+        t.set("scl", JsonValue::makeString(p.tuning.sclText));
+        t.set("kbm", JsonValue::makeString(p.tuning.kbmText));
+        t.set("name", JsonValue::makeString(p.tuning.name));
+        t.set("a4", JsonValue::makeNumber(p.tuning.a4Hz));
+        j.set("tuning", std::move(t));
+    }
     return j;
 }
 inline PartParams partParamsFromJson(const JsonValue& j) {
@@ -858,6 +866,12 @@ inline PartParams partParamsFromJson(const JsonValue& j) {
     p.reservedVoices = clampCast<int>(j.numberAt("reservedVoices", p.reservedVoices));
     p.enabled = j.boolAt("enabled", p.enabled);
     p.bendRangeSemis = clampCast<float>(j.numberAt("bendRangeSemis", p.bendRangeSemis));
+    if (auto* t = j.find("tuning")) {
+        p.tuning.sclText = t->stringAt("scl", "");
+        p.tuning.kbmText = t->stringAt("kbm", "");
+        p.tuning.name = t->stringAt("name", "");
+        p.tuning.a4Hz = std::clamp(clampCast<float>(t->numberAt("a4", 440.0)), 380.0f, 500.0f);
+    }
     sanitize(p);
     return p;
 }

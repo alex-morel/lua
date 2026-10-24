@@ -72,6 +72,7 @@ inline void copyPatchKeepingRouting(dx7fm::PartParams& dst, const dx7fm::PartPar
     dst.reservedVoices = keep.reservedVoices;
     dst.level = keep.level;
     dst.pan = keep.pan;
+    dst.tuning = keep.tuning; // [2026-10-24] afinacao e da parte, nao do som
 }
 
 // Impressao digital do SOM da parte (ignora o roteamento, ver acima): duas

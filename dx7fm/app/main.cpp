@@ -37,6 +37,8 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -137,6 +139,7 @@ struct AppState {
     };
     PartHistory hist[kNumParts];
     ABState ab[kNumParts];
+    ui::WavBrowser tuningBrowser; // [2026-10-24] escolha de .scl/.kbm (exts trocadas no main)
     ui::EnvelopeGraphState envGraph[kNumParts]; // visibilidade das curvas / arrasto, por parte
     double lastPatchScan = -1e9;
 };
@@ -855,6 +858,75 @@ bool DrawArp(ArpParams& a) {
     return changed;
 }
 
+// [ADICIONADO em 2026-10-24] Microafinacao da parte (Scala .scl + .kbm).
+// O texto dos arquivos fica na parte (salvo com ela); o caminho, em
+// settings.json, pra recarregar no proximo inicio.
+std::string readTextFile(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
+bool loadTuningFile(AppState& app, int part, const std::string& path) {
+    auto& t = app.synth.part(part).tuning;
+    const std::string text = readTextFile(path);
+    if (text.empty()) return false;
+    std::string lower = path;
+    for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower.size() >= 4 && lower.compare(lower.size() - 4, 4, ".kbm") == 0) {
+        t.kbmText = text;
+        app.settings.kbmPath[part] = path;
+    } else {
+        Scale sc;
+        std::string err;
+        t.sclText = text;
+        t.name = parseScl(text, sc, err) && !sc.description.empty() ? sc.description : std::filesystem::path(path).stem().string();
+        app.settings.sclPath[part] = path;
+    }
+    dx7fm_app::saveSettings(app.settings);
+    return true;
+}
+
+bool DrawPartTuning(AppState& app, int part) {
+    auto& t = app.synth.part(part).tuning;
+    bool changed = false;
+    ImGui::AlignTextToFramePadding();
+    if (t.sclText.empty()) ImGui::Text("Afinacao: 12-TET");
+    else ImGui::Text("Afinacao: %s%s", t.name.c_str(), t.kbmText.empty() ? "" : " + .kbm");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Carregar .scl/.kbm")) { app.tuningBrowser.listed = false; ImGui::OpenPopup("Afinacao"); }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(t.sclText.empty() && t.kbmText.empty());
+    if (ImGui::SmallButton("12-TET")) {
+        t.sclText.clear(); t.kbmText.clear(); t.name.clear();
+        app.settings.sclPath[part].clear(); app.settings.kbmPath[part].clear();
+        dx7fm_app::saveSettings(app.settings);
+        changed = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Volta pro temperamento igual de 12 notas");
+    ImGui::BeginDisabled(!t.kbmText.empty());
+    ImGui::SetNextItemWidth(120);
+    changed |= ImGui::DragFloat("A4 (Hz)", &t.a4Hz, 0.1f, 380.0f, 500.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip(t.kbmText.empty() ? "Diapasao: frequencia da nota 69 (la central)" : "O .kbm carregado define a propria referencia");
+    const std::string& err = app.synth.tuningError(part);
+    if (!err.empty()) ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::col::kAccent2), "Afinacao invalida (%s): tocando em 12-TET", err.c_str());
+
+    ImGui::SetNextWindowSize(ImVec2(520, 380), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Afinacao", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::TextDisabled(".scl = a escala (alturas); .kbm (opcional) = quais teclas tocam quais graus e a referencia.");
+        std::string picked = app.tuningBrowser.drawList("##tunbrowser", ImVec2(-1, 260), "");
+        std::string typed = app.tuningBrowser.drawPathInput("tunpath");
+        if (picked.empty()) picked = typed;
+        if (!picked.empty() && loadTuningFile(app, part, picked)) { app.tuningBrowser.followFile(picked); changed = true; ImGui::CloseCurrentPopup(); }
+        if (ImGui::Button("Fechar") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    return changed;
+}
+
 // manda os valores de macro do patch pro motor (ao carregar/zerar um patch)
 void sendPatchMacros(AppState& app, int part) {
     for (int k = 0; k < VoiceParams::kNumMacros; ++k) {
@@ -1444,6 +1516,7 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
             ImGui::SetNextItemWidth(100);
             if (ImGui::SliderInt("Vozes reservadas", &rv, 0, kMaxVoices, "%d", ImGuiSliderFlags_AlwaysClamp)) { pp.reservedVoices = rv; changed = true; }
         }
+        changed |= DrawPartTuning(app, partIndex);
     }
     ui::EndCard();
 
@@ -2145,11 +2218,16 @@ int main(int, char**) {
 
     app.settings = dx7fm_app::loadSettings();
     rebuildCcTable(app);
+    app.tuningBrowser.exts = {".scl", ".kbm"};
     app.synth.init(kSampleRate, kMaxVoices, app.settings.oversample);
     app.synth.setWorkerThreads(audioWorkerThreads());
     // Por padrao so a parte A toca; B-D comecam desligadas (senao cada nota,
     // MIDI ou do teclado do PC, dispararia 4 camadas empilhadas -- todas em
     // omni). Liga-las e so marcar "Habilitada" na aba de cada uma.
+    for (int p = 0; p < kNumParts; ++p) { // afinacoes salvas (settings.json) de volta nas partes
+        if (!app.settings.sclPath[p].empty()) loadTuningFile(app, p, app.settings.sclPath[p]);
+        if (!app.settings.kbmPath[p].empty()) loadTuningFile(app, p, app.settings.kbmPath[p]);
+    }
     for (int p = 0; p < kNumParts; ++p) {
         app.synth.part(p).enabled = (p == 0);
         app.synth.recompile(p);

@@ -325,6 +325,13 @@ struct PartParams {
     int reservedVoices = 0;
     bool enabled = true;
     float bendRangeSemis = 2.0f;
+    // [ADICIONADO em 2026-10-24] microafinacao da PARTE (como o canal MIDI: trocar
+    // de patch nao muda): texto dos arquivos Scala (vazio = 12-TET) e o diapasao
+    // (A4 em Hz, so sem .kbm -- o .kbm traz a propria referencia). Ver dx7_tuning.h.
+    struct Tuning {
+        std::string sclText, kbmText, name; // name: descricao da escala, pra UI
+        float a4Hz = 440.0f;
+    } tuning;
 };
 
 struct GlobalParams {

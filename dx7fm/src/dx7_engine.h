@@ -2,6 +2,7 @@
 #include "dx7_params.h"
 #include "dx7_dsp.h"
 #include "dx7_wavetable.h"
+#include "dx7_tuning.h"
 #include <algorithm>
 #include <array>
 #include <memory>
@@ -87,9 +88,10 @@ struct PatchSnapshot {
     // buffer reusa os mesmos 3 slots de memoria.
     uint64_t generation = 0;
     WavetableBanks wavetables{}; // [2026-10-22] montadas a partir de voice (ver makeWavetableBank)
+    TuningTable tuning = equalTemperament(); // [2026-10-24] afinacao da parte (Synth::recompile)
 };
 inline PatchSnapshot makeSnapshot(const VoiceParams& v) {
-    PatchSnapshot s{v, compileAlgorithm(algoUnion(v)), 0, {}};
+    PatchSnapshot s{v, compileAlgorithm(algoUnion(v)), 0, {}, equalTemperament()};
     for (int i = 0; i < kNumOps; ++i) s.wavetables[static_cast<size_t>(i)] = makeWavetableBank(v.op[i]);
     return s;
 }
@@ -166,7 +168,7 @@ public:
         active_ = true;
         releasing_ = false;
 
-        targetHz_ = noteToHz(note);
+        targetHz_ = tuning_ ? tuning_->hz[std::clamp(note, 0, 127)] : noteToHz(note);
         targetLog2_ = std::log2(targetHz_);
         if (legato && glideEnabled_) {
             // mantem currentHz_: desliza de onde a voz estiver agora
@@ -272,6 +274,8 @@ public:
     // [2026-10-22] tabelas da Waveform::Wavetable do MESMO snapshot de patch_
     // (o Synth chama junto com noteOn/rebind). nullptr = operadores Wavetable soam seno.
     void bindWavetables(const WavetableBanks* banks) { wavetables_ = banks; }
+    // [2026-10-24] tabela de afinacao (nota -> Hz) usada no noteOn; nullptr = 12-TET
+    void bindTuning(const TuningTable* t) { tuning_ = t; }
 
     // [2026-10-24] LFOs globais da parte: buffer do pedaco (uma amostra por
     // process()) pra cada LFO global, nullptr nos que sao da voz. O Synth chama
@@ -786,6 +790,7 @@ private:
 
     const VoiceParams* patch_ = nullptr;
     const WavetableBanks* wavetables_ = nullptr;
+    const TuningTable* tuning_ = nullptr;
     const float* globalLfo_[kNumLfos] = {};
     int globalIdx_ = 0;
     const CompiledAlgorithm* compiled_ = nullptr;

@@ -3435,6 +3435,83 @@ static void testArpeggiator() {
           "arpejador: latch mantem o padrao depois de soltar e troca na tecla nova; sem latch, soltar para");
 }
 
+// --- [ADICIONADO em 2026-10-24] microafinacao (dx7_tuning.h) ---
+static const char* kJustScl =
+    "! justa.scl\n!\nEscala justa maior de 7 notas\n 7\n!\n 9/8\n 5/4\n 4/3\n 3/2\n 5/3\n 15/8\n 2/1\n";
+
+static void testTuningParsers() {
+    TuningTable et = equalTemperament();
+    bool same = true;
+    for (int n = 0; n < 128; ++n) same &= et.hz[n] == Voice::noteToHz(n) && et.mapped[n];
+    check(same, "afinacao: tabela 12-TET padrao e bit a bit igual a conta do motor (sem afinacao, nada muda)");
+
+    std::string err;
+    Scale et12;
+    std::string sc = "doze\n12\n";
+    for (int i = 1; i <= 12; ++i) sc += std::to_string(i * 100) + ".0\n";
+    bool ok12 = parseScl(sc, et12, err);
+    TuningTable t12 = buildTuning(et12, nullptr, 440.0f);
+    float worst = 0.0f;
+    for (int n = 0; n < 128; ++n) worst = std::max(worst, std::fabs(t12.hz[n] / et.hz[n] - 1.0f));
+    check(ok12 && worst < 1e-5f, "afinacao: .scl de 12 graus em cents (100.0, 200.0 ...) da o 12-TET");
+
+    Scale just;
+    bool okJ = parseScl(kJustScl, just, err);
+    TuningTable tj = buildTuning(just, nullptr, 440.0f);
+    // sem .kbm: nota 60 = grau 0; nota 69 (A4) = 440 Hz -> nota 60 = 440 / (5/3) ... mas 69 e o 6o grau? 60,61..: graus consecutivos
+    // (mapa linear: cada tecla e um grau) -> 60 = C, 61 = 9/8, 62 = 5/4, ..., 67 = 2/1 (oitava), 69 = 2 x 5/4
+    const double c4 = 440.0 / 2.5;
+    bool ratios = okJ && std::fabs(tj.hz[61] / c4 - 9.0 / 8) < 1e-5 && std::fabs(tj.hz[64] / c4 - 3.0 / 2) < 1e-5 &&
+                  std::fabs(tj.hz[67] / c4 - 2.0) < 1e-5 && std::fabs(tj.hz[69] - 440.0f) < 1e-3f;
+    check(ratios, "afinacao: escala justa de 7 notas -- razoes exatas e a nota 69 no diapasao");
+
+    // .kbm: mapa de 12 teclas -> 7 graus (teclas brancas), pretas sem som; referencia: nota 69 = 432 Hz no grau 5 (5/3)
+    const char* kbm = "! brancas.kbm\n12\n0\n127\n60\n69\n432.0\n7\n0\nx\n1\nx\n2\n3\nx\n4\nx\n5\nx\n6\n";
+    KeyMap km;
+    bool okK = parseKbm(kbm, km, err);
+    TuningTable tk = buildTuning(just, &km, 440.0f);
+    bool kbmOk = okK && tk.mapped[60] && !tk.mapped[61] && tk.mapped[62] && !tk.mapped[70] && std::fabs(tk.hz[69] - 432.0f) < 1e-3f &&
+                 std::fabs(tk.hz[60] / (432.0 / (5.0 / 3)) - 1.0) < 1e-6 && std::fabs(tk.hz[72] / tk.hz[60] - 2.0) < 1e-5 &&
+                 std::fabs(tk.hz[67] / tk.hz[60] - 1.5) < 1e-5;
+    TuningTable t432 = equalTemperament(432.0f);
+    Scale bad;
+    check(kbmOk && std::fabs(t432.hz[69] - 432.0f) < 1e-4f && !parseScl("x\nabc\n", bad, err) && !parseScl("x\n3\n9/8\n", bad, err),
+          "afinacao: .kbm com teclas sem som, referencia propria e oitava formal; A4 = 432; .scl invalido e recusado");
+}
+
+static void testTuningInEngine() {
+    // parte com a escala justa: a nota 64 (E4, grau 4 = 3/2 de C) soa em C x 1.5; tecla sem som nao toca
+    Synth synth;
+    synth.init(48000.0, 4);
+    synth.part(0).voice = VoiceParams{};
+    synth.part(0).voice.op[1].outputLevel = 0; // so o seno da portadora
+    synth.part(0).tuning.sclText = kJustScl;
+    synth.part(0).tuning.kbmText = "12\n0\n127\n60\n69\n440.0\n7\n0\nx\n1\nx\n2\n3\nx\n4\nx\n5\nx\n6\n";
+    synth.recompile(0);
+    synth.noteOn(0, 67, 100); // G4 = grau 4 (3/2)
+    std::vector<float> x;
+    for (int i = 0; i < 24000; ++i) { float l, r; synth.renderStereo(l, r); x.push_back(l); }
+    const double c4 = 440.0 / (5.0 / 3.0);
+    std::vector<float> tail(x.begin() + 4800, x.end());
+    const double hz = estimateFrequencyByZeroCrossings(tail, 48000.0); // 396 (justa) x 392 (12-TET): 1% de diferenca
+    synth.noteOn(0, 61, 100); // tecla preta: sem som no .kbm
+    const int voices = synth.activeVoiceCount();
+    std::printf("  (G4 na escala justa: esperado %.2f Hz, medido %.2f Hz (12-TET seria %.2f); vozes depois da tecla sem som: %d)\n", c4 * 1.5, hz,
+                Voice::noteToHz(67), voices);
+    check(std::fabs(hz / (c4 * 1.5) - 1.0) < 0.002 && voices == 1 && synth.tuningError(0).empty(),
+          "afinacao na parte: a nota soa na altura da escala; tecla sem som no .kbm nao toca");
+    PartParams p;
+    p.tuning.sclText = kJustScl;
+    p.tuning.a4Hz = 432.0f;
+    PartParams back = partParamsFromJson(JsonValue::parse(partParamsToJson(p).dump()));
+    PartParams kept;
+    dx7fm_app::copyPatchKeepingRouting(kept, PartParams{});
+    PartParams dst = p;
+    dx7fm_app::copyPatchKeepingRouting(dst, PartParams{});
+    check(back.tuning.sclText == kJustScl && back.tuning.a4Hz == 432.0f && dst.tuning.sclText == kJustScl,
+          "afinacao: salva com a parte e fica na parte ao carregar outro patch");
+}
+
 static void testAdditiveSilentWhenAllAmpsZero() {
     auto x = renderAdditive([](VoiceParams& v) { v.op[0].additiveA.amp[0] = 0.0f; }, 4800);
     bool ok = true;
@@ -4061,6 +4138,8 @@ int main() {
     testMidiClockEstimator();
     testGlobalLfo();
     testArpeggiator();
+    testTuningParsers();
+    testTuningInEngine();
     testNewModDestinations();
     testModulationJson();
     testAdditiveEditorAxes();

@@ -21,11 +21,15 @@ struct WavBrowser {
     bool listed = false;
     char path[1024] = "";
 
-    static bool isWav(const std::string& name) {
-        if (name.size() < 4) return false;
-        std::string ext = name.substr(name.size() - 4);
-        for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return ext == ".wav";
+    // [2026-10-24] extensoes listadas (minusculas); padrao .wav
+    std::vector<std::string> exts{".wav"};
+
+    bool isWav(const std::string& name) const { // (nome historico: qualquer extensao de `exts`)
+        std::string lower = name;
+        for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        for (const auto& e : exts)
+            if (lower.size() >= e.size() && lower.compare(lower.size() - e.size(), e.size(), e) == 0) return true;
+        return false;
     }
 
     void refresh() {
@@ -80,7 +84,7 @@ struct WavBrowser {
                 else { std::snprintf(path, sizeof path, "%s", full.c_str()); picked = full; }
             }
         }
-        if (entries.empty()) ImGui::TextDisabled("(nenhuma pasta ou .wav aqui)");
+        if (entries.empty()) ImGui::TextDisabled("(nenhuma pasta ou arquivo suportado aqui)");
         ImGui::EndChild();
         return picked;
     }
@@ -89,7 +93,7 @@ struct WavBrowser {
     std::string drawPathInput(const char* id) {
         ImGui::PushID(id);
         ImGui::SetNextItemWidth(-80);
-        bool enter = ImGui::InputTextWithHint("##path", "caminho de um arquivo .wav", path, sizeof path, ImGuiInputTextFlags_EnterReturnsTrue);
+        bool enter = ImGui::InputTextWithHint("##path", "caminho do arquivo", path, sizeof path, ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::SameLine();
         bool open = ImGui::Button("Abrir", ImVec2(-1, 0)) || enter;
         ImGui::PopID();

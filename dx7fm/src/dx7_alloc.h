@@ -78,6 +78,10 @@ struct PartRuntime {
         WavetableBankPtr bank;
     };
     std::array<WavetableCache, kNumOps> wtCache{};
+    // cache da tabela de afinacao (so a thread do recompile)
+    PartParams::Tuning tuningFor;
+    TuningTable tuningCache = equalTemperament();
+    std::string tuningError; // ultimo erro de parse (vazio = ok)
 
     std::unordered_set<int> sostenutoCaptured;
     bool sostenutoDown = false;
@@ -205,7 +209,21 @@ public:
             }
             banks[static_cast<size_t>(i)] = c.bank;
         }
-        pr.snapshots_[static_cast<size_t>(newIdx)] = PatchSnapshot{pr.params.voice, pr.compiledCache, ++pr.generation, std::move(banks)};
+        const auto& tu = pr.params.tuning;
+        if (tu.sclText != pr.tuningFor.sclText || tu.kbmText != pr.tuningFor.kbmText || tu.a4Hz != pr.tuningFor.a4Hz) {
+            pr.tuningFor = tu;
+            pr.tuningError.clear();
+            pr.tuningCache = equalTemperament(tu.a4Hz);
+            if (!tu.sclText.empty()) {
+                Scale sc;
+                KeyMap km;
+                std::string err;
+                if (!parseScl(tu.sclText, sc, err)) pr.tuningError = ".scl: " + err;
+                else if (!tu.kbmText.empty() && !parseKbm(tu.kbmText, km, err)) pr.tuningError = ".kbm: " + err;
+                else pr.tuningCache = buildTuning(sc, tu.kbmText.empty() ? nullptr : &km, tu.a4Hz);
+            }
+        }
+        pr.snapshots_[static_cast<size_t>(newIdx)] = PatchSnapshot{pr.params.voice, pr.compiledCache, ++pr.generation, std::move(banks), pr.tuningCache};
         int oldLive = pr.liveIndex_.exchange(newIdx, std::memory_order_acq_rel);
         pr.stagingIndex_ = 3 - newIdx - oldLive; // o terceiro indice (0+1+2=3)
     }
@@ -215,6 +233,7 @@ public:
         if (!pr.params.enabled) return;
         if (note < pr.params.loKey || note > pr.params.hiKey) return;
         if (velocity < pr.params.loVel || velocity > pr.params.hiVel) return;
+        if (!pr.live()->tuning.mapped[std::clamp(note + pr.params.transpose, 0, 127)]) return; // tecla sem som no .kbm
 
         if (pr.params.voiceMode != pr.runMode) {
             // modo trocado com notas soando: solta tudo do modo antigo antes
@@ -601,6 +620,7 @@ private:
         s.triggerCounter = ++triggerCounter_;
         const PatchSnapshot* snap = pr.live(); // notas NOVAS sempre pegam o patch AO VIVO mais recente
         s.voice.bindWavetables(&snap->wavetables);
+        s.voice.bindTuning(&snap->tuning);
         s.voice.noteOn(&snap->voice, &snap->compiled, soundingNote, velocity, extraDetuneCents, legato, glideFromHz,
                        snap->generation);
         s.voice.controllers().pitchBendSemis = pr.bend;
@@ -610,8 +630,14 @@ private:
     }
 
     float soundingHz(const PartRuntime& pr, int note) const {
-        return Voice::noteToHz(std::clamp(note + pr.params.transpose, 0, 127));
+        return pr.live()->tuning.hz[std::clamp(note + pr.params.transpose, 0, 127)];
     }
+
+public:
+    // ultimo erro ao ler a afinacao da parte (vazio = ok), pra UI
+    const std::string& tuningError(int part) const { return parts_[part].tuningError; }
+
+private:
 
     void releaseSlot(int idx, int part, int note) {
         auto& pr = parts_[part];
