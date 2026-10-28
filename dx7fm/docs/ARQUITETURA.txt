@@ -825,7 +825,19 @@ ou um leitor de arquivo preencheria.
       drive ~2.4 a fundamental quase some) -- comportamento classico de
       wavefolder, nao bug. Gera aliasing em notas agudas com drive alto
       (nao e band-limited); oversampling 2x/4x (secao 11) ameniza.
+      [2026-10-28] O operador usa a versao com ADAA (abaixo).
   class DcBlocker - passa-altas de 1 polo (~10Hz), usado pelo Fold.
+
+  class AdaaState [ADICIONADO em 2026-10-28] - antialiasing por
+      antiderivada de 1a ordem (Parker et al., DAFx 2016) pro Fold e o
+      Saturate do operador: sai (F(x[n]) - F(x[n-1])) / (x[n] - x[n-1]), a
+      media de f no segmento, com F = antiderivada (triangleFoldAntideriv:
+      parabolas periodicas; tanhAntideriv: log cosh). Contas em double; com
+      |dx| < 1e-6 usa f no ponto medio. Custo: meia amostra de atraso e um
+      passa-baixa leve perto de Nyquist. Medido (alias abaixo de 20 kHz em
+      relacao aos harmonicos, Fold drive 8..16): -6..-14 dB a 1x; com 4x
+      chega a -50..-62 dB. Fold com drive 1 e sem simetria continua
+      identidade exata (o ADAA so atualiza o estado).
 
   softLimit(x, threshold=0.9) -> [ADICIONADO em 2026-09-21] limitador de
       MASTER BUS, diferente de softSaturate acima (que e um efeito de
@@ -856,13 +868,18 @@ ou um leitor de arquivo preencheria.
 
   class HalfbandDecimator2x
       [ADICIONADO em 2026-09-21] Decimador FIR 2:1 com filtro half-band
-      (windowed-sinc, janela de Hamming, 31 taps, corte normalizado em
-      0.25 -- exatamente o Nyquist do sinal decimado). process(x, out&)
+      [ALTERADO em 2026-10-28: era Hamming de 31 taps, cuja transicao
+      (~19..29 kHz a 96 kHz) deixava voltar como alias o que ficava logo
+      acima do Nyquist -- o Fold em 4x aliasava quase como em 1x] -- agora
+      windowed-sinc com janela de Kaiser (beta 8), 63 taps: plano ate
+      20 kHz, -23 dB em 26 kHz (volta acima de 20 kHz) e >= 85 dB a partir
+      de 28 kHz. process(x, out&)
       e chamado 1x por amostra NA TAXA DE ENTRADA (superamostrada) e
       retorna true + escreve out a cada 2 chamadas (na taxa decimada).
       Cascatear 2 instancias decima 4:1 (usado pelo oversampling da
-      Voice, ver secao 6). Prioriza clareza (convolucao direta) sobre a
-      otimizacao classica de half-band (pular os coeficientes zero).
+      Voice, ver secao 6). So convolui os coeficientes nao nulos (os
+      impares + o central), somando os pares simetricos: 17
+      multiplicacoes por saida.
 
 
 --------------------------------------------------------------------------------

@@ -628,6 +628,60 @@ static void testOversamplingReducesAliasing() {
           "com oversampling 4x, o filtro half-band derruba a energia aliasada em 3kHz");
 }
 
+// [ADICIONADO em 2026-10-28] ADAA no Fold: seno fixo em 1010 Hz dobrado com
+// drive 8, SEM oversampling. Os harmonicos 25..47 (acima de 24 kHz) voltam
+// como alias em frequencias que nao sao multiplas de 1010 (25o: 25250 ->
+// 22750 Hz, 29o: 29290 -> 18710 Hz...). Soma o alias que cai abaixo de 20 kHz,
+// relativo a fundamental. Sem ADAA dava -11.4 dB; com ADAA -20.8 dB.
+static void testFoldAdaaReducesAliasing() {
+    Synth synth;
+    synth.init(48000.0, 4, 1);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.op[0].fixedFreq = true;
+    v.op[0].fixedHz = 1010.0f;
+    v.op[0].outputLevel = 99;
+    v.op[0].fxType = FxType::Fold;
+    v.op[0].fxParam1 = 8.0f;
+    v.op[0].fxParam2 = 0.0f;
+    for (int i = 0; i < 4; ++i) { v.op[0].fxEG.rate[i] = 99; v.op[0].fxEG.level[i] = 99; }
+    for (int i = 1; i < kNumOps; ++i) for (int k = 0; k < 4; ++k) v.op[i].ampEG.level[k] = 0;
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100);
+    for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); }
+    std::vector<float> x;
+    for (int i = 0; i < 48000; ++i) { float l, r; synth.renderStereo(l, r); x.push_back((l + r) * 0.5f); }
+    const float fund = goertzelMagnitude(x, 1010.0, 48000.0);
+    double alias = 0.0;
+    for (int h = 25; h <= 47; h += 2) { // simetrico: so harmonicos impares
+        double f = std::fmod(1010.0 * h, 48000.0);
+        if (f > 24000.0) f = 48000.0 - f;
+        if (f < 20000.0) { const double m = goertzelMagnitude(x, f, 48000.0); alias += m * m; }
+    }
+    const double db = 10.0 * std::log10(alias / (static_cast<double>(fund) * fund) + 1e-30);
+    std::printf("  (alias audivel do Fold drive 8 em 1010 Hz, sem oversampling: %.1f dB da fundamental)\n", db);
+    check(db < -17.0, "Fold com ADAA: alias audivel bem abaixo da fundamental mesmo sem oversampling");
+}
+
+// [ADICIONADO em 2026-10-28] Resposta do decimador half-band (63 taps, Kaiser):
+// plano na banda audivel e rejeicao forte acima de ~28 kHz (o que voltaria
+// como alias abaixo de 20 kHz).
+static void testHalfbandDecimatorResponse() {
+    auto gainDb = [](double f) {
+        HalfbandDecimator2x d;
+        double e = 0.0; int n = 0; float o;
+        for (int i = 0; i < 96000; ++i)
+            if (d.process(static_cast<float>(std::sin(2.0 * 3.14159265358979 * f * i / 96000.0)), o) && i > 2000) { e += o * o; ++n; }
+        return 10.0 * std::log10(2.0 * e / n + 1e-30);
+    };
+    const double g1k = gainDb(1000.0), g18k = gainDb(18000.0), g20k = gainDb(20000.0), g30k = gainDb(30000.0), g40k = gainDb(40000.0);
+    std::printf("  (decimador: 1k %.2f dB, 18k %.2f, 20k %.2f, 30k %.1f, 40k %.1f)\n", g1k, g18k, g20k, g30k, g40k);
+    check(std::fabs(g1k) < 0.01 && std::fabs(g18k) < 0.05 && std::fabs(g20k) < 0.2, "decimador half-band: plano ate 20 kHz");
+    check(g30k < -75.0 && g40k < -75.0, "decimador half-band: rejeita >= 75 dB a partir de 30 kHz");
+}
+
 static bool nearlyEqual(float a, float b, float eps = 1e-4f) { return std::abs(a - b) < eps; }
 
 static void testPatchJsonRoundTrip() {
@@ -4199,6 +4253,8 @@ int main() {
     testOperatorFeedbackModulation();
     testFxEGReleaseFollowsAmp();
     testOversamplingReducesAliasing();
+    testFoldAdaaReducesAliasing();
+    testHalfbandDecimatorResponse();
     testPatchJsonRoundTrip();
     testPatchFileSaveLoad();
     testLivePatchEditPropagatesToSoundingVoice();

@@ -105,6 +105,7 @@ struct OperatorState {
     CombFilter comb;
     FreqShifter shifter;
     DcBlocker dcBlock; // so usado pelo FxType::Fold com simetria != 0
+    AdaaState adaa;    // antialiasing de Fold/Saturate (dx7_dsp.h)
     PartialOscillators partials; // so usado pela Waveform::Additive
     float signal = 0.0f;
     float prevOut = 0.0f;
@@ -199,6 +200,7 @@ public:
                 op.comb.reset();
                 op.shifter.reset();
                 op.dcBlock.reset();
+                op.adaa.reset();
                 op.partials.reset();
             }
             peg_.configure(patch_->peg.rate, patch_->peg.level);
@@ -669,7 +671,7 @@ private:
                     processed = raw * srcSig;
                     break;
                 }
-                case FxType::Saturate: processed = softSaturate(raw, fx2); break;
+                case FxType::Saturate: processed = op.adaa.saturate(raw, 1.0f + fx2 * 8.0f); break; // = softSaturate, com ADAA
                 case FxType::Crush:    processed = op.crusher.process(raw, fx1, fx2 * 16.0f); break;
                 case FxType::FreqShift:processed = op.shifter.process(raw, fx1); break;
                 case FxType::Comb:     processed = op.comb.process(raw, fx1, fx2); break;
@@ -683,7 +685,11 @@ private:
                     float maxDrive = std::clamp(fx1, 1.0f, 16.0f);
                     float drive = 1.0f + (maxDrive - 1.0f) * (0.2f + 0.8f * (fxEnv / 99.0f));
                     float bias = std::clamp(fx2, 0.0f, 1.0f);
-                    processed = triangleFold(raw * drive + bias);
+                    processed = op.adaa.fold(raw * drive + bias); // triangleFold com ADAA
+                    // drive 1 sem simetria nao dobra nada: sai o sinal exato (o
+                    // ADAA daria a media com a amostra anterior); o estado do
+                    // ADAA segue atualizado, sem degrau se o drive subir depois
+                    if (maxDrive <= 1.0f && bias == 0.0f) processed = raw;
                     if (bias > 0.0f) processed = op.dcBlock.process(processed);
                     break;
                 }
@@ -710,6 +716,7 @@ private:
                 op.shifter.reset();
                 op.crusher.reset();
                 op.dcBlock.reset();
+                op.adaa.reset();
             }
         }
 

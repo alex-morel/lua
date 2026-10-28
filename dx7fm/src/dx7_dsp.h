@@ -556,6 +556,55 @@ inline float triangleFold(float v) {
     return 1.0f - 4.0f * std::fabs(t - 0.5f);
 }
 
+// [ADICIONADO em 2026-10-28] Antialiasing por antiderivada (ADAA de 1a
+// ordem, Parker et al., DAFx 2016) pros efeitos nao lineares do operador:
+// em vez de f(x[n]), sai a MEDIA de f no segmento x[n-1]..x[n] =
+// (F(x[n]) - F(x[n-1])) / (x[n] - x[n-1]), com F a antiderivada de f. Isso
+// e f seguida de um filtro "caixa" continuo: os harmonicos acima de Nyquist
+// que viravam alias caem ~-20..-30 dB a mais, sem oversampling. Custo: meia
+// amostra de atraso e um passa-baixa leve perto de Nyquist. Contas em double
+// (a divisao por x[n]-x[n-1] perde precisao em float).
+//
+// Antiderivada do triangleFold: f e uma triangular de periodo 4 em v (com
+// t = frac((v+1)/4), f = 1 - 4|t - 1/2|), de media zero, entao F tambem e
+// periodica: F = 4 g(t), g(t) = 2t^2 - t (t <= 1/2) ou 3t - 2t^2 - 1.
+inline double triangleFoldAntideriv(double v) {
+    double t = (v + 1.0) * 0.25;
+    t -= std::floor(t);
+    return 4.0 * (t <= 0.5 ? 2.0 * t * t - t : 3.0 * t - 2.0 * t * t - 1.0);
+}
+// Antiderivada de tanh(k x): log(cosh(k x)) / k, na forma estavel pra |kx| grande.
+inline double tanhAntideriv(double x, double k) {
+    const double z = std::fabs(k * x);
+    return (z + std::log1p(std::exp(-2.0 * z)) - 0.69314718055994531) / k;
+}
+
+class AdaaState {
+public:
+    void reset() { x1_ = 0.0; f1_ = 0.0; k1_ = -1.0; }
+    // Fold: entrada ja com drive e bias
+    float fold(float xf) {
+        const double x = xf, F = triangleFoldAntideriv(x);
+        const double dx = x - x1_;
+        float y = std::fabs(dx) > 1e-6 ? static_cast<float>((F - f1_) / dx) : triangleFold(static_cast<float>(0.5 * (x + x1_)));
+        x1_ = x; f1_ = F;
+        return y;
+    }
+    // Saturate: tanh(k x); k pode mudar a cada amostra (matriz), entao
+    // F(x[n-1]) e recalculado quando k muda
+    float saturate(float xf, float k) {
+        const double x = xf;
+        if (k != k1_) { f1_ = tanhAntideriv(x1_, k); k1_ = k; }
+        const double F = tanhAntideriv(x, k), dx = x - x1_;
+        float y = std::fabs(dx) > 1e-6 ? static_cast<float>((F - f1_) / dx) : std::tanh(static_cast<float>(0.5 * (x + x1_)) * k);
+        x1_ = x; f1_ = F;
+        return y;
+    }
+
+private:
+    double x1_ = 0.0, f1_ = 0.0, k1_ = -1.0;
+};
+
 // Passa-altas de 1 polo (~10Hz) pra tirar o DC que o wavefolder com
 // simetria (bias != 0) introduz -- sem isso uma portadora dobrada com bias
 // empurraria a saida inteira pra um lado.
@@ -662,44 +711,56 @@ private:
     float apState_ = 0.0f, apDelay_ = 0.0f;
 };
 
-// Decimador FIR de 2:1 com filtro half-band (janela de Hamming, corte
-// normalizado em 0.25 -- exatamente o Nyquist do sinal DECIMADO). Usado
-// pra oversampling anti-aliasing: cascatear 2 instancias decima 4:1.
-// Corte em fc=0.25 faz os coeficientes de indice PAR (exceto o central)
-// carem em zero automaticamente (propriedade classica do half-band),
-// mas aqui a convolucao e feita direto (sem explorar isso), priorizando
-// clareza sobre eficiencia (ver ARQUITETURA.txt secao 1).
+// Decimador FIR de 2:1 com filtro half-band, usado pelo oversampling
+// anti-aliasing (cascatear 2 instancias decima 4:1).
+// [ALTERADO em 2026-10-28] Era 31 taps com janela de Hamming: a banda de
+// transicao (~19..29 kHz a 96 kHz) deixava passar boa parte do que fica logo
+// acima do Nyquist decimado, que voltava como alias (um wavefolder em 4x
+// aliasava quase igual a 1x). Agora: 63 taps, janela de Kaiser (beta 8,
+// ~80 dB de rejeicao a partir de ~28 kHz, plano ate ~20 kHz). Num half-band
+// os coeficientes de indice par (fora o central) sao zero: a convolucao so
+// usa os 32 impares + o central -- 17 multiplicacoes por saida (somando os
+// pares simetricos), menos que as 31 de antes.
 class HalfbandDecimator2x {
 public:
-    static constexpr int kTaps = 31;
+    static constexpr int kTaps = 63;
+    static constexpr int kCenter = (kTaps - 1) / 2;   // 31
+    static constexpr int kSide = (kCenter + 1) / 2;   // 16 coeficientes impares de cada lado
 
     HalfbandDecimator2x() {
-        const int M = kTaps - 1;
-        const double fc = 0.25;
-        double sum = 0.0;
+        const double beta = 8.0;
+        auto i0 = [](double x) { // Bessel modificada de ordem 0 (serie)
+            double sum = 1.0, term = 1.0;
+            for (int k = 1; k < 50; ++k) { term *= (x / (2.0 * k)) * (x / (2.0 * k)); sum += term; }
+            return sum;
+        };
+        double h[kTaps];
+        double total = 0.0;
         for (int n = 0; n < kTaps; ++n) {
-            double k = n - M / 2.0;
-            double sinc = (k == 0.0) ? 2.0 * fc : std::sin(2.0 * kPiD * fc * k) / (kPiD * k);
-            double w = 0.54 - 0.46 * std::cos(2.0 * kPiD * n / M); // Hamming
-            coeffs_[n] = sinc * w;
-            sum += coeffs_[n];
+            const double k = n - kCenter;
+            const double sinc = (k == 0.0) ? 0.5 : std::sin(0.5 * kPiD * k) / (kPiD * k);
+            const double r = k / kCenter;
+            h[n] = sinc * i0(beta * std::sqrt(std::max(0.0, 1.0 - r * r))) / i0(beta);
+            total += h[n];
         }
-        for (auto& c : coeffs_) c /= sum; // normaliza ganho DC pra 1.0
+        center_ = h[kCenter] / total;
+        for (int m = 0; m < kSide; ++m) side_[m] = h[kCenter - 1 - 2 * m] / total; // distancias 1, 3, 5, ...
     }
 
     // Chame 1x por amostra na taxa DE ENTRADA (superamostrada). Retorna
     // true e escreve out a cada 2 chamadas (na taxa decimada).
     bool process(float x, float& out) {
         buf_[pos_] = x;
+        buf_[pos_ + kTaps] = x; // copia espelhada: le kTaps amostras seguidas sem modulo
         pos_ = (pos_ + 1) % kTaps;
         phase_ ^= 1;
         if (phase_ != 0) return false;
 
-        double acc = 0.0;
-        int idx = pos_;
-        for (int i = 0; i < kTaps; ++i) {
-            idx = (idx == 0) ? kTaps - 1 : idx - 1;
-            acc += coeffs_[i] * buf_[idx];
+        const float* w = buf_ + pos_; // w[0] = mais antiga, w[kTaps-1] = mais nova
+        double acc = center_ * w[kCenter];
+        for (int m = 0; m < kSide; ++m) {
+            const int d = 1 + 2 * m;
+            acc += side_[m] * (static_cast<double>(w[kCenter - d]) + w[kCenter + d]);
         }
         out = static_cast<float>(acc);
         return true;
@@ -707,8 +768,9 @@ public:
 
 private:
     static constexpr double kPiD = 3.14159265358979323846;
-    double coeffs_[kTaps];
-    float buf_[kTaps] = {};
+    double center_ = 0.5;
+    double side_[kSide] = {};
+    float buf_[2 * kTaps] = {};
     int pos_ = 0;
     int phase_ = 0;
 };

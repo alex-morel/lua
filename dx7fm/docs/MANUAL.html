@@ -771,7 +771,7 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
           <tr><td>Bitcrusher</td><td>Taxa (Hz), Bits (1–24)</td><td>Os degraus de quantização e o “sample &amp; hold” num seno de 220 Hz.</td></tr>
           <tr><td>Freq shift</td><td>Deslocamento (Hz)</td><td>Os harmônicos de 220 Hz (cinza) e para onde vão: somar Hz fixos deixa o som inarmônico.</td></tr>
           <tr><td>Comb</td><td>Afinação (Hz), Feedback</td><td>Os “dentes” de ressonância na afinação e nos múltiplos.</td></tr>
-          <tr><td>Wavefolder</td><td>Drive (1–16), Simetria</td><td>Curva e seno processado, com o drive mínimo (envelope em 0, branco) e máximo (cor do operador). Simetria 0 = só harmônicos ímpares; acima disso entram os pares. Em notas agudas com drive alto pode gerar aliasing.</td></tr>
+          <tr><td>Wavefolder</td><td>Drive (1–16), Simetria</td><td>Curva e seno processado, com o drive mínimo (envelope em 0, branco) e máximo (cor do operador). Simetria 0 = só harmônicos ímpares; acima disso entram os pares. Tem antialiasing próprio (ADAA); em notas muito agudas com drive alto, o oversampling 2× ou 4× (Configurações) limpa o resto.</td></tr>
         </table>
       </div>
       <p>O <strong>envelope de FX</strong> fica no mesmo card. Ele só age nos filtros (varre o corte), no Wavefolder (varre o drive) e no morph da forma de onda Additive. Nos outros efeitos os knobs dele ficam desativados, e o texto acima deles diz o que ele controla. Ao trocar de efeito, os ajustes voltam a valores iniciais adequados (entre os três filtros, corte e Q são mantidos).</p>
