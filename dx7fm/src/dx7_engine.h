@@ -125,6 +125,10 @@ struct VoiceControllers {
     float channelAT01 = 0.0f;
     float polyAT01 = 0.0f;
     float macro01[4] = {}; // [2026-10-24] macros da parte (ModSource::Macro1..4)
+    // [2026-10-28] expressao POR NOTA (MPE): bend da nota (somado ao bend do
+    // canal) e slide/CC74 (ModSource::Slide); a pressao por nota e polyAT01
+    float noteBendSemis = 0.0f;
+    float slide01 = 0.0f;
 };
 
 // A voz fisica completa: 8 operadores + PEG + 2 LFOs. NAO possui o patch,
@@ -522,6 +526,7 @@ private:
                 case ModSource::Macro2:    srcVal = controllers_.macro01[1]; break;
                 case ModSource::Macro3:    srcVal = controllers_.macro01[2]; break;
                 case ModSource::Macro4:    srcVal = controllers_.macro01[3]; break;
+                case ModSource::Slide:     srcVal = controllers_.slide01; break;
                 default: break;
             }
             float amount = srcVal * route.depth;
@@ -545,7 +550,7 @@ private:
 
         // pitch comum a todos os operadores da voz (bend + mod matrix) e
         // vibrato antes da sensibilidade de cada operador
-        const float voiceSemis = controllers_.pitchBendSemis + voicePitchTrimSemis;
+        const float voiceSemis = controllers_.pitchBendSemis + controllers_.noteBendSemis + voicePitchTrimSemis;
         const float vibratoRaw = lfo1v * patch_->lfo1.pitchDepth + lfo2v * patch_->lfo2.pitchDepth +
                                  lfoV[2] * patch_->lfo3.pitchDepth + lfoV[3] * patch_->lfo4.pitchDepth;
         const float tremoloRaw = lfo1v * patch_->lfo1.ampDepth + lfo2v * patch_->lfo2.ampDepth +

@@ -19,6 +19,7 @@
 #include "../app/op_fx_math.h"
 #include "../app/settings.h"
 #include "../app/midi_clock.h"
+#include "../app/mpe.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1886,6 +1887,128 @@ static void testMidiNoteOffReachesPartAfterDisable() {
     applyAppEvent(synth, off, enabled, channel, routing);
     for (int i = 0; i < 48000 * 3 && synth.activeVoiceCount() > 0; ++i) renderN(synth, 1);
     check(synth.activeVoiceCount() == 0, "noteOff MIDI chega na parte que recebeu o noteOn mesmo apos desabilitar/mudar canal");
+}
+
+// --- [ADICIONADO em 2026-10-28] MPE ---
+static void testMpeInputTranslatesMemberChannels() {
+    using namespace dx7fm_app;
+    MpeInput mpe;
+    std::vector<AppEvent> out;
+    auto ev = [](MidiEvent::Type t, int ch, int d1, int d2) { MidiEvent e; e.type = t; e.channel = ch; e.data1 = d1; e.data2 = d2; return e; };
+
+    // desligado: nada e consumido
+    check(!mpe.handle(ev(MidiEvent::Type::NoteOn, 1, 60, 100), out) && out.empty(), "MPE desligado: canal 2 segue o caminho normal");
+
+    // MCM (RPN 6 no canal 1 = indice 0) com 7 canais-membro liga o MPE
+    mpe.handle(ev(MidiEvent::Type::ControlChange, 0, 101, 0), out);
+    mpe.handle(ev(MidiEvent::Type::ControlChange, 0, 100, 6), out);
+    const bool mcm = mpe.handle(ev(MidiEvent::Type::ControlChange, 0, 6, 7), out);
+    check(mcm && mpe.enabled && mpe.memberChannels == 7, "MPE: mensagem de configuracao (RPN 6) liga a zona com N canais-membro");
+
+    // valores iniciais mandados ANTES do note on (bend +1/4, pressao, CC74)
+    out.clear();
+    mpe.handle(ev(MidiEvent::Type::PitchBend, 2, 0, 2048), out);
+    mpe.handle(ev(MidiEvent::Type::ChannelAftertouch, 2, 0, 127), out);
+    mpe.handle(ev(MidiEvent::Type::ControlChange, 2, 74, 0), out);
+    check(out.empty(), "MPE: controles num canal sem nota so guardam o valor");
+    mpe.handle(ev(MidiEvent::Type::NoteOn, 2, 64, 90), out);
+    const bool onOk = out.size() == 4 && out[0].kind == AppEvent::Kind::NoteOn && out[0].channel1to16 == 1 && out[0].note == 64 &&
+                      out[1].kind == AppEvent::Kind::NotePitchBend && std::fabs(out[1].floatValue - 12.0f) < 1e-4f &&
+                      out[2].kind == AppEvent::Kind::PolyAftertouch && out[2].floatValue == 1.0f &&
+                      out[3].kind == AppEvent::Kind::NoteSlide && out[3].floatValue == 0.0f;
+    check(onOk, "MPE: note on num canal-membro sai no canal mestre + bend (48 st de faixa)/pressao/slide iniciais da nota");
+
+    out.clear();
+    mpe.handle(ev(MidiEvent::Type::ControlChange, 2, 74, 127), out);
+    mpe.handle(ev(MidiEvent::Type::PitchBend, 2, 0, -8192), out);
+    check(out.size() == 2 && out[0].kind == AppEvent::Kind::NoteSlide && out[0].note == 64 && out[0].floatValue == 1.0f &&
+              out[1].kind == AppEvent::Kind::NotePitchBend && std::fabs(out[1].floatValue + 48.0f) < 1e-4f,
+          "MPE: CC74 e bend do canal vao so pra nota daquele canal");
+
+    // RPN 0 num canal-membro muda a faixa do bend por nota
+    mpe.handle(ev(MidiEvent::Type::ControlChange, 2, 101, 0), out);
+    mpe.handle(ev(MidiEvent::Type::ControlChange, 2, 100, 0), out);
+    mpe.handle(ev(MidiEvent::Type::ControlChange, 2, 6, 24), out);
+    check(mpe.noteBendRange == 24.0f, "MPE: RPN 0 num canal-membro muda a faixa do bend por nota");
+
+    // canal mestre e canal fora da zona seguem o caminho normal
+    out.clear();
+    const bool master = mpe.handle(ev(MidiEvent::Type::PitchBend, 0, 0, 4000), out);
+    const bool outside = mpe.handle(ev(MidiEvent::Type::NoteOn, 9, 60, 100), out);
+    check(!master && !outside && out.empty(), "MPE: canal mestre e canais fora da zona nao sao consumidos");
+}
+
+static void testMpeBendsOnlyItsNote() {
+    // duas notas (C4 e G4); bend de +12 so na C4 -> aparece C5 (523 Hz), o
+    // G4 (392 Hz) continua, nao sobra C4 (262 Hz)
+    using namespace dx7fm_app;
+    Synth synth;
+    synth.init(48000.0, 8);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.op[0].outputLevel = 90;
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    std::atomic<bool> enabled[kNumParts];
+    std::atomic<int> channel[kNumParts];
+    for (int p = 0; p < kNumParts; ++p) { enabled[p] = (p == 0); channel[p] = 1; }
+    NoteRouting routing;
+    dx7fm_app::MpeInput mpe;
+    mpe.enabled = true;
+    std::vector<AppEvent> evs;
+    auto midi = [&](dx7fm_app::MidiEvent::Type t, int ch, int d1, int d2) {
+        dx7fm_app::MidiEvent e; e.type = t; e.channel = ch; e.data1 = d1; e.data2 = d2;
+        evs.clear();
+        mpe.handle(e, evs);
+        for (const auto& a : evs) applyAppEvent(synth, a, enabled, channel, routing);
+    };
+    midi(dx7fm_app::MidiEvent::Type::NoteOn, 1, 60, 100);
+    midi(dx7fm_app::MidiEvent::Type::NoteOn, 2, 67, 100);
+    midi(dx7fm_app::MidiEvent::Type::PitchBend, 1, 0, 2048); // 2048/8192 x 48 = +12
+    for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); }
+    std::vector<float> x;
+    for (int i = 0; i < 9600; ++i) { float l, r; synth.renderStereo(l, r); x.push_back(l + r); }
+    const float c4 = goertzelMagnitude(x, 261.63, 48000.0), g4 = goertzelMagnitude(x, 392.0, 48000.0), c5 = goertzelMagnitude(x, 523.25, 48000.0);
+    std::printf("  (magnitudes: C4 %.4f, G4 %.4f, C5 %.4f)\n", c4, g4, c5);
+    check(c5 > 10.0f * c4 && g4 > 10.0f * c4 && std::fabs(c5 / g4 - 1.0f) < 0.3f, "MPE: o bend do canal 2 sobe so a nota dele (C4 -> C5); o G4 fica");
+
+    // nota solta e tocada de novo: voz nova comeca sem o bend nem a pressao antiga
+    midi(dx7fm_app::MidiEvent::Type::NoteOff, 1, 60, 0);
+    synth.polyAftertouch(0, 67, 0.8f);
+    midi(dx7fm_app::MidiEvent::Type::NoteOff, 2, 67, 0);
+    for (int i = 0; i < 48000 * 2 && synth.activeVoiceCount() > 0; ++i) { float l, r; synth.renderStereo(l, r); }
+    synth.noteOn(0, 67, 100); // caminho normal (sem MPE): nada de expressao herdada
+    x.clear();
+    for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); }
+    for (int i = 0; i < 9600; ++i) { float l, r; synth.renderStereo(l, r); x.push_back(l + r); }
+    const float g4b = goertzelMagnitude(x, 392.0, 48000.0), up = goertzelMagnitude(x, 784.0, 48000.0);
+    check(g4b > 10.0f * up, "MPE: voz reaproveitada nao herda o bend da nota anterior");
+}
+
+static void testMpeSlideSource() {
+    // Slide -> VoiceLevel -1: slide 1 cala SO a nota que recebeu o slide
+    Synth synth;
+    synth.init(48000.0, 8);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.op[0].outputLevel = 90;
+    v.modMatrix[0] = ModRoute{ModSource::Slide, ModDest::VoiceLevel, 0, -1.0f};
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.noteOn(0, 60, 100);
+    synth.noteOn(0, 67, 100);
+    synth.noteSlide(0, 60, 1.0f);
+    for (int i = 0; i < 4800; ++i) { float l, r; synth.renderStereo(l, r); }
+    std::vector<float> x;
+    for (int i = 0; i < 9600; ++i) { float l, r; synth.renderStereo(l, r); x.push_back(l + r); }
+    const float c4 = goertzelMagnitude(x, 261.63, 48000.0), g4 = goertzelMagnitude(x, 392.0, 48000.0);
+    std::printf("  (Slide -> VoiceLevel -1 na C4: C4 %.4f, G4 %.4f)\n", c4, g4);
+    check(g4 > 0.1f && c4 < 0.03f * g4, "MPE: fonte Slide (CC74) na matriz age so na nota que recebeu");
+    const JsonValue j = voiceParamsToJson(v);
+    const VoiceParams back = voiceParamsFromJson(JsonValue::parse(j.dump()));
+    check(back.modMatrix[0].src == ModSource::Slide, "fonte Slide salva e carrega no JSON do patch");
 }
 
 static void testRecompileCacheFollowsMatrixChanges() {
@@ -4376,6 +4499,9 @@ int main() {
     testNonZeroReleaseLevelKeepsSounding();
     testJsonLoadClampsAndRejectsGarbage();
     testMidiNoteOffReachesPartAfterDisable();
+    testMpeInputTranslatesMemberChannels();
+    testMpeBendsOnlyItsNote();
+    testMpeSlideSource();
     testRecompileCacheFollowsMatrixChanges();
     testMasterVolume();
     testTriangleFoldShape();

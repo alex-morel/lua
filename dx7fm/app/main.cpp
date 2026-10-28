@@ -21,6 +21,7 @@
 #include "wavetable_editor.h"
 #include "settings.h"
 #include "midi_clock.h"
+#include "mpe.h"
 #include <chrono>
 #include "viz.h"
 #include "patch_browser.h"
@@ -105,6 +106,15 @@ struct AppState {
     std::atomic<float> clockBpm{0.0f};
     std::atomic<int64_t> clockLastNs{0};
     std::atomic<bool> followClock{true};
+    // [2026-10-28] MPE: o estado vive na thread MIDI (mpe); a UI pede mudancas
+    // por mpeWant* + mpeDirty e le o estado atual (que a MCM do controlador
+    // tambem muda) por mpeOn/mpeMembers/mpeBend
+    dx7fm_app::MpeInput mpe;
+    std::atomic<bool> mpeDirty{false}, mpeWantOn{false};
+    std::atomic<float> mpeWantBend{48.0f};
+    std::atomic<bool> mpeOn{false};
+    std::atomic<int> mpeMembers{15};
+    std::atomic<float> mpeBend{48.0f};
     int selectedOp = 0;
     int selectedAlgo = 0; // indice (0-based) no combo de presets de algoritmo
     int algoSlot = 0;          // [2026-10-24] slot do morph de algoritmos em edicao (0 = slot 1)
@@ -260,6 +270,21 @@ void onMidiEvent(AppState& app, const MidiEvent& ev) {
         case MidiEvent::Type::Stop:
             return;
         default: break;
+    }
+    // [2026-10-28] MPE: canais-membro viram expressao por nota (mpe.h)
+    if (app.mpeDirty.exchange(false, std::memory_order_acq_rel)) {
+        app.mpe.enabled = app.mpeWantOn.load(std::memory_order_relaxed);
+        app.mpe.noteBendRange = app.mpeWantBend.load(std::memory_order_relaxed);
+    }
+    {
+        static std::vector<AppEvent> mpeOut; // so a thread MIDI
+        mpeOut.clear();
+        const bool consumed = app.mpe.handle(ev, mpeOut);
+        app.mpeOn.store(app.mpe.enabled, std::memory_order_relaxed);
+        app.mpeMembers.store(app.mpe.memberChannels, std::memory_order_relaxed);
+        app.mpeBend.store(app.mpe.noteBendRange, std::memory_order_relaxed);
+        for (const auto& e : mpeOut) app.eventQueue.push(e);
+        if (consumed) return;
     }
     AppEvent ae;
     ae.part = -1;
@@ -1025,7 +1050,7 @@ bool DrawModEnvelopes(VoiceParams& v) {
 bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
     bool changed = false;
     static const char* kSrc[] = {"None", "LFO1", "LFO2", "ModWheel", "ChannelAT", "PolyAT", "PitchBend", "Nota", "Velocity",
-                                 "LFO3", "LFO4", "Env1", "Env2", "Env3", "Macro1", "Macro2", "Macro3", "Macro4"};
+                                 "LFO3", "LFO4", "Env1", "Env2", "Env3", "Macro1", "Macro2", "Macro3", "Macro4", "Slide (MPE)"};
     static const char* kDst[] = {"None", "OperatorLevel", "OperatorFx1", "OperatorFeedback", "VoicePitch", "OperatorMorph",
                                  "VoicePan", "VoiceLevel", "OperatorPitch", "OperatorFx2", "LfoRate", "LfoDepth", "AlgoMorph"};
     static const char* kDstTip[] = {"", "nivel do operador x (1 + quantidade)", "FX1 do operador x (1 + quantidade): corte, taxa, afinacao, drive",
@@ -2032,6 +2057,33 @@ void DrawSettingsPopup(AppState& app) {
     ImGui::Separator();
     if (ImGui::Checkbox("Seguir o clock MIDI quando ele chegar", &app.settings.midiClock)) dx7fm_app::saveSettings(app.settings);
     ImGui::Separator();
+    // [2026-10-28] MPE (estado real vem da thread MIDI: a MCM do controlador tambem liga/desliga)
+    bool mpeOn = app.mpeOn.load(std::memory_order_relaxed);
+    if (ImGui::Checkbox("MPE (zona inferior)", &mpeOn)) {
+        app.settings.mpe = mpeOn;
+        app.mpeWantOn.store(mpeOn, std::memory_order_relaxed);
+        app.mpeOn.store(mpeOn, std::memory_order_relaxed);
+        app.mpeDirty.store(true, std::memory_order_release);
+        dx7fm_app::saveSettings(app.settings);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled(mpeOn ? "canal 1 = mestre, notas nos canais 2-%d" : "(liga sozinho se o controlador mandar a configuracao MPE)",
+                        1 + app.mpeMembers.load(std::memory_order_relaxed));
+    if (mpeOn) {
+        float bend = app.mpeBend.load(std::memory_order_relaxed);
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::SliderFloat("Bend por nota (semitons)", &bend, 1.0f, 96.0f, "%.0f")) {
+            app.settings.mpeBendRange = std::round(bend);
+            app.mpeWantBend.store(app.settings.mpeBendRange, std::memory_order_relaxed);
+            app.mpeBend.store(app.settings.mpeBendRange, std::memory_order_relaxed);
+            app.mpeWantOn.store(true, std::memory_order_relaxed);
+            app.mpeDirty.store(true, std::memory_order_release);
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) dx7fm_app::saveSettings(app.settings);
+        ImGui::TextDisabled("As notas tocam nas partes do canal 1 (ou omni). Na matriz: pressao = PolyAT,\n"
+                            "CC74 = Slide (MPE); o bend de cada nota ja vai direto na afinacao dela.");
+    }
+    ImGui::Separator();
     ImGui::TextUnformatted("MIDI learn (CC -> controle)");
     ImGui::TextDisabled("As macros valem pra parte que recebe o canal do CC; volume e BPM sao globais.");
     for (int t = 0; t <= static_cast<int>(dx7fm_app::CcTarget::Bpm); ++t) {
@@ -2284,6 +2336,11 @@ int main(int, char**) {
     AppState app;
 
     app.settings = dx7fm_app::loadSettings();
+    app.mpeWantOn.store(app.settings.mpe);
+    app.mpeWantBend.store(app.settings.mpeBendRange);
+    app.mpeOn.store(app.settings.mpe);
+    app.mpeBend.store(app.settings.mpeBendRange);
+    app.mpeDirty.store(true);
     rebuildCcTable(app);
     app.tuningBrowser.exts = {".scl", ".kbm"};
     app.dx7Browser.exts = {".syx"};

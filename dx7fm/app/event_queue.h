@@ -20,7 +20,9 @@ struct AppEvent {
     enum class Kind { NoteOn, NoteOff, PitchBend, ModWheel, ChannelAftertouch, PolyAftertouch,
                       Sustain, Sostenuto, AllNotesOff, ResetControllers,
                       Macro,           // [2026-10-24] note = indice da macro (0..3), floatValue = 0..1
-                      TransportStart }; // [2026-10-24] Start do clock MIDI: zera a posicao de batida
+                      TransportStart,  // [2026-10-24] Start do clock MIDI: zera a posicao de batida
+                      NotePitchBend,   // [2026-10-28] MPE: note = nota, floatValue = semitons so dela
+                      NoteSlide };     // [2026-10-28] MPE: note = nota, floatValue = CC74 0..1
     Kind kind = Kind::NoteOn;
     int part = -1;        // >=0: destinado a UMA parte especifica (teclado do PC). -1: roteia por canal MIDI (ver channel1to16)
     int channel1to16 = 0; // 0 = omni (so usado quando part == -1)
@@ -101,6 +103,8 @@ inline void applyAppEvent(dx7fm::Synth& synth, const AppEvent& e,
         case AppEvent::Kind::TransportStart:     synth.resetTransport(); break;
         case AppEvent::Kind::ChannelAftertouch:  route([&](int p) { synth.channelAftertouch(p, e.floatValue); }); break;
         case AppEvent::Kind::PolyAftertouch:     route([&](int p) { synth.polyAftertouch(p, e.note, e.floatValue); }); break;
+        case AppEvent::Kind::NotePitchBend:      route([&](int p) { synth.notePitchBend(p, e.note, e.floatValue); }); break;
+        case AppEvent::Kind::NoteSlide:          route([&](int p) { synth.noteSlide(p, e.note, e.floatValue); }); break;
         case AppEvent::Kind::Sustain:            route([&](int p) { synth.sustainPedal(p, e.boolValue); }); break;
         case AppEvent::Kind::Sostenuto:          route([&](int p) { synth.sostenutoPedal(p, e.boolValue); }); break;
         case AppEvent::Kind::AllNotesOff:        route([&](int p) { synth.allNotesOff(p); }); break;

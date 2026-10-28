@@ -783,6 +783,15 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
       <h3>Arpejador</h3>
       <p>No card <strong>ARPEJADOR</strong> (salvo no patch): com <strong>Ligado</strong>, as teclas que você segura montam o padrão e o arpejador toca uma nota por passo no tempo do BPM. Modos: sobe, desce, sobe/desce (sem repetir as pontas), aleatório e como tocado; <strong>Oitavas</strong> repete o padrão até 4 oitavas acima; <strong>Divisão</strong> é o tamanho do passo (1/16 = semicolcheia); <strong>Gate</strong> é quanto do passo a nota soa (100% = legato); <strong>Swing</strong> atrasa os passos ímpares (33% = tercina); <strong>Latch</strong> mantém o arpejo depois de soltar as teclas, até a próxima tecla. Os passos caem na grade do compasso, e o Start de um clock MIDI recomeça o arpejo no 1.</p>
 
+      <h3>MPE (expressão por nota)</h3>
+      <p>Controladores MPE (Seaboard, LinnStrument, Osmose, Push 3…) mandam cada nota num canal MIDI próprio, com bend, pressão e “slide” (CC74) só daquela nota. Ligue em <strong>Configurações → MPE (zona inferior)</strong> — ou deixe o controlador ligar sozinho (a maioria manda a mensagem de configuração MPE ao conectar). O canal 1 é o mestre (bend e pedais da parte inteira); as notas chegam nos canais 2–16 e tocam nas partes que recebem o canal 1 (ou omni).</p>
+      <ul>
+        <li><strong>Bend por nota</strong>: vai direto na afinação da nota (faixa padrão 48 semitons, ajustável).</li>
+        <li><strong>Pressão</strong>: chega como <em>PolyAT</em> na matriz de modulação.</li>
+        <li><strong>Slide (CC74)</strong>: fonte <em>Slide (MPE)</em> na matriz — por exemplo, Slide → OperatorFx1 abre o filtro de um operador.</li>
+      </ul>
+      <p>Só a zona inferior é suportada (a superior, com mestre no canal 16, não).</p>
+
       <h3>BPM, clock MIDI e LFO global</h3>
       <p>O knob <strong>BPM</strong> (topo) é o tempo dos LFOs e envelopes com Sync e do arpejador. Se um teclado, sequenciador ou DAW mandar <strong>clock MIDI</strong> pra porta do dx7fm, o BPM passa a seguir o clock (o knob mostra “BPM (MIDI)”); dá pra desligar isso em Configurações. Cada LFO tem a opção <strong>Global</strong>: em vez de um LFO por nota, a parte inteira usa um só — num acorde, todas as notas ondulam juntas. Um LFO global com Sync fica alinhado ao compasso (e ao Start do clock). A velocidade de um LFO global pode ser modulada na matriz (destino “LFO rate”) pelo mod wheel, aftertouch, pitch bend, macros ou outro LFO global — fontes que mudam de nota pra nota (velocity, nota, envelopes) não valem pra ele, já que ele é um só pra parte.</p>
 

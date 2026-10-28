@@ -385,14 +385,31 @@ public:
         }
     }
 
-    void polyAftertouch(int part, int note, float pressure01) {
+    // fn(VoiceControllers&) em cada voz que esta tocando `note` na parte
+    // (Poly: a voz da nota; Mono/Unison: o grupo, se a nota e a que soa)
+    template <typename Fn> void forNoteVoices(int part, int note, Fn&& fn) {
         auto& pr = parts_[part];
         if (pr.runMode == VoiceMode::Poly) {
             auto it = pr.noteToSlot.find(note);
-            if (it != pr.noteToSlot.end()) slots_[it->second].voice.controllers().polyAT01 = pressure01;
+            if (it != pr.noteToSlot.end()) fn(slots_[it->second].voice.controllers());
         } else if (pr.monoSoundingNote == note) {
-            for (int idx : pr.activeSlots) slots_[idx].voice.controllers().polyAT01 = pressure01;
+            for (int idx : pr.activeSlots) fn(slots_[idx].voice.controllers());
         }
+    }
+
+    void polyAftertouch(int part, int note, float pressure01) {
+        forNoteVoices(part, note, [&](VoiceControllers& c) { c.polyAT01 = pressure01; });
+    }
+
+    // [ADICIONADO em 2026-10-28] expressao por nota (MPE): bend so desta nota
+    // (somado ao bend da parte) e slide (CC74, ModSource::Slide). Zeram quando
+    // a voz comeca uma nota nova; o app manda os valores iniciais logo depois
+    // do noteOn (no mesmo bloco).
+    void notePitchBend(int part, int note, float semis) {
+        forNoteVoices(part, note, [&](VoiceControllers& c) { c.noteBendSemis = semis; });
+    }
+    void noteSlide(int part, int note, float v01) {
+        forNoteVoices(part, note, [&](VoiceControllers& c) { c.slide01 = v01; });
     }
 
     void channelAftertouch(int part, float pressure01) {
@@ -636,6 +653,11 @@ private:
         s.voice.controllers().modWheel01 = pr.modWheel;
         for (int k = 0; k < VoiceParams::kNumMacros; ++k) s.voice.controllers().macro01[k] = pr.macro[k].load(std::memory_order_relaxed);
         s.voice.controllers().channelAT01 = pr.channelAT;
+        // [2026-10-28] expressao por nota nao passa de uma nota pra outra (antes
+        // uma voz reaproveitada herdava o poly aftertouch da nota anterior)
+        s.voice.controllers().polyAT01 = 0.0f;
+        s.voice.controllers().noteBendSemis = 0.0f;
+        s.voice.controllers().slide01 = 0.0f;
     }
 
     float soundingHz(const PartRuntime& pr, int note) const {

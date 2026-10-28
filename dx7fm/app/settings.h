@@ -1,6 +1,7 @@
 #pragma once
 #include "dx7_params.h"
 #include "dx7_patch_io.h"
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -39,6 +40,8 @@ struct AppSettings {
     bool midiClock = true;   // true: BPM segue o clock MIDI quando ele chega
     std::vector<CcMapping> cc;
     std::string sclPath[4], kbmPath[4]; // por parte (A..D)
+    bool mpe = false;            // [2026-10-28] MPE zona inferior (mpe.h)
+    float mpeBendRange = 48.0f;  // bend por nota, semitons
 
     int ccFor(CcTarget t) const {
         for (const auto& m : cc) if (m.target == t) return m.cc;
@@ -82,6 +85,8 @@ inline std::string settingsToJson(const AppSettings& s) {
         tun.push(std::move(e));
     }
     j.set("tuning", std::move(tun));
+    j.set("mpe", JsonValue::makeBool(s.mpe));
+    j.set("mpeBendRange", JsonValue::makeNumber(s.mpeBendRange));
     return j.dump();
 }
 
@@ -92,6 +97,8 @@ inline AppSettings settingsFromJson(const std::string& text) {
     int os = static_cast<int>(j.numberAt("oversample", 1));
     s.oversample = os == 2 || os == 4 ? os : 1;
     s.midiClock = j.boolAt("midiClock", true);
+    s.mpe = j.boolAt("mpe", false);
+    s.mpeBendRange = std::clamp(static_cast<float>(j.numberAt("mpeBendRange", 48.0)), 1.0f, 96.0f);
     if (auto* cc = j.find("cc"))
         for (size_t i = 0; i < cc->arraySize(); ++i) {
             const JsonValue& e = cc->at(i);

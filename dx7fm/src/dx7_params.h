@@ -174,7 +174,8 @@ struct OperatorParams {
 // envelopes de modulacao 0..1 (nivel/99).
 enum class ModSource : uint8_t { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend, KeyNote, Velocity,
                                  LFO3, LFO4, Env1, Env2, Env3,
-                                 Macro1, Macro2, Macro3, Macro4 }; // [2026-10-24] macros da parte, 0..1
+                                 Macro1, Macro2, Macro3, Macro4, // [2026-10-24] macros da parte, 0..1
+                                 Slide }; // [2026-10-28] MPE: CC74 por nota ("slide"/timbre), 0..1
 // OperatorMorph: [ADICIONADO em 2026-10-18], soma na posicao do morph A->B (Additive/Wavetable).
 // [ADICIONADOS em 2026-10-22, no fim]:
 //   VoicePan      soma no pan da voz (-1..1; +1 = toda pra direita)
@@ -584,7 +585,7 @@ inline void sanitize(VoiceParams& v) {
         e.division = static_cast<uint8_t>(std::min<int>(e.division, kNumLfoDivisions - 1));
     }
     for (auto& r : v.modMatrix) {
-        r.src = sanEnum(r.src, ModSource::Macro4);
+        r.src = sanEnum(r.src, ModSource::Slide);
         r.dest = sanEnum(r.dest, ModDest::AlgoMorph);
         r.opIndex = std::clamp(r.opIndex, 0, modDestPerLfo(r.dest) ? kNumLfos - 1 : kNumOps - 1);
         r.depth = sanF(r.depth, -1.0f, 1.0f, 0.0f);

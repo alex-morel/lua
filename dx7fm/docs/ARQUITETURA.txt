@@ -578,6 +578,21 @@ ou um leitor de arquivo preencheria.
           |L3-L2|/v3, v = egRateToSpeed) e calculada no rebuildCache; por
           amostra o EG recebe taxa/k, k = ciclo natural / divisao do BPM,
           entao o envelope inteiro (inclusive ataque e release) escala.
+  MPE [ADICIONADO em 2026-10-28] (app/mpe.h, Synth::notePitchBend/noteSlide):
+  - VoiceControllers ganha noteBendSemis (somado ao bend da parte) e
+      slide01 (ModSource::Slide, no fim do enum); a pressao por nota usa
+      polyAT01. Os tres zeram quando a voz comeca nota nova (startVoice).
+  - MpeInput (thread MIDI): zona inferior, canal 1 mestre, membros 2..1+N.
+      Note on num membro sai como nota do canal 1 + NotePitchBend/
+      PolyAftertouch/NoteSlide com os ultimos valores do canal (o
+      controlador manda antes do note on). Bend/pressao/CC74 do membro vao
+      so pra nota dele. MCM (RPN 6 no canal 1) liga/desliga e define N; RPN
+      0 num membro muda a faixa do bend por nota (padrao 48). Limite: uma
+      nota por canal e nao duas notas iguais ao mesmo tempo (noteToSlot e
+      por numero de nota); zona superior nao suportada.
+  - settings.json: "mpe", "mpeBendRange". MidiEvent foi pra
+      app/midi_event.h (testavel sem ALSA).
+
   RECURSOS DE 2026-10-24 (macros, LFO global, clock, arpejador, afinacao, SysEx):
   - Macros: VoiceParams::macro[4] (valor salvo) + macroName; ModSource
       Macro1..4. O valor AO VIVO e um controlador da parte

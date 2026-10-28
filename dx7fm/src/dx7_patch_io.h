@@ -344,6 +344,7 @@ inline const char* modSourceName(ModSource s) {
         case ModSource::Macro2:    return "Macro2";
         case ModSource::Macro3:    return "Macro3";
         case ModSource::Macro4:    return "Macro4";
+        case ModSource::Slide:     return "Slide";
     }
     return "None";
 }
@@ -365,6 +366,7 @@ inline ModSource modSourceFromName(const std::string& s) {
     if (s == "Macro2")    return ModSource::Macro2;
     if (s == "Macro3")    return ModSource::Macro3;
     if (s == "Macro4")    return ModSource::Macro4;
+    if (s == "Slide")     return ModSource::Slide;
     return ModSource::None;
 }
 
