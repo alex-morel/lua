@@ -217,6 +217,16 @@ pula so o target dx7fm_standalone -- `demo` continua buildando normalmente
 (nao trava o desenvolvimento do motor em quem nao tem/nao quer as libs de
 audio/UI instaladas).
 
+[ADICIONADO em 2026-10-28] Patches de demonstracao (tools/presets/): o
+CMake tambem builda `gen_presets` e `patch_tests`. Rodando na pasta dx7fm/:
+
+    ./build/gen_presets   # 12 patches em patches/ + previas em output/presets/
+    ./build/patch_tests   # confere o comportamento de cada patch (65 testes),
+                          # grava os cenarios em output/patch_tests/
+    python3 tools/presets/spectrogram.py output/patch_tests spec.png piano sino
+
+patches/ e output/ ficam fora do git: o gerador e a fonte dos patches.
+
 E cria a pasta output/ com:
     01_simple_fm.wav          - FM de 2 operadores (op1 modula op0), mono
     02_filtered_modulator.wav - mesmo patch, mas com filtro passa-baixa

@@ -15,6 +15,14 @@ target_compile_options(demo PRIVATE -Wall -Wextra)
 target_include_directories(demo PRIVATE src) # demo.cpp inclui app/event_queue.h (sem SDL/ALSA)
 target_link_libraries(demo PRIVATE Threads::Threads)
 
+# --- patches de demonstracao: gerador + testes de comportamento ------------
+foreach(tool gen_presets patch_tests)
+    add_executable(${tool} tools/presets/${tool}.cpp)
+    target_compile_options(${tool} PRIVATE -Wall -Wextra)
+    target_include_directories(${tool} PRIVATE src app)
+    target_link_libraries(${tool} PRIVATE Threads::Threads)
+endforeach()
+
 # --- app standalone (SDL2 + ALSA + Dear ImGui) -----------------------------
 find_package(PkgConfig)
 if(PkgConfig_FOUND)
