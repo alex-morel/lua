@@ -590,7 +590,12 @@ ou um leitor de arquivo preencheria.
       (Voice::bindGlobalLfos; indice por process(), sub-amostras do
       oversampling leem a mesma amostra). Key sync: reinicia na 1a nota
       presa da parte. Com tempoSync, a fase vem da posicao de batida
-      (LFO::processAtPhase). LfoRate da matriz nao age no global.
+      (LFO::processAtPhase). [ALTERADO em 2026-10-28] LfoRate da matriz
+      age no global (Synth::globalLfoRateTrim, 1x por pedaco) com fontes
+      que tem UM valor na parte: mod wheel, aftertouch de canal, bend,
+      macros e outro LFO global (valor do pedaco anterior); fontes por voz
+      sao ignoradas. Com sync, o excedente de velocidade vira deslocamento
+      de fase (PartRuntime::glfoSyncOffset; zera no Start do transporte).
   - Posicao de batida (Synth::beatPos_): seminimas desde o ultimo Start,
       avanca com o BPM em renderBlock; resetTransport() (evento
       TransportStart, vindo do Start do clock MIDI) zera e recomeca o arp.

@@ -95,6 +95,11 @@ struct PartRuntime {
     LFO glfo[kNumLfos];
     float glfoBuf[kNumLfos][256] = {};
     bool glfoRestart = false;
+    // [2026-10-28] LfoRate num LFO global: ultimo valor de cada um (fonte de
+    // LfoRate pra outro LFO global, um pedaco atrasado) e, com sync, o
+    // deslocamento de fase acumulado pela velocidade modulada (em ciclos)
+    float glfoLast[kNumLfos] = {};
+    double glfoSyncOffset[kNumLfos] = {};
     // [2026-10-24] arpejador (so a audio thread): teclas em ordem de chegada,
     // quantas estao fisicamente presas (latch), passo atual e agenda em batidas
     struct ArpKey { int note, velocity; };
@@ -494,7 +499,10 @@ public:
     // Chamar da thread do audio (Start do clock MIDI -> evento TransportStart).
     void resetTransport() {
         beatPos_ = 0.0;
-        for (auto& pr : parts_) if (pr.arpRunning) { pr.arpNextBeat = 0.0; pr.arpStep = 0; } // arpejo recomeca no 1
+        for (auto& pr : parts_) {
+            if (pr.arpRunning) { pr.arpNextBeat = 0.0; pr.arpStep = 0; } // arpejo recomeca no 1
+            for (double& o : pr.glfoSyncOffset) o = 0.0;                 // LFO global com sync volta pra grade
+        }
     }
     double beatPosition() const { return beatPos_; }
 
@@ -801,6 +809,8 @@ private:
             auto& pr = parts_[p];
             const bool restart = pr.glfoRestart;
             pr.glfoRestart = false;
+            const float rateTrim[kNumLfos] = {globalLfoRateTrim(p, *live[p], 0), globalLfoRateTrim(p, *live[p], 1),
+                                              globalLfoRateTrim(p, *live[p], 2), globalLfoRateTrim(p, *live[p], 3)};
             for (int k = 0; k < kNumLfos; ++k) {
                 const LFOParams& lp = live[p]->voice.lfo(k);
                 if (!lp.global) continue;
@@ -808,16 +818,24 @@ private:
                 g.configure(lp);
                 g.setTempo(bpm);
                 if (restart) g.noteOn();
+                const float rateMul = rateTrim[k] != 0.0f ? std::exp2(3.0f * rateTrim[k]) : 1.0f; // como na voz
                 float* buf = pr.glfoBuf[k];
                 if (lp.tempoSync) {
                     const double cycle = lfoDivisionBeats(lp.division);
+                    // velocidade modulada: o excedente vira deslocamento de fase
+                    // (sem modulacao fica na grade do compasso, como antes)
+                    const double extraPerSample = (rateMul - 1.0) * beatsPerSample / cycle;
+                    double& off = pr.glfoSyncOffset[k];
                     for (int i = 0; i < len; ++i) {
-                        const double b = (beatPos_ + i * beatsPerSample) / cycle;
+                        const double b = (beatPos_ + i * beatsPerSample) / cycle + off;
                         buf[i] = g.processAtPhase(b - std::floor(b));
+                        off += extraPerSample;
                     }
+                    off -= std::floor(off);
                 } else {
-                    for (int i = 0; i < len; ++i) buf[i] = g.process();
+                    for (int i = 0; i < len; ++i) buf[i] = g.process(rateMul);
                 }
+                pr.glfoLast[k] = buf[len - 1];
                 glfoPtr[p][k] = buf;
             }
         }
@@ -898,6 +916,40 @@ private:
         float& g = polyphonyGain_[part];
         g += (targetGain - g) * (targetGain < g ? polyDropCoef_ : polySmoothCoef_);
         return g;
+    }
+
+    // [ADICIONADO em 2026-10-28] Soma das rotas ModDest::LfoRate que miram o
+    // LFO global k da parte. O LFO global e um so pra parte, entao so valem
+    // fontes com UM valor na parte: mod wheel, aftertouch de canal, bend,
+    // macros e outro LFO global (o valor do fim do pedaco anterior). Fontes
+    // por voz (nota, velocity, envelopes, LFO nao global, poly AT) sao
+    // ignoradas aqui -- no LFO global nao ha "a" voz.
+    float globalLfoRateTrim(int part, const PatchSnapshot& snap, int k) const {
+        const auto& v = snap.voice;
+        if (!v.lfo(k).global) return 0.0f;
+        const auto& pr = parts_[part];
+        float trim = 0.0f;
+        for (const auto& r : v.modMatrix) {
+            if (r.dest != ModDest::LfoRate || r.opIndex != k) continue;
+            float val;
+            switch (r.src) {
+                case ModSource::ModWheel:  val = pr.modWheel; break;
+                case ModSource::ChannelAT: val = pr.channelAT; break;
+                case ModSource::PitchBend: val = pr.bend / std::max(0.01f, pr.params.bendRangeSemis); break;
+                case ModSource::Macro1: case ModSource::Macro2: case ModSource::Macro3: case ModSource::Macro4:
+                    val = pr.macro[static_cast<int>(r.src) - static_cast<int>(ModSource::Macro1)].load(std::memory_order_relaxed);
+                    break;
+                case ModSource::LFO1: case ModSource::LFO2: case ModSource::LFO3: case ModSource::LFO4: {
+                    const int src = r.src == ModSource::LFO1 ? 0 : r.src == ModSource::LFO2 ? 1 : r.src == ModSource::LFO3 ? 2 : 3;
+                    if (!v.lfo(src).global) continue;
+                    val = pr.glfoLast[src];
+                    break;
+                }
+                default: continue;
+            }
+            trim += val * r.depth;
+        }
+        return trim;
     }
 
     // Pos-mix de uma amostra (ja com o ganho de polifonia de cada parte):

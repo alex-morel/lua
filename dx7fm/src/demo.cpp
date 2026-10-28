@@ -3461,6 +3461,58 @@ static void testGlobalLfo() {
           "LFO global com sync: fase na grade das batidas; Start do transporte (clock MIDI) realinha");
 }
 
+// [ADICIONADO em 2026-10-28] LfoRate num LFO global: LFO1 global (quadrada,
+// 2 Hz, ou sync 1/4 = 2 Hz a 120 BPM) -> VoiceLevel; Macro1 (ou Velocity, que
+// e por voz e nao vale no LFO global) -> LfoRate do LFO1 com 1/3 (x2 no
+// maximo). Conta os ciclos da ondulacao em 2 s.
+static int globalLfoCycles(bool sync, ModSource src, float macro) {
+    Synth synth;
+    synth.init(48000.0, 4);
+    synth.setTempoBpm(120.0f);
+    VoiceParams v;
+    v.matrix = AlgorithmMatrix{};
+    v.matrix.outputMix[0] = 1.0f;
+    v.op[0].outputLevel = 80;
+    v.lfo1.wave = LfoWave::Square;
+    v.lfo1.rate = 2.0f;
+    v.lfo1.global = true;
+    v.lfo1.tempoSync = sync;
+    v.lfo1.division = 6;
+    v.modMatrix[0] = ModRoute{ModSource::LFO1, ModDest::VoiceLevel, 0, 0.5f};
+    v.modMatrix[1] = ModRoute{src, ModDest::LfoRate, 0, 1.0f / 3.0f};
+    synth.part(0).voice = v;
+    synth.recompile(0);
+    synth.setMacro(0, 0, macro);
+    synth.noteOn(0, 69, 127);
+    std::vector<float> peaks; // pico por bloco de 5 ms; o nivel alterna entre 0.5x e 1.5x
+    for (int b = 0; b < 400; ++b) {
+        float L[240], R[240];
+        synth.renderBlock(L, R, 240);
+        float pk = 0.0f;
+        for (float x : L) pk = std::max(pk, std::fabs(x));
+        if (b >= 4) peaks.push_back(pk);
+    }
+    const float lo = *std::min_element(peaks.begin(), peaks.end()), hi = *std::max_element(peaks.begin(), peaks.end());
+    const float up = lo + 0.7f * (hi - lo), down = lo + 0.3f * (hi - lo);
+    int cycles = 0;
+    bool high = false;
+    for (float pk : peaks) {
+        if (!high && pk > up) { high = true; ++cycles; }
+        if (high && pk < down) high = false;
+    }
+    return cycles;
+}
+
+static void testGlobalLfoRateModulation() {
+    const int base = globalLfoCycles(false, ModSource::Macro1, 0.0f), fast = globalLfoCycles(false, ModSource::Macro1, 1.0f);
+    const int perVoice = globalLfoCycles(false, ModSource::Velocity, 0.0f);
+    const int syncBase = globalLfoCycles(true, ModSource::Macro1, 0.0f), syncFast = globalLfoCycles(true, ModSource::Macro1, 1.0f);
+    std::printf("  (ciclos em 2 s: livre %d -> %d com a macro; velocity (por voz) %d; sync %d -> %d)\n", base, fast, perVoice, syncBase, syncFast);
+    check(std::abs(base - 4) <= 1 && std::abs(fast - 8) <= 1, "LFO global: Macro -> LfoRate dobra a velocidade");
+    check(perVoice == base, "LFO global: fonte por voz (velocity) nao mexe na velocidade dele");
+    check(std::abs(syncBase - 4) <= 1 && std::abs(syncFast - 8) <= 1, "LFO global com sync: LfoRate tambem vale (vira deslocamento de fase)");
+}
+
 // --- [ADICIONADO em 2026-10-24] arpejador ---
 struct ArpEvent { int note; bool on; double sec; };
 static std::vector<ArpEvent> runArp(const std::function<void(ArpParams&)> setup, const std::vector<int>& keys, double seconds,
@@ -4364,6 +4416,7 @@ int main() {
     testMacros();
     testMidiClockEstimator();
     testGlobalLfo();
+    testGlobalLfoRateModulation();
     testArpeggiator();
     testTuningParsers();
     testTuningInEngine();
