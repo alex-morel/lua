@@ -115,6 +115,7 @@ public:
         sampleRate_ = sampleRate;
         // coeficientes one-pole constantes (antes: um exp() por amostra cada)
         polySmoothCoef_ = 1.0f - std::exp(-1.0f / (0.03f * static_cast<float>(sampleRate)));   // ~30ms
+        polyDropCoef_ = 1.0f - std::exp(-1.0f / (0.001f * static_cast<float>(sampleRate)));   // ~1ms
         volumeSmoothCoef_ = 1.0f - std::exp(-1.0f / (0.02f * static_cast<float>(sampleRate))); // ~20ms
         slots_.assign(static_cast<size_t>(maxVoices), VoiceSlot{});
         jobs_.clear();
@@ -878,8 +879,12 @@ private:
         // N nao e a contagem crua de vozes, e a soma de Voice::loudness():
         // vozes em release (ou presas no pedal com sustain 0) pesam menos,
         // senao cada nota nova de um acorde com pedal saia mais baixa.
+        // [2026-10-28] Assimetrica: quando a carga SOBE (acorde atacado de
+        // uma vez) o ganho cai em ~1ms -- com 30ms o acorde passava ~15ms
+        // acima do limite; a carga ja segue o envelope de amplitude de cada
+        // voz, entao nao ha degrau. Quando a carga desce, os 30ms de antes.
         float targetGain = 1.0f / std::sqrt(std::max(1.0f, voiceLoad));
-        polyphonyGain_ += (targetGain - polyphonyGain_) * polySmoothCoef_;
+        polyphonyGain_ += (targetGain - polyphonyGain_) * (targetGain < polyphonyGain_ ? polyDropCoef_ : polySmoothCoef_);
         outL *= polyphonyGain_;
         outR *= polyphonyGain_;
 
@@ -911,7 +916,7 @@ private:
     GlobalFxParams globalFx_;
     GlobalFxChain fxChain_;
     float polyphonyGain_ = 1.0f; // suavizado, ver renderStereo() (compensacao 1/sqrt(N))
-    float polySmoothCoef_ = 0.0f, volumeSmoothCoef_ = 0.0f;
+    float polySmoothCoef_ = 0.0f, polyDropCoef_ = 0.0f, volumeSmoothCoef_ = 0.0f;
     std::atomic<float> masterVolume_{1.0f}; // alvo, escrito pela UI (setMasterVolume)
     std::atomic<float> tempoBpm_{120.0f};    // setTempoBpm (LFOs com tempoSync)
     double beatPos_ = 0.0;                   // so a audio thread (resetTransport, renderBlock)

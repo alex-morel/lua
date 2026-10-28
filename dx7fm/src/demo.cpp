@@ -1378,6 +1378,31 @@ static void testPolyphonyGainIsSmoothedNoClick() {
     check(maxJump < 0.3f, "ganho de polifonia suavizado: nenhum degrau abrupto ao adicionar uma nota ao acorde");
 }
 
+static void testPolyphonyGainCatchesChordAttack() {
+    // [ADICIONADO em 2026-10-28] Acorde atacado de uma vez: o ganho de
+    // polifonia cai rapido (~1ms) quando a carga sobe, entao os primeiros
+    // ms do acorde nao passam do nivel que ele tem depois de assentado (com
+    // 30ms simetricos o ataque saia bem mais alto e batia no limitador).
+    // Volume da parte baixo: o acorde assentado fica longe do limitador.
+    auto peakOf = [](int from, int to) {
+        Synth synth;
+        synth.init(48000.0, 16);
+        synth.part(0).level = 0.25f;
+        synth.recompile(0);
+        for (int n : {48, 55, 60, 64}) synth.noteOn(0, n, 70);
+        float pk = 0.0f;
+        for (int i = 0; i < to; ++i) {
+            float l, r;
+            synth.renderStereo(l, r);
+            if (i >= from) pk = std::max({pk, std::fabs(l), std::fabs(r)});
+        }
+        return pk;
+    };
+    const float attack = peakOf(0, 1440), settled = peakOf(9600, 14400); // 0..30ms x 200..300ms
+    std::printf("  (pico do acorde de 4 notas: ataque=%.3f, assentado=%.3f)\n", attack, settled);
+    check(attack < settled * 1.25f, "ganho de polifonia: o ataque de um acorde de 4 notas nao sai mais alto que o acorde assentado");
+}
+
 static void testMultitimbral4Parts() {
     Synth synth;
     synth.init(48000.0, 64);
@@ -4198,6 +4223,7 @@ int main() {
     testMasterLimiterIsTransparentForSingleVoice();
     testPolyphonyGainKeepsTotalLoudnessRoughlyConstant();
     testPolyphonyGainIsSmoothedNoClick();
+    testPolyphonyGainCatchesChordAttack();
     testMultitimbral4Parts();
     testPolyphonyCap();
     testStolenVoiceNotReleasedByOldNote();
