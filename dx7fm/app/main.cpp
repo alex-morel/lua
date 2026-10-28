@@ -22,6 +22,7 @@
 #include "settings.h"
 #include "midi_clock.h"
 #include "mpe.h"
+#include "patch_mutate.h"
 #include <chrono>
 #include "viz.h"
 #include "patch_browser.h"
@@ -42,6 +43,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <random>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -110,6 +112,7 @@ struct AppState {
     // por mpeWant* + mpeDirty e le o estado atual (que a MCM do controlador
     // tambem muda) por mpeOn/mpeMembers/mpeBend
     dx7fm_app::MpeInput mpe;
+    float mutateAmount = 0.2f; // [2026-10-28] botao Mutar (so UI)
     std::atomic<bool> mpeDirty{false}, mpeWantOn{false};
     std::atomic<float> mpeWantBend{48.0f};
     std::atomic<bool> mpeOn{false};
@@ -1431,6 +1434,19 @@ void DrawDx7Import(AppState& app, int part) {
     ImGui::EndPopup();
 }
 
+// [2026-10-28] Mutar: variacao aleatoria do som atual (um passo de desfazer)
+void mutatePart(AppState& app, int part) {
+    historyCommit(app, part);
+    static std::mt19937 seeds{std::random_device{}()};
+    dx7fm_app::mutatePatch(app.synth.part(part).voice, app.mutateAmount, seeds());
+    dx7fm::sanitize(app.synth.part(part));
+    publishPart(app, part);
+    historyCommit(app, part);
+    auto& ui = app.patchUi[part];
+    ui.dirty = patchFingerprint(app.synth.part(part)) != ui.baseline;
+    setPatchStatus(ui, true, "Mutado (Ctrl+Z volta)");
+}
+
 void DrawPatchSection(AppState& app, int part) {
     auto& ui = app.patchUi[part];
     auto& pp = app.synth.part(part);
@@ -1460,6 +1476,15 @@ void DrawPatchSection(AppState& app, int part) {
         if (ImGui::SmallButton(ab.side == 0 ? "Copiar A -> B" : "Copiar B -> A")) copyToOtherSide(app, part);
         ImGui::SameLine(0, 18);
         DrawDx7Import(app, part);
+        ImGui::SameLine(0, 18);
+        if (ImGui::SmallButton("Mutar")) mutatePart(app, part);
+        ImGui::SetItemTooltip("Varia o som atual ao acaso (niveis, razoes, envelopes, efeito, LFOs, matriz).\n"
+                              "Cada clique e um passo de desfazer: Ctrl+Z volta.");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(70);
+        int pct = static_cast<int>(std::lround(app.mutateAmount * 100.0f));
+        if (ImGui::SliderInt("##mut", &pct, 5, 60, "%d%%")) app.mutateAmount = pct / 100.0f;
+        ImGui::SetItemTooltip("Quanto mutar: 10%% retoca, 50%% muda bastante");
     }
     // re-varre a pasta de vez em quando: pega arquivos copiados/apagados por fora do app
     if (ImGui::GetTime() - app.lastPatchScan > 2.0) rescanPatches(app);

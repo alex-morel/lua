@@ -20,12 +20,15 @@
 #include "../app/settings.h"
 #include "../app/midi_clock.h"
 #include "../app/mpe.h"
+#include "../app/patch_mutate.h"
+#include "../app/factory_bank.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -2009,6 +2012,67 @@ static void testMpeSlideSource() {
     const JsonValue j = voiceParamsToJson(v);
     const VoiceParams back = voiceParamsFromJson(JsonValue::parse(j.dump()));
     check(back.modMatrix[0].src == ModSource::Slide, "fonte Slide salva e carrega no JSON do patch");
+}
+
+// --- [ADICIONADO em 2026-10-28] Mutar ---
+static void testMutatePatch() {
+    using dx7fm_app::mutatePatch;
+    const auto bank = dx7fm_app::factory::factoryBank();
+    const PartParams& piano = bank[0].part; // Piano Eletrico FM: ops 0..3 em uso, 4..7 desligados
+    auto json = [](const VoiceParams& v) { return voiceParamsToJson(v).dump(); };
+
+    VoiceParams a = piano.voice;
+    mutatePatch(a, 0.0f, 1);
+    check(json(a) == json(piano.voice), "Mutar com 0% nao muda nada");
+
+    VoiceParams b = piano.voice, c = piano.voice;
+    mutatePatch(b, 0.4f, 77);
+    mutatePatch(c, 0.4f, 77);
+    check(json(b) == json(c) && json(b) != json(piano.voice), "Mutar: mesma semente = mesmo resultado; muda o som");
+
+    bool unusedSame = true, carrierLevelsClose = true;
+    for (int i = 4; i < kNumOps; ++i) unusedSame &= operatorParamsToJson(b.op[i]).dump() == operatorParamsToJson(piano.voice.op[i]).dump();
+    for (int i : {0, 2}) carrierLevelsClose &= std::abs(b.op[i].outputLevel - piano.voice.op[i].outputLevel) <= 2;
+    check(unusedSame, "Mutar: operadores fora de uso ficam intactos");
+    const bool sameAlgo = std::memcmp(b.matrix.mod, piano.voice.matrix.mod, sizeof b.matrix.mod) == 0 &&
+                          std::memcmp(b.matrix.outputMix, piano.voice.matrix.outputMix, sizeof b.matrix.outputMix) == 0;
+    check(carrierLevelsClose && sameAlgo, "Mutar: portadoras mudam pouco de nivel; o algoritmo fica");
+
+    // 20 mutacoes de 50% de cada patch de fabrica: sempre soam, sem NaN, volume
+    // na mesma faixa. Volume = pico do RMS em janelas de 100 ms em 3 s (nao
+    // depende de quanto o ataque/decaimento mudou)
+    int bad = 0;
+    double worstDb = 0.0;
+    for (const auto& f : bank) {
+        auto rmsOf = [&](const PartParams& p) {
+            Synth s;
+            s.init(48000.0, 16);
+            s.part(0) = p;
+            s.recompile(0);
+            for (int k = 0; k < VoiceParams::kNumMacros; ++k) s.setMacro(0, k, p.voice.macro[k]);
+            s.noteOn(0, 60, 100);
+            double best = 0.0;
+            bool finite = true;
+            for (int w = 0; w < 30; ++w) {
+                double e = 0.0;
+                for (int i = 0; i < 4800; ++i) { float l, r; s.renderStereo(l, r); finite &= std::isfinite(l); e += static_cast<double>(l) * l; }
+                best = std::max(best, std::sqrt(e / 4800.0));
+            }
+            return finite ? best : -1.0;
+        };
+        const double ref = rmsOf(f.part);
+        for (uint32_t seed = 1; seed <= 20; ++seed) {
+            PartParams m = f.part;
+            mutatePatch(m.voice, 0.5f, seed);
+            sanitize(m);
+            const double r = rmsOf(m);
+            const double db = r > 0.0 ? 20.0 * std::log10(r / ref) : -999.0;
+            if (r < 0.0 || std::fabs(db) > 12.0) { ++bad; std::printf("    %s semente %u: %.1f dB\n", f.part.name.c_str(), seed, db); }
+            worstDb = std::max(worstDb, std::fabs(db));
+        }
+    }
+    std::printf("  (240 mutacoes de 50%%: %d fora de +-12 dB ou com NaN; maior variacao %.1f dB)\n", bad, worstDb);
+    check(bad == 0, "Mutar 50%: todo patch de fabrica continua soando, sem NaN, volume dentro de +-12 dB");
 }
 
 static void testRecompileCacheFollowsMatrixChanges() {
@@ -4502,6 +4566,7 @@ int main() {
     testMpeInputTranslatesMemberChannels();
     testMpeBendsOnlyItsNote();
     testMpeSlideSource();
+    testMutatePatch();
     testRecompileCacheFollowsMatrixChanges();
     testMasterVolume();
     testTriangleFoldShape();
