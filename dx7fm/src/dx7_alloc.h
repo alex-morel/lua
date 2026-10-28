@@ -760,6 +760,7 @@ private:
         // o caminho antigo (ganhos fixos no pedaco) -- saida identica a antes.
         bool panMod;
         float basePan; // pan da parte + subPan do unison (sem clamp)
+        int part;      // [2026-10-28] compensacao de polifonia por parte
     };
 
     static void renderJob(void* ctx, int index) {
@@ -833,7 +834,7 @@ private:
             s.voice.bindGlobalLfos(glfoPtr[s.ownerPart]);
             float pan = std::clamp(pr.params.pan + s.subPan, -1.0f, 1.0f);
             jobs_.push_back({static_cast<int>(idx), 1.0f - std::max(0.0f, pan), 1.0f + std::min(0.0f, pan), pr.params.level, 0,
-                             panRoutes[s.ownerPart], pr.params.pan + s.subPan});
+                             panRoutes[s.ownerPart], pr.params.pan + s.subPan, s.ownerPart});
         }
         chunkLen_ = len;
         const int count = static_cast<int>(jobs_.size());
@@ -842,30 +843,36 @@ private:
         else for (int j = 0; j < count; ++j) renderJob(this, j);
 
         for (int i = 0; i < len; ++i) {
-            float l = 0.0f, r = 0.0f, voiceLoad = 0.0f;
+            float pl[kNumParts] = {}, prr[kNumParts] = {}, load[kNumParts] = {};
             for (int j = 0; j < count; ++j) {
                 const RenderJob& job = jobs_[static_cast<size_t>(j)];
                 if (i >= job.activeLen) continue;
                 const size_t at = static_cast<size_t>(j) * kRenderChunk + static_cast<size_t>(i);
-                voiceLoad += loudBuf_[at];
+                load[job.part] += loudBuf_[at];
                 float lvl = job.level * voiceBuf_[at];
                 if (job.panMod) {
                     float p = std::clamp(job.basePan + panBuf_[at], -1.0f, 1.0f);
-                    l += lvl * (1.0f - std::max(0.0f, p));
-                    r += lvl * (1.0f + std::min(0.0f, p));
+                    pl[job.part] += lvl * (1.0f - std::max(0.0f, p));
+                    prr[job.part] += lvl * (1.0f + std::min(0.0f, p));
                 } else {
-                    l += lvl * job.gL;
-                    r += lvl * job.gR;
+                    pl[job.part] += lvl * job.gL;
+                    prr[job.part] += lvl * job.gR;
                 }
             }
-            mixSample(l, r, voiceLoad);
+            float l = 0.0f, r = 0.0f;
+            for (int p = 0; p < kNumParts; ++p) {
+                const float g = polyphonyGain(p, load[p]);
+                l += pl[p] * g;
+                r += prr[p] * g;
+            }
+            mixSample(l, r);
             outL[i] = l;
             outR[i] = r;
         }
     }
 
-    // Pos-mix de uma amostra: polifonia, FX globais, volume, limitador.
-    void mixSample(float& outL, float& outR, float voiceLoad) {
+    // Ganho de polifonia de UMA parte (suavizado; chamado a cada amostra).
+    float polyphonyGain(int part, float voiceLoad) {
         // [ADICIONADO em 2026-09-21] Compensacao de polifonia: 1/sqrt(N) e a
         // normalizacao classica pra somar N fontes de amplitude comparavel e
         // NAO-correlacionadas entre si (fases/timbres diferentes) -- preserva
@@ -883,10 +890,19 @@ private:
         // uma vez) o ganho cai em ~1ms -- com 30ms o acorde passava ~15ms
         // acima do limite; a carga ja segue o envelope de amplitude de cada
         // voz, entao nao ha degrau. Quando a carga desce, os 30ms de antes.
-        float targetGain = 1.0f / std::sqrt(std::max(1.0f, voiceLoad));
-        polyphonyGain_ += (targetGain - polyphonyGain_) * (targetGain < polyphonyGain_ ? polyDropCoef_ : polySmoothCoef_);
-        outL *= polyphonyGain_;
-        outR *= polyphonyGain_;
+        // [2026-10-28] POR PARTE: com um ganho so pra soma das 4 partes, um
+        // acorde de 4 notas na Parte B baixava ~7 dB o baixo da Parte A. Cada
+        // parte e um instrumento: o equilibrio entre elas e o nivel da parte;
+        // a soma das partes fica com o limitador (mixSample).
+        const float targetGain = 1.0f / std::sqrt(std::max(1.0f, voiceLoad));
+        float& g = polyphonyGain_[part];
+        g += (targetGain - g) * (targetGain < g ? polyDropCoef_ : polySmoothCoef_);
+        return g;
+    }
+
+    // Pos-mix de uma amostra (ja com o ganho de polifonia de cada parte):
+    // FX globais, volume, limitador.
+    void mixSample(float& outL, float& outR) {
 
         // Efeitos globais pos-mix, na soma das 4 partes, na ordem de
         // globalFx_.order (ver dx7_globalfx.h; bloco desligado = identidade).
@@ -915,7 +931,7 @@ private:
 
     GlobalFxParams globalFx_;
     GlobalFxChain fxChain_;
-    float polyphonyGain_ = 1.0f; // suavizado, ver renderStereo() (compensacao 1/sqrt(N))
+    float polyphonyGain_[kNumParts] = {1.0f, 1.0f, 1.0f, 1.0f}; // suavizado, por parte (compensacao 1/sqrt(N))
     float polySmoothCoef_ = 0.0f, polyDropCoef_ = 0.0f, volumeSmoothCoef_ = 0.0f;
     std::atomic<float> masterVolume_{1.0f}; // alvo, escrito pela UI (setMasterVolume)
     std::atomic<float> tempoBpm_{120.0f};    // setTempoBpm (LFOs com tempoSync)

@@ -1457,6 +1457,31 @@ static void testPolyphonyGainCatchesChordAttack() {
     check(attack < settled * 1.25f, "ganho de polifonia: o ataque de um acorde de 4 notas nao sai mais alto que o acorde assentado");
 }
 
+static void testPolyphonyGainIsPerPart() {
+    // [ADICIONADO em 2026-10-28] A compensacao de polifonia e por parte: um
+    // acorde de 4 notas na Parte B nao pode baixar a nota da Parte A (com um
+    // ganho so pra soma, caia ~7 dB). A em pan total a esquerda, B a direita:
+    // o canal esquerdo e so a Parte A.
+    auto leftRms = [](bool chordOnB) {
+        Synth synth;
+        synth.init(48000.0, 32);
+        for (int p : {0, 1}) {
+            synth.part(p).enabled = true;
+            synth.part(p).level = 0.3f;
+            synth.part(p).pan = p == 0 ? -1.0f : 1.0f;
+            synth.recompile(p);
+        }
+        synth.noteOn(0, 36, 100);
+        if (chordOnB) for (int n : {60, 64, 67, 71}) synth.noteOn(1, n, 100);
+        double e = 0.0;
+        for (int i = 0; i < 24000; ++i) { float l, r; synth.renderStereo(l, r); if (i >= 4800) e += static_cast<double>(l) * l; }
+        return std::sqrt(e / 19200.0);
+    };
+    const double alone = leftRms(false), withChord = leftRms(true);
+    std::printf("  (Parte A: sozinha %.4f, com acorde na Parte B %.4f)\n", alone, withChord);
+    check(std::fabs(withChord / alone - 1.0) < 0.01, "ganho de polifonia por parte: acorde em outra parte nao baixa o volume desta");
+}
+
 static void testMultitimbral4Parts() {
     Synth synth;
     synth.init(48000.0, 64);
@@ -4280,6 +4305,7 @@ int main() {
     testPolyphonyGainKeepsTotalLoudnessRoughlyConstant();
     testPolyphonyGainIsSmoothedNoClick();
     testPolyphonyGainCatchesChordAttack();
+    testPolyphonyGainIsPerPart();
     testMultitimbral4Parts();
     testPolyphonyCap();
     testStolenVoiceNotReleasedByOldNote();
