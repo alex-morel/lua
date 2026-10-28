@@ -1,13 +1,16 @@
-// [ADICIONADO em 2026-10-28] Testa os patches de tools/presets/gen_presets.cpp:
+// [ADICIONADO em 2026-10-28] Testa os patches do banco de fabrica (app/factory_bank.h):
 // o comportamento prometido por cada um, faixa do teclado/velocity, acorde de
 // 8 notas, custo de CPU. Grava os cenarios em .wav; os espectrogramas saem de
 // tools/presets/spectrogram.py. Uso, na pasta dx7fm/:
-//   ./build/patch_tests [pasta_dos_patches] [pasta_dos_wav]
+//   ./build/patch_tests [pasta_dos_wav] [pasta_dos_patches]
+// Sem pasta de patches, testa o banco direto do codigo (passando por JSON e
+// de volta, como o app salva/carrega); com ela, testa os .json da pasta.
 #include "dx7_alloc.h"
 #include "dx7_fft.h"
 #include "dx7_patch_io.h"
 #include "wav_writer.h"
 #include "patch_browser.h"
+#include "factory_bank.h"
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -169,12 +172,20 @@ static void general(const std::string& name, const PartParams& p) {
 }
 
 int main(int argc, char** argv) {
-    g_dir = argc > 1 ? argv[1] : "patches"; g_out = argc > 2 ? argv[2] : "output/patch_tests";
+    g_out = argc > 1 ? argv[1] : "output/patch_tests";
+    g_dir = argc > 2 ? argv[2] : "";
     fs::create_directories(g_out);
     std::map<std::string, PartParams> P;
-    for (const auto& e : fs::directory_iterator(g_dir)) {
-        PartParams pp;
-        if (e.path().extension() == ".json" && loadPartFile(e.path().string(), pp)) P[pp.name] = pp;
+    if (g_dir.empty()) {
+        for (auto& f : dx7fm_app::factory::factoryBank()) {
+            sanitize(f.part);
+            P[f.part.name] = partParamsFromJson(JsonValue::parse(partParamsToJson(f.part).dump()));
+        }
+    } else {
+        for (const auto& e : fs::directory_iterator(g_dir)) {
+            PartParams pp;
+            if (e.path().extension() == ".json" && loadPartFile(e.path().string(), pp)) P[pp.name] = pp;
+        }
     }
     std::printf("%zu patches carregados\n", P.size());
     auto has = [&](const char* n) { if (!P.count(n)) { std::printf("FALTA %s\n", n); ++g_fail; return false; } std::printf("\n== %s\n", n); return true; };

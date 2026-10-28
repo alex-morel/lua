@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <vector>
+#include <atomic>
+#include <cstdint>
 #include <random>
 #include <algorithm>
 
@@ -11,6 +13,17 @@ namespace dx7fm {
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kTwoPi = 6.28318530717958647692f;
 constexpr float kLog2Of10Over20 = 0.166096404744368f; // 10^(dB/20) == 2^(dB * log2(10)/20)
+
+// [ADICIONADO em 2026-10-28] Semente dos geradores aleatorios (ruido, LFO
+// S&H/SmoothRandom). Normal: std::random_device. fixRandomSeed(n) (so pra
+// testes/golden, ANTES de criar o Synth) faz cada gerador novo receber n, n+1,
+// n+2..., na ordem de criacao -- a saida fica igual entre execucoes.
+inline std::atomic<uint32_t>& randomSeedCounter() { static std::atomic<uint32_t> c{0}; return c; }
+inline std::atomic<bool>& randomSeedFixed() { static std::atomic<bool> f{false}; return f; }
+inline void fixRandomSeed(uint32_t first) { randomSeedCounter() = first; randomSeedFixed() = true; }
+inline uint32_t newRandomSeed() {
+    return randomSeedFixed() ? randomSeedCounter().fetch_add(1) : std::random_device{}();
+}
 
 // [ADICIONADO em 2026-10-18] Seno rapido por tabela (4096 pontos +
 // interpolacao linear; erro maximo ~3e-7) pros osciladores da forma de onda
@@ -216,7 +229,7 @@ private:
     float shValue_ = 0.0f;
     float smoothFrom_ = 0.0f, smoothTo_ = 0.0f;
     double tempoBpm_ = 120.0;
-    std::mt19937 rng_{std::random_device{}()};
+    std::mt19937 rng_{newRandomSeed()};
     std::uniform_real_distribution<float> dist_{-1.0f, 1.0f};
 };
 

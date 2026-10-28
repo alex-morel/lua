@@ -831,7 +831,7 @@ private:
     float lfoRateMul_[kNumLfos] = {1.0f, 1.0f, 1.0f, 1.0f}, lfoDepthMul_[kNumLfos] = {1.0f, 1.0f, 1.0f, 1.0f};
     float panMod_ = 0.0f;
     VoiceControllers controllers_;
-    std::mt19937 rng_{std::random_device{}()};
+    std::mt19937 rng_{newRandomSeed()};
     std::uniform_real_distribution<float> dist_{-1.0f, 1.0f};
 };
 

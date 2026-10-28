@@ -16,12 +16,23 @@ target_include_directories(demo PRIVATE src) # demo.cpp inclui app/event_queue.h
 target_link_libraries(demo PRIVATE Threads::Threads)
 
 # --- patches de demonstracao: gerador + testes de comportamento ------------
-foreach(tool gen_presets patch_tests)
-    add_executable(${tool} tools/presets/${tool}.cpp)
+foreach(tool gen_presets patch_tests golden)
+    if(tool STREQUAL golden)
+        add_executable(${tool} tools/golden/${tool}.cpp)
+    else()
+        add_executable(${tool} tools/presets/${tool}.cpp)
+    endif()
     target_compile_options(${tool} PRIVATE -Wall -Wextra)
     target_include_directories(${tool} PRIVATE src app)
     target_link_libraries(${tool} PRIVATE Threads::Threads)
 endforeach()
+
+# --- ctest: testes do motor (nos dois caminhos SIMD) + testes dos patches ---
+enable_testing()
+add_test(NAME motor COMMAND demo WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+add_test(NAME motor_sse2 COMMAND demo WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(motor_sse2 PROPERTIES ENVIRONMENT DX7FM_NO_AVX2=1)
+add_test(NAME patches_de_fabrica COMMAND patch_tests ${CMAKE_BINARY_DIR}/patch_tests_wav)
 
 # --- app standalone (SDL2 + ALSA + Dear ImGui) -----------------------------
 find_package(PkgConfig)
