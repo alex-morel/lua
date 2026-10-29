@@ -839,16 +839,26 @@ static void testConcurrentPatchEditNoCrash() {
           "2s de audio com outra thread editando o patch sem parar: sem NaN/Inf (nenhuma corrupcao observada)");
 }
 
+// [2026-10-29] efeitos pos-mix agora sao o rack (dx7_fxrack.h); os testes dos
+// efeitos antigos montam o painel antigo e publicam convertido
+static void setLegacyFx(Synth& synth, const std::function<void(GlobalFxParams&)>& edit) {
+    GlobalFxParams g;
+    edit(g);
+    synth.setFxRack(fxRackFromLegacy(g));
+}
+
 static void testChorusChangesStereoImage() {
     auto render = [](bool chorusOn) {
         Synth synth;
         synth.init(48000.0, 4);
         synth.part(0).voice = makeSimpleFmPatch();
         synth.recompile(0);
-        synth.globalFx().chorus.enabled = chorusOn;
-        synth.globalFx().chorus.mix = 0.5f;
-        synth.globalFx().chorus.depth = 0.6f;
-        synth.globalFx().chorus.rateHz = 1.2f;
+        setLegacyFx(synth, [&](GlobalFxParams& g) {
+            g.chorus.enabled = chorusOn;
+            g.chorus.mix = 0.5f;
+            g.chorus.depth = 0.6f;
+            g.chorus.rateHz = 1.2f;
+        });
         synth.noteOn(0, 60, 100);
 
         std::vector<float> left, right;
@@ -884,12 +894,14 @@ static void testDelayProducesEchoAtExpectedTime() {
     for (int i = 0; i < kNumOps; ++i) v.op[i].ampEG.rate[3] = 99; // release RAPIDO: o "seco" morre logo
     synth.part(0).voice = v;
     synth.recompile(0);
-    synth.globalFx().delay.enabled = true;
     const float delaySec = 0.2f;
-    synth.globalFx().delay.timeLeftSec = delaySec;
-    synth.globalFx().delay.timeRightSec = delaySec;
-    synth.globalFx().delay.feedback = 0.0f; // 1 eco so, sem repeticoes -- mais facil de medir
-    synth.globalFx().delay.mix = 0.9f;
+    setLegacyFx(synth, [&](GlobalFxParams& g) {
+        g.delay.enabled = true;
+        g.delay.timeLeftSec = delaySec;
+        g.delay.timeRightSec = delaySec;
+        g.delay.feedback = 0.0f; // 1 eco so, sem repeticoes -- mais facil de medir
+        g.delay.mix = 0.9f;
+    });
 
     const int noteOnSamples = 480; // ~10ms de nota bem curta (o "impulso" que vai ecoar)
     synth.noteOn(0, 60, 100);
@@ -924,10 +936,12 @@ static void testReverbAddsDecayTail() {
         for (int i = 0; i < kNumOps; ++i) v.op[i].ampEG.rate[3] = 99; // release RAPIDO
         synth.part(0).voice = v;
         synth.recompile(0);
-        synth.globalFx().reverb.enabled = reverbOn;
-        synth.globalFx().reverb.mix = 0.6f;
-        synth.globalFx().reverb.roomSize = 0.8f;
-        synth.globalFx().reverb.damping = 0.2f;
+        setLegacyFx(synth, [&](GlobalFxParams& g) {
+            g.reverb.enabled = reverbOn;
+            g.reverb.mix = 0.6f;
+            g.reverb.roomSize = 0.8f;
+            g.reverb.damping = 0.2f;
+        });
 
         synth.noteOn(0, 60, 100);
         for (int i = 0; i < 480; ++i) { float l, r; synth.renderStereo(l, r); } // ~10ms de nota
@@ -1651,8 +1665,7 @@ static void testCrushHighBitsStaysFinite() {
     v.op[0].fxParam2 = 16.0f; // maximo do slider: 256 "bits" -> 2^256 estourava pra inf
     synth.part(0).voice = v;
     synth.recompile(0);
-    synth.globalFx().reverb.enabled = true;
-    synth.globalFx().delay.enabled = true;
+    setLegacyFx(synth, [](GlobalFxParams& g) { g.reverb.enabled = true; g.delay.enabled = true; });
     synth.noteOn(0, 60, 100);
     bool finite = true;
     float rms = 0.0f;
@@ -2504,8 +2517,7 @@ static std::vector<float> renderScene(int blockSize, int threads) {
         synth.part(p).pan = -0.5f + 0.5f * p;
         synth.recompile(p);
     }
-    synth.globalFx().chorus.enabled = true;
-    synth.globalFx().delay.enabled = true;
+    setLegacyFx(synth, [](GlobalFxParams& g) { g.chorus.enabled = true; g.delay.enabled = true; });
 
     // eventos em amostras "tortas" (nao alinhadas com nenhum bloco)
     struct Ev { int at, part, note; bool on; };
@@ -4081,19 +4093,36 @@ static float sineAt(int i, float hz, float amp = 0.5f) { return amp * std::sin(2
 static float rmsTail(const std::vector<float>& x, size_t from) { return computeRms(x, from, x.size() - from); }
 static float dbRatio(float out, float in) { return 20.0f * std::log10(out / in); }
 
+// roda o rack isolado: entrada mono gen(i) nos envios (como o Synth faz), blocos de 256
+static std::vector<float> runRack(FxRack& rack, const std::function<float(int)>& gen, int n, std::vector<float>* right = nullptr) {
+    std::vector<float> out;
+    float L[256], R[256], a1[256], b1[256], a2[256], b2[256];
+    for (int at = 0; at < n; at += 256) {
+        const int len = std::min(256, n - at);
+        const FxRackParams& p = rack.beginBlock();
+        for (int i = 0; i < len; ++i) {
+            const float x = gen(at + i);
+            L[i] = R[i] = x * p.dry[0];
+            a1[i] = b1[i] = x * p.send[0][0];
+            a2[i] = b2[i] = x * p.send[0][1];
+        }
+        FxContext ctx;
+        rack.process(L, R, a1, b1, a2, b2, len, ctx);
+        for (int i = 0; i < len; ++i) { out.push_back(L[i]); if (right) right->push_back(R[i]); }
+    }
+    return out;
+}
+
 static void testGlobalFxChainDisabledIsIdentity() {
-    GlobalFxChain chain;
-    chain.setSampleRate(48000.0);
-    GlobalFxParams p; // tudo desligado por padrao
+    FxRack rack;
+    rack.prepare(48000.0);
+    rack.setParams(FxRackParams{}); // padrao: tudo vazio, as partes entram na cadeia 1
     std::mt19937 rng(3);
     std::uniform_real_distribution<float> d(-1.0f, 1.0f);
-    bool same = true;
-    for (int i = 0; i < 4800; ++i) {
-        float l = d(rng), r = d(rng), l0 = l, r0 = r;
-        chain.process(p, l, r);
-        same &= (l == l0 && r == r0);
-    }
-    check(same, "cadeia de efeitos globais toda desligada e identidade EXATA");
+    std::vector<float> in(4800);
+    for (float& x : in) x = d(rng);
+    auto out = runRack(rack, [&](int i) { return in[static_cast<size_t>(i)]; }, 4800);
+    check(out == in, "rack de efeitos vazio e identidade EXATA");
 }
 
 static void testPhaserNotch() {
@@ -4273,50 +4302,174 @@ static void testCompressor() {
           "compressor: knee suave comprime antes do threshold (corrigido em relacao ao ZamComp original)");
 }
 
-static void testGlobalFxOrder() {
-    auto render = [](const GlobalFxType* order) {
-        GlobalFxChain chain;
-        chain.setSampleRate(48000.0);
-        GlobalFxParams p;
-        p.compressor.enabled = true; p.compressor.thresholdDb = -30.0f; p.compressor.ratio = 10.0f;
-        p.reverb.enabled = true; p.reverb.mix = 0.5f;
-        if (order) std::copy(order, order + kNumGlobalFx, p.order);
-        return runFx([&](float& l, float& r) { chain.process(p, l, r); },
-                     [](int i) { return i < 4800 ? sineAt(i, 440.0f) : 0.0f; }, 24000);
-    };
-    GlobalFxType compFirst[kNumGlobalFx] = {GlobalFxType::Compressor, GlobalFxType::Phaser, GlobalFxType::Flanger,
-                                            GlobalFxType::Chorus, GlobalFxType::Delay, GlobalFxType::Reverb, GlobalFxType::Eq};
-    GlobalFxType broken[kNumGlobalFx] = {GlobalFxType::Reverb, GlobalFxType::Reverb, GlobalFxType::Flanger,
-                                         GlobalFxType::Chorus, GlobalFxType::Delay, GlobalFxType::Eq, GlobalFxType::Compressor};
-    auto def = render(nullptr), cf = render(compFirst), br = render(broken);
-    float diff = 0.0f, diffBroken = 0.0f;
-    for (size_t i = 0; i < def.size(); ++i) {
-        diff = std::max(diff, std::abs(def[i] - cf[i]));
-        diffBroken = std::max(diffBroken, std::abs(def[i] - br[i]));
+// --- [ADICIONADO em 2026-10-29] rack: envios, serie/paralelo, nivel/pan, troca de tipo ---
+static FxSlotParams eqCut() { // EQ cortando tudo ~-18 dB perto de 1 kHz
+    FxSlotParams s;
+    s.setKind(FxKind::Eq3);
+    s.p[1] = -18.0f; s.p[3] = -18.0f; s.p[4] = 0.3f; s.p[6] = -18.0f;
+    return s;
+}
+static float rackGainAt1k(const FxRackParams& p) {
+    FxRack rack;
+    rack.prepare(48000.0);
+    rack.setParams(p);
+    auto out = runRack(rack, [](int i) { return sineAt(i, 1000.0f); }, 24000);
+    return rmsTail(out, 12000) / (0.5f / std::sqrt(2.0f));
+}
+
+static void testFxRackRouting() {
+    FxRackParams one;
+    one.chain[0].slot[0] = eqCut();
+    const float g = rackGainAt1k(one);
+
+    FxRackParams par = one, ser = one;
+    par.chain[1].slot[0] = eqCut();
+    par.send[0][1] = 1.0f;
+    ser = par;
+    ser.serial = true;
+    const float gp = rackGainAt1k(par), gs = rackGainAt1k(ser);
+    std::printf("  (1 EQ: %.3f; duas cadeias com EQ, paralelo %.3f (esperado %.3f), serie %.3f (esperado %.3f))\n", g, gp, 2 * g, gs,
+                g * (1 + g));
+    check(g < 0.2f && std::fabs(gp - 2 * g) < 0.01f * g && std::fabs(gs - g * (1 + g)) < 0.01f * g,
+          "rack: paralelo soma as cadeias; em serie a cadeia 1 entra na 2 (junto com o envio da parte)");
+
+    FxRackParams dry;
+    dry.dry[0] = 1.0f; // seco + cadeia 1 vazia = 2x
+    FxRackParams lvl;
+    lvl.chain[0].level = 0.5f;
+    lvl.chain[0].pan = 1.0f;
+    FxRack rack;
+    rack.prepare(48000.0);
+    rack.setParams(dry);
+    auto d = runRack(rack, [](int i) { return sineAt(i, 300.0f); }, 2048);
+    rack.setParams(lvl);
+    std::vector<float> rgt;
+    auto l = runRack(rack, [](int i) { return sineAt(i, 300.0f); }, 2048, &rgt);
+    bool dryOk = true, panOk = true;
+    for (int i = 0; i < 2048; ++i) {
+        dryOk &= d[static_cast<size_t>(i)] == 2.0f * sineAt(i, 300.0f);
+        panOk &= l[static_cast<size_t>(i)] == 0.0f && rgt[static_cast<size_t>(i)] == 0.5f * sineAt(i, 300.0f);
     }
-    std::printf("  (diferenca maxima: compressor antes x depois do reverb=%.3f; ordem invalida x padrao=%.1e)\n", diff, diffBroken);
-    check(diff > 0.01f, "ordem da cadeia muda o som (compressor antes vs depois do reverb)");
-    check(diffBroken == 0.0f, "ordem invalida (bloco repetido) cai na ordem padrao, sem rodar bloco 2x");
+    check(dryOk, "rack: nivel seco da parte vai direto pra saida (seco 1 + cadeia vazia = 2x)");
+    check(panOk, "rack: nivel e pan (balanco) da cadeia: nivel 0.5, pan todo a direita -> E mudo, D pela metade");
+
+    FxRackParams off = one, mix0 = one;
+    off.chain[0].slot[0].on = false;
+    mix0.chain[0].slot[0].mix = 0.0f;
+    for (auto* q : {&off, &mix0}) {
+        FxRack r2;
+        r2.prepare(48000.0);
+        r2.setParams(*q);
+        auto o = runRack(r2, [](int i) { return sineAt(i, 1000.0f); }, 4800);
+        bool same = true;
+        for (int i = 0; i < 4800; ++i) same &= o[static_cast<size_t>(i)] == sineAt(i, 1000.0f);
+        check(same, q == &off ? "rack: slot desligado e identidade exata" : "rack: slot com mix 0 e identidade exata");
+    }
+}
+
+static void testFxRackSendsPerPart() {
+    // Parte A (toda a esquerda) so na cadeia 1 (vazia); Parte B (toda a direita)
+    // so na cadeia 2, com o EQ cortando: so a B fica mais baixa
+    auto render = [](bool cutOnB) {
+        Synth synth;
+        synth.init(48000.0, 8);
+        for (int p : {0, 1}) {
+            synth.part(p).enabled = true;
+            synth.part(p).pan = p == 0 ? -1.0f : 1.0f;
+            synth.recompile(p);
+        }
+        FxRackParams r;
+        r.send[1][0] = 0.0f;
+        r.send[1][1] = 1.0f;
+        if (cutOnB) r.chain[1].slot[0] = eqCut();
+        synth.setFxRack(r);
+        synth.noteOn(0, 69, 100);
+        synth.noteOn(1, 69, 100);
+        std::vector<float> L, R;
+        for (int i = 0; i < 24000; ++i) { float l, rr; synth.renderStereo(l, rr); L.push_back(l); R.push_back(rr); }
+        return std::make_pair(computeRms(L, 4800, 19200), computeRms(R, 4800, 19200));
+    };
+    auto [a0, b0] = render(false);
+    auto [a1, b1] = render(true);
+    std::printf("  (Parte A: %.4f -> %.4f; Parte B: %.4f -> %.4f com o EQ so na cadeia 2)\n", a0, a1, b0, b1);
+    check(a1 == a0 && b1 < 0.3f * b0, "rack: envios por parte -- o efeito da cadeia 2 so pega a parte que manda pra ela");
+}
+
+static void testFxRackKindSwapWhilePlaying() {
+    // outra thread troca o tipo dos slots sem parar enquanto o audio roda:
+    // sem travar, sem NaN (DSP criado fora do audio, apagado so 2 blocos depois)
+    FxRack rack;
+    rack.prepare(48000.0);
+    std::atomic<bool> stop{false};
+    std::atomic<int> swaps{0};
+    std::thread ui([&] {
+        const FxKind kinds[] = {FxKind::ReverbClassic, FxKind::Chorus, FxKind::TapeDelay, FxKind::Off, FxKind::Compressor};
+        int k = 0;
+        while (!stop.load()) {
+            FxRackParams p;
+            for (int c = 0; c < kFxChains; ++c)
+                for (int sl = 0; sl < kFxSlots; ++sl) p.chain[c].slot[sl].setKind(kinds[(k + c + sl) % 5]);
+            p.send[0][1] = 1.0f;
+            rack.setParams(p);
+            ++k;
+            swaps.fetch_add(1);
+            std::this_thread::sleep_for(std::chrono::microseconds(300));
+        }
+    });
+    bool finite = true;
+    int blocks = 0; // renderiza (mais rapido que tempo real) ate a outra thread ter trocado bastante
+    while (swaps.load() < 200 && blocks < 200000) {
+        auto out = runRack(rack, [](int i) { return sineAt(i, 330.0f); }, 256);
+        for (float x : out) finite &= std::isfinite(x);
+        ++blocks;
+    }
+    stop = true;
+    ui.join();
+    std::printf("  (%d trocas de tipo durante %d blocos de audio)\n", swaps.load(), blocks);
+    check(finite && swaps.load() > 50, "rack: trocar o tipo dos slots durante o audio nao trava nem gera NaN");
+}
+
+static void testGlobalFxOrder() {
+    // a ordem dos slots muda o som: compressor antes x depois do reverb
+    auto render = [](bool compFirst) {
+        GlobalFxParams g;
+        g.compressor.enabled = true; g.compressor.thresholdDb = -30.0f; g.compressor.ratio = 10.0f;
+        g.reverb.enabled = true; g.reverb.mix = 0.5f;
+        if (compFirst) {
+            GlobalFxType order[kNumGlobalFx] = {GlobalFxType::Compressor, GlobalFxType::Phaser, GlobalFxType::Flanger,
+                                                GlobalFxType::Chorus, GlobalFxType::Delay, GlobalFxType::Reverb, GlobalFxType::Eq};
+            std::copy(order, order + kNumGlobalFx, g.order);
+        }
+        FxRack rack;
+        rack.prepare(48000.0);
+        rack.setParams(fxRackFromLegacy(g));
+        return runRack(rack, [](int i) { return i < 4800 ? sineAt(i, 440.0f) : 0.0f; }, 24000);
+    };
+    auto def = render(false), cf = render(true);
+    float diff = 0.0f;
+    for (size_t i = 0; i < def.size(); ++i) diff = std::max(diff, std::abs(def[i] - cf[i]));
+    std::printf("  (diferenca maxima: compressor antes x depois do reverb=%.3f)\n", diff);
+    check(diff > 0.01f, "ordem dos slots muda o som (compressor antes vs depois do reverb)");
 }
 
 static void testGlobalFxCost() {
-    GlobalFxChain chain;
-    chain.setSampleRate(48000.0);
-    GlobalFxParams p;
-    p.chorus.enabled = p.phaser.enabled = p.flanger.enabled = p.delay.enabled = true;
-    p.reverb.enabled = p.eq.enabled = p.compressor.enabled = true;
-    p.phaser.notches = 8;
+    GlobalFxParams g;
+    g.chorus.enabled = g.phaser.enabled = g.flanger.enabled = g.delay.enabled = true;
+    g.reverb.enabled = g.eq.enabled = g.compressor.enabled = true;
+    g.phaser.notches = 8;
     float worst = 0.0f;
     for (int t = 0; t < 3; ++t) {
-        p.reverb.type = static_cast<ReverbType>(t);
+        g.reverb.type = static_cast<ReverbType>(t);
+        FxRack rack;
+        rack.prepare(48000.0);
+        rack.setParams(fxRackFromLegacy(g));
         auto t0 = std::chrono::steady_clock::now();
-        float sink = 0.0f;
-        for (int i = 0; i < 48000; ++i) { float l = sineAt(i, 220.0f), r = l; chain.process(p, l, r); sink += l; }
+        auto out = runRack(rack, [](int i) { return sineAt(i, 220.0f); }, 48000);
         float sec = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
-        worst = std::max(worst, sink == 12345.0f ? 0.0f : sec);
+        worst = std::max(worst, out[100] == 12345.0f ? 0.0f : sec);
     }
-    std::printf("  (os 7 efeitos ligados, pior modo de reverb: %.1f%% de um nucleo)\n", worst * 100.0f);
-    check(worst < 0.25f, "cadeia completa de efeitos globais roda bem abaixo do tempo real (< 25% de um nucleo)");
+    std::printf("  (os 7 efeitos antigos ligados no rack, pior modo de reverb: %.1f%% de um nucleo)\n", worst * 100.0f);
+    check(worst < 0.25f, "rack com os 7 efeitos ligados roda bem abaixo do tempo real (< 25% de um nucleo)");
 }
 
 // --- [ADICIONADO em 2026-10-18] otimizacao: operadores mortos ---------------
@@ -4660,6 +4813,9 @@ int main() {
     testReverbTypes();
     testEqResponse();
     testCompressor();
+    testFxRackRouting();
+    testFxRackSendsPerPart();
+    testFxRackKindSwapWhilePlaying();
     testGlobalFxOrder();
     testGlobalFxCost();
     testDeadOperatorRevivedByLiveEdit();

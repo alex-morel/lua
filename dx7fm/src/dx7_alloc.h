@@ -1,7 +1,7 @@
 #pragma once
 #include "dx7_params.h"
 #include "dx7_engine.h"
-#include "dx7_globalfx.h"
+#include "dx7_fxrack.h"
 #include "dx7_threads.h"
 #include <algorithm>
 #include <array>
@@ -17,6 +17,7 @@
 namespace dx7fm {
 
 constexpr int kNumParts = 4;
+static_assert(kFxParts == kNumParts, "o rack de efeitos tem um envio por parte");
 
 struct VoiceSlot {
     Voice voice;
@@ -134,7 +135,7 @@ public:
         }
         for (int p = 0; p < kNumParts; ++p) recompile(p);
         for (auto& pr : parts_) for (auto& g : pr.glfo) g.setSampleRate(sampleRate);
-        fxChain_.setSampleRate(sampleRate);
+        fxRack_.prepare(sampleRate);
     }
 
     // Referencia de STAGING: editar campos aqui (inclusive .voice, o timbre)
@@ -143,17 +144,14 @@ public:
     // que a UNICA forma de "publicar" a edicao seja via recompile(idx).
     PartParams& part(int idx) { return parts_[idx].params; }
 
-    // [ADICIONADO em 2026-09-21] Efeitos globais POS-MIX (chorus, delay,
-    // reverb -- ver dx7_globalfx.h e dx7_params.h::GlobalFxParams).
-    // Aplicados uma vez na SOMA das 4 partes, dentro de renderStereo().
-    // Acesso direto (nao passa pelo triple-buffer do timbre, ver secao 7C
-    // do ARQUITETURA.txt sobre o que NAO esta coberto pela garantia de
-    // thread safety) -- editar globalFx() enquanto renderStereo() roda
-    // noutra thread tem a mesma ressalva que os demais campos "fora do
-    // timbre" de PartParams.
-    GlobalFxParams& globalFx() { return globalFx_; }
-    // reducao de ganho atual do compressor global (dB), pra medidor na UI
-    float compressorGainReductionDb() const { return fxChain_.compressorGainReductionDb(); }
+    // [REESCRITO em 2026-10-29] Efeitos POS-MIX: rack de 2 cadeias x 4 slots
+    // com envios por parte (dx7_fxrack.h). setFxRack() publica um conjunto
+    // inteiro de parametros (triple buffer) e cria o DSP dos slots que
+    // trocaram de tipo -- chamar da thread da UI, nunca da de audio.
+    void setFxRack(const FxRackParams& p) { fxRack_.setParams(p); }
+    const FxRackParams& fxRack() const { return fxRack_.params(); }
+    float fxChainPeak(int chain) const { return fxRack_.chainPeak(chain); }
+    float fxSlotMeter(int chain, int slot) const { return fxRack_.slotMeter(chain, slot); } // ex.: reducao de ganho (dB)
 
     // [ADICIONADO em 2026-09-23] Volume geral (master), ganho linear 0..2
     // (1.0 = 0dB). Atomico de proposito: a UI chama setMasterVolume() de
@@ -492,6 +490,7 @@ public:
     // recompile() publicado no meio do pedaco so vale no pedaco seguinte
     // (<= 256 amostras, ~5ms).
     static constexpr int kRenderChunk = 256;
+    static_assert(FxRack::kMaxBlock >= kRenderChunk, "rack de efeitos processa pedacos de ate kMaxBlock");
     static_assert(sizeof(PartRuntime::glfoBuf[0]) / sizeof(float) >= kRenderChunk, "buffer do LFO global menor que o pedaco");
 
     void renderBlock(float* outL, float* outR, int n) {
@@ -882,6 +881,10 @@ private:
         if (pool_.workers() > 0 && len >= 32) pool_.run(count);
         else for (int j = 0; j < count; ++j) renderJob(this, j);
 
+        // [2026-10-29] rack de efeitos: cada parte entra seca na saida e nos
+        // envios das 2 cadeias (niveis do rack), o rack processa o pedaco
+        // inteiro e depois vem o volume geral + limitador
+        const FxRackParams& rack = fxRack_.beginBlock();
         for (int i = 0; i < len; ++i) {
             float pl[kNumParts] = {}, prr[kNumParts] = {}, load[kNumParts] = {};
             for (int j = 0; j < count; ++j) {
@@ -899,12 +902,28 @@ private:
                     prr[job.part] += lvl * job.gR;
                 }
             }
-            float l = 0.0f, r = 0.0f;
+            float dl = 0.0f, dr = 0.0f, l1 = 0.0f, r1 = 0.0f, l2 = 0.0f, r2 = 0.0f;
             for (int p = 0; p < kNumParts; ++p) {
                 const float g = polyphonyGain(p, load[p]);
-                l += pl[p] * g;
-                r += prr[p] * g;
+                const float xl = pl[p] * g, xr = prr[p] * g;
+                dl += xl * rack.dry[p];
+                dr += xr * rack.dry[p];
+                l1 += xl * rack.send[p][0];
+                r1 += xr * rack.send[p][0];
+                l2 += xl * rack.send[p][1];
+                r2 += xr * rack.send[p][1];
             }
+            mixL_[i] = dl; mixR_[i] = dr;
+            sendL_[0][i] = l1; sendR_[0][i] = r1;
+            sendL_[1][i] = l2; sendR_[1][i] = r2;
+        }
+        FxContext ctx;
+        ctx.sampleRate = sampleRate_;
+        ctx.bpm = bpm;
+        ctx.beatPos = beatPos_;
+        fxRack_.process(mixL_, mixR_, sendL_[0], sendR_[0], sendL_[1], sendR_[1], len, ctx);
+        for (int i = 0; i < len; ++i) {
+            float l = mixL_[i], r = mixR_[i];
             mixSample(l, r);
             outL[i] = l;
             outR[i] = r;
@@ -974,14 +993,8 @@ private:
         return trim;
     }
 
-    // Pos-mix de uma amostra (ja com o ganho de polifonia de cada parte):
-    // FX globais, volume, limitador.
+    // Pos-mix de uma amostra (ja com o rack de efeitos): volume e limitador.
     void mixSample(float& outL, float& outR) {
-
-        // Efeitos globais pos-mix, na soma das 4 partes, na ordem de
-        // globalFx_.order (ver dx7_globalfx.h; bloco desligado = identidade).
-        fxChain_.process(globalFx_, outL, outR);
-
         // Volume geral (ver setMasterVolume): depois dos FX, antes do limitador.
         float volTarget = masterVolume_.load(std::memory_order_relaxed);
         masterGain_ += (volTarget - masterGain_) * volumeSmoothCoef_;
@@ -1003,8 +1016,9 @@ private:
     PartRuntime parts_[kNumParts];
     uint64_t triggerCounter_ = 0;
 
-    GlobalFxParams globalFx_;
-    GlobalFxChain fxChain_;
+    FxRack fxRack_;
+    float mixL_[kRenderChunk], mixR_[kRenderChunk];                 // soma seca -> saida do rack
+    float sendL_[kFxChains][kRenderChunk], sendR_[kFxChains][kRenderChunk]; // envios -> cadeias
     float polyphonyGain_[kNumParts] = {1.0f, 1.0f, 1.0f, 1.0f}; // suavizado, por parte (compensacao 1/sqrt(N))
     float polySmoothCoef_ = 0.0f, polyDropCoef_ = 0.0f, volumeSmoothCoef_ = 0.0f;
     std::atomic<float> masterVolume_{1.0f}; // alvo, escrito pela UI (setMasterVolume)

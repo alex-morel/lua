@@ -5,7 +5,7 @@
 #include "dx7_dsp.h"
 #include "dx7_engine.h"
 #include "dx7_alloc.h"
-#include "dx7_globalfx.h"
+#include "dx7_fxrack.h"
 #include "dx7_patch_io.h"
 #include "dx7_algorithms.h"
 #include "dx7_sysex.h"
@@ -114,6 +114,7 @@ struct AppState {
     // tambem muda) por mpeOn/mpeMembers/mpeBend
     dx7fm_app::MpeInput mpe;
     float mutateAmount = 0.2f; // [2026-10-28] botao Mutar (so UI)
+    GlobalFxParams legacyFx;   // [2026-10-29] painel antigo de efeitos (ate a pedaleira)
     // [2026-10-29] banco de fabrica (montado 1x na partida) e o estado do dialogo
     std::vector<dx7fm_app::factory::FactoryPreset> factory;
     int factorySelected = -1, factoryFamily = 0, factoryCategory = 0;
@@ -2029,7 +2030,10 @@ void DrawGlobalFxParams(AppState& app, GlobalFxParams& fx, GlobalFxType t) {
             K("Release", &c.releaseMs, 1.0f, 500.0f, kDef.compressor.releaseMs, "%.0f ms", true);
             K("Knee", &c.kneeDb, 0.0f, 8.0f, kDef.compressor.kneeDb, "%.1f dB");
             K("Makeup", &c.makeupDb, 0.0f, 30.0f, kDef.compressor.makeupDb, "%.1f dB");
-            float gr = c.enabled ? app.synth.compressorGainReductionDb() : 0.0f;
+            float gr = 0.0f; // [2026-10-29] medidor do slot do rack onde o compressor caiu
+            for (int ch = 0; ch < kFxChains; ++ch)
+                for (int sl = 0; sl < kFxSlots; ++sl)
+                    if (app.synth.fxRack().chain[ch].slot[sl].kind == FxKind::Compressor) gr = app.synth.fxSlotMeter(ch, sl);
             char text[32];
             std::snprintf(text, sizeof text, "-%.1f dB", gr);
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ui::col::kAccent2);
@@ -2042,7 +2046,11 @@ void DrawGlobalFxParams(AppState& app, GlobalFxParams& fx, GlobalFxType t) {
     }
 }
 void DrawGlobalFxPanel(AppState& app) {
-    auto& fx = app.synth.globalFx();
+    // [2026-10-29] painel antigo (7 blocos) sobre o rack novo: edita
+    // app.legacyFx e publica convertido (fxRackFromLegacy) a cada quadro
+    // ate o painel da pedaleira substituir este
+    auto& fx = app.legacyFx;
+    struct Publish { AppState& a; ~Publish() { a.synth.setFxRack(fxRackFromLegacy(a.legacyFx)); } } publish{app};
     if (!ImGui::BeginTable("##fxcols", 2, ImGuiTableFlags_SizingStretchProp)) return;
     ImGui::TableSetupColumn("cadeia", ImGuiTableColumnFlags_WidthFixed, 270.0f);
     ImGui::TableSetupColumn("efeitos", ImGuiTableColumnFlags_WidthStretch);
