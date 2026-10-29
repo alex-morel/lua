@@ -17,6 +17,13 @@ completo sob a GPLv3.
 | Faust phaflangers.lib | phaser e flanger (`Phaser`, `Flanger`) | Julius O. Smith III | STK-4.3 (estilo MIT) | porta, com mudanças |
 | Audio EQ Cookbook | EQ de 3 bandas (`Eq3`) | Robert Bristow-Johnson | fórmulas publicadas | implementação própria |
 | msfa (music-synthesizer-for-android) | importação de SysEx do DX7 (`src/dx7_sysex.h`): tabela dos 32 algoritmos e fórmulas de conversão | Google Inc. (Raph Levien) | Apache-2.0 | porta (tabela + fórmulas), com mudanças |
+| Airwindows (Drive, Tube2, Distortion, Density2, ToTape6, Gatelope, ClipSoftly, Pockey2, Tremolo, AutoPan, Vibrato, RingModulator) | efeitos do rack (`src/airwindows/*.h`) | Chris Johnson (airwindows) | MIT | gerados por `tools/ports/airwindows_port.py`: estado, construtor e `processReplacing` originais, sem a camada VST; só a semente do dither mudou |
+| CHOW Tape Model | simulador de fita do rack (`src/chowtape/ChowTape.h`) | Jatin Chowdhury | GPLv3 | porta (histerese, tom, perdas, degrade, chew, wow/flutter), com mudanças descritas no cabeçalho |
+| Surge XT — chowdsp/tape | base sem JUCE da porta do CHOW Tape | Surge Synth Team | GPLv3 | porta, com correções conferidas no original |
+| ZetaCarinaeModules (processo de Ornstein-Uhlenbeck, via CHOW Tape) | variação do wow (`chowtape::WowFlutter`) | Michael Hampton | GPLv3 | porta |
+| sst-effects — RotarySpeaker | rotary/Leslie do rack (`fxextra::Rotary`, `src/dx7_fx_extra.h`) | Surge Synth Team | GPLv3 | porta do algoritmo, com infraestrutura própria e chave lento/rápido com inércia |
+| Faust vaeffects.lib (crybaby, autowah) | wah do rack (`fxextra::Wah`) | Julius O. Smith III | STK-4.3 (estilo MIT) | porta |
+| Clouds — PitchShifter | pitch shifter do rack (`fxextra::PitchShifter`) | Emilie Gillet (Mutable Instruments) | MIT | porta, com mudanças |
 | Roboto Medium | fonte da interface (`third_party/imgui/misc/fonts/Roboto-Medium.ttf`) | Google (Christian Robertson) | Apache 2.0 | arquivo distribuído com o Dear ImGui, carregado em tempo de execução |
 
 As mudanças feitas em cada porta estão descritas no comentário de cabeçalho
@@ -33,6 +40,16 @@ do bloco correspondente em `src/dx7_globalfx.h`.
 - Freeverb (distribuição original de Jezar): <https://github.com/chiptunes-swift/freeverb>
   (`freeverb/Components/*`)
 - Faust: <https://github.com/grame-cncm/faustlibraries> (`phaflangers.lib`, `licenses/stk-4.3.0.md`)
+- Baixados em 2026-10-29 (rack de efeitos):
+  - Airwindows: <https://github.com/airwindows/airwindows> (`plugins/LinuxVST/src/<Nome>/<Nome>.h`,
+    `<Nome>.cpp`, `<Nome>Proc.cpp`; `LICENSE`)
+  - CHOW Tape: <https://github.com/jatinchowdhury18/AnalogTapeModel>
+    (`Plugin/Source/Processors/Timing_Effects/*`, `Loss_Effects/LossFilter.cpp`, `Degrade/DegradeProcessor.cpp`)
+  - Surge XT: <https://github.com/surge-synthesizer/surge> (`src/common/dsp/effects/chowdsp/tape/*`,
+    `chowdsp/shared/Shelf.h`, `BilinearUtils.h`, `chowdsp/TapeEffect.cpp`)
+  - sst-effects: <https://github.com/surge-synthesizer/sst-effects> (`include/sst/effects/RotarySpeaker.h`)
+  - Faust: `vaeffects.lib` (crybaby, autowah) do mesmo repositório de cima
+  - Clouds: `clouds/dsp/fx/pitch_shifter.h` do mesmo repositório da Mutable de cima
 - msfa (baixado em 2026-10-24): <https://github.com/google/music-synthesizer-for-android>
   (`app/src/main/jni/fm_core.cc`, `dx7note.cc`, `env.cc`, `lfo.cc`)
 
@@ -66,7 +83,41 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### Faust phaflangers.lib (funções de Julius O. Smith III) — STK-4.3
+### Airwindows — MIT
+
+```
+MIT License
+
+Copyright (c) 2018 Chris Johnson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### CHOW Tape Model, Surge XT, sst-effects, ZetaCarinaeModules — GNU GPL v3
+
+O código portado desses projetos é GPLv3, a mesma licença do dx7fm (texto
+completo em `LICENSE`). Avisos de copyright: CHOW Tape Model © Jatin
+Chowdhury; Surge XT © 2018-2024 Surge Synth Team e autores (originalmente
+© Claes Johanson / Vember Audio 2004-2018); sst-effects © Surge Synth Team;
+ZetaCarinaeModules © Michael Hampton.
+
+### Faust phaflangers.lib e vaeffects.lib (funções de Julius O. Smith III) — STK-4.3
 
 Copyright (C) 2003-2017 Julius O. Smith III, liberado sob a licença STK-4.3:
 

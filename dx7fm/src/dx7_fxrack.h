@@ -1,6 +1,20 @@
 #pragma once
 #include "dx7_globalfx.h"
+#include "dx7_fx_extra.h"
 #include "dx7_params.h"
+#include "chowtape/ChowTape.h"
+#include "airwindows/AutoPan.h"
+#include "airwindows/ClipSoftly.h"
+#include "airwindows/Density2.h"
+#include "airwindows/Distortion.h"
+#include "airwindows/Drive.h"
+#include "airwindows/Gatelope.h"
+#include "airwindows/Pockey2.h"
+#include "airwindows/RingModulator.h"
+#include "airwindows/ToTape6.h"
+#include "airwindows/Tremolo.h"
+#include "airwindows/Tube2.h"
+#include "airwindows/Vibrato.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -33,13 +47,16 @@
 // =============================================================================
 namespace dx7fm {
 
-constexpr int kFxChains = 2, kFxSlots = 4, kFxParams = 8;
+constexpr int kFxChains = 2, kFxSlots = 4, kFxParams = 12;
 constexpr int kFxParts = 4; // = kNumParts (dx7_alloc.h confere)
 
 // Novos tipos SEMPRE no fim (o JSON usa o nome, mas o enum fica estavel).
 enum class FxKind : uint8_t {
     Off,
     Chorus, Phaser, Flanger, TapeDelay, ReverbClassic, Eq3, Compressor, // 2026-10-29: os 7 efeitos globais de antes
+    Overdrive, Tube, Distortion, Density, TapeSim, TapeLite, Gate, SoftClip, LoFi,  // 2026-10-29: drives, fita, dinamica
+    Tremolo, AutoPan, Vibrato, RingMod, Wah, FilterLfo, PitchShift, Rotary,         //   modulacao, filtros, pitch
+    DigitalDelay, ReverseDelay,                                                      //   delays
     Count
 };
 
@@ -117,6 +134,84 @@ inline const FxInfo& fxInfo(FxKind k) {
           {"release", "Release", 1.0f, 500.0f, 80.0f, "ms", true},
           {"knee", "Knee", 0.0f, 8.0f, 2.0f, "dB"},
           {"makeup", "Makeup", 0.0f, 30.0f, 0.0f, "dB"}}},
+        {FxKind::Overdrive, "Overdrive", "Overdrive", "Drive", "Drive do Airwindows (Chris Johnson, MIT)", 1.0f, 3,
+         {{"drive", "Drive", 0.0f, 1.0f, 0.5f}, {"highpass", "Highpass", 0.0f, 1.0f, 0.0f}, {"output", "Saida", 0.0f, 1.0f, 1.0f}}},
+        {FxKind::Tube, "Tube", "Valvula", "Drive", "Tube2 do Airwindows (Chris Johnson, MIT)", 1.0f, 2,
+         {{"input", "Entrada", 0.0f, 1.0f, 0.5f}, {"tube", "Valvula", 0.0f, 1.0f, 0.5f}}},
+        {FxKind::Distortion, "Distortion", "Distorcao", "Drive", "Distortion do Airwindows (Chris Johnson, MIT): 5 curvas", 1.0f, 3,
+         {{"input", "Entrada", -12.0f, 12.0f, 0.0f, "dB"},
+          {"mode", "Curva", 0.0f, 4.0f, 2.0f, "", false, "Density|Drive|Spiral|Mojo|Dyno"},
+          {"output", "Saida", -12.0f, 12.0f, 0.0f, "dB"}}},
+        {FxKind::Density, "Density", "Saturacao", "Drive", "Density2 do Airwindows (Chris Johnson, MIT)", 1.0f, 3,
+         {{"density", "Densidade", 0.0f, 1.0f, 0.2f}, {"highpass", "Highpass", 0.0f, 1.0f, 0.0f}, {"output", "Saida", 0.0f, 1.0f, 1.0f}}},
+        {FxKind::TapeSim, "TapeSim", "Simulador de fita", "Fita",
+         "CHOW Tape Model (Jatin Chowdhury, GPLv3), pela versao do Surge XT (GPLv3) + wow/flutter do original", 1.0f, 12,
+         {{"drive", "Drive", 0.0f, 1.0f, 0.85f},
+          {"saturation", "Saturacao", 0.0f, 1.0f, 0.5f},
+          {"bias", "Bias", 0.0f, 1.0f, 0.5f},
+          {"tone", "Tom", -0.5f, 0.5f, 0.0f}, // +-9 dB (o CHOW vai a +-18, que com saturacao maxima passa de 15x)
+          {"speed", "Velocidade", 1.0f, 30.0f, 15.0f, "ips", true},
+          {"spacing", "Espacamento", 0.1f, 20.0f, 0.1f, "um", true},
+          {"gap", "Gap", 1.0f, 50.0f, 1.0f, "um", true},
+          {"thickness", "Espessura", 0.1f, 50.0f, 0.1f, "um", true},
+          {"wow", "Wow", 0.0f, 1.0f, 0.0f},
+          {"flutter", "Flutter", 0.0f, 1.0f, 0.0f},
+          {"degrade", "Desgaste", 0.0f, 1.0f, 0.0f},
+          {"degradeAmount", "Intens.", 0.0f, 1.0f, 0.0f}}},
+        {FxKind::TapeLite, "TapeLite", "Fita leve", "Fita", "ToTape6 do Airwindows (Chris Johnson, MIT)", 1.0f, 5,
+         {{"input", "Entrada", 0.0f, 1.0f, 0.5f}, {"soften", "Suavizar", 0.0f, 1.0f, 0.5f}, {"headBump", "Head bump", 0.0f, 1.0f, 0.5f},
+          {"flutter", "Flutter", 0.0f, 1.0f, 0.5f}, {"output", "Saida", 0.0f, 1.0f, 0.5f}}},
+        {FxKind::Gate, "Gate", "Noise gate", "Dinamica", "Gatelope do Airwindows (Chris Johnson, MIT): gate que fecha pelos agudos e graves", 1.0f, 4,
+         {{"threshold", "Threshold", 0.0f, 1.0f, 0.1f}, {"trebleSustain", "Sust. agudo", 0.0f, 1.0f, 1.0f},
+          {"bassSustain", "Sust. grave", 0.0f, 1.0f, 0.5f}, {"attack", "Ataque", 0.0f, 1.0f, 0.0f}}},
+        {FxKind::SoftClip, "SoftClip", "Limiter (clip suave)", "Dinamica", "ClipSoftly do Airwindows (Chris Johnson, MIT) com teto ajustavel", 1.0f, 1,
+         {{"ceiling", "Teto", -24.0f, 0.0f, -3.0f, "dB"}}},
+        {FxKind::LoFi, "LoFi", "Lo-fi", "Drive", "Pockey2 do Airwindows (Chris Johnson, MIT): taxa e bits", 1.0f, 2,
+         {{"rate", "Taxa", 0.0f, 1.0f, 0.3f}, {"bits", "Bits", 0.0f, 1.0f, 0.66f}}},
+        {FxKind::Tremolo, "Tremolo", "Tremolo", "Modulacao", "Tremolo do Airwindows (Chris Johnson, MIT)", 1.0f, 2,
+         {{"speed", "Velocidade", 0.0f, 1.0f, 0.5f}, {"depth", "Profund.", 0.0f, 1.0f, 1.0f}}},
+        {FxKind::AutoPan, "AutoPan", "Auto-pan", "Modulacao", "AutoPan do Airwindows (Chris Johnson, MIT)", 1.0f, 3,
+         {{"rate", "Velocidade", 0.0f, 1.0f, 0.1f}, {"phase", "Fase", 0.0f, 1.0f, 0.5f}, {"wide", "Largura", 0.0f, 1.0f, 0.0f}}},
+        {FxKind::Vibrato, "Vibrato", "Vibrato", "Modulacao", "Vibrato do Airwindows (Chris Johnson, MIT)", 1.0f, 4,
+         {{"speed", "Velocidade", 0.0f, 1.0f, 0.3f}, {"depth", "Profund.", 0.0f, 1.0f, 0.3f},
+          {"fmSpeed", "FM vel.", 0.0f, 1.0f, 0.4f}, {"fmDepth", "FM prof.", 0.0f, 1.0f, 0.0f}}},
+        {FxKind::RingMod, "RingMod", "Ring mod", "Modulacao", "RingModulator do Airwindows (Chris Johnson, MIT)", 1.0f, 3,
+         {{"freqL", "Freq E", 0.0f, 1.0f, 0.5f}, {"freqR", "Freq D", 0.0f, 1.0f, 0.5f}, {"soar", "Soar", 0.0f, 1.0f, 0.0f}}},
+        {FxKind::Wah, "Wah", "Wah", "Filtro", "crybaby/autowah da vaeffects.lib do Faust (Julius O. Smith III, STK-4.3); modo LFO proprio", 1.0f, 5,
+         {{"mode", "Modo", 0.0f, 2.0f, 1.0f, "", false, "Pedal|Auto|LFO"},
+          {"position", "Posicao", 0.0f, 1.0f, 0.3f},
+          {"sensitivity", "Sensib.", 1.0f, 30.0f, 8.0f, "", true},
+          {"rate", "Rate", 0.05f, 10.0f, 1.5f, "Hz", true},
+          {"depth", "Faixa", 0.0f, 1.0f, 0.7f}}},
+        {FxKind::FilterLfo, "FilterLfo", "Filtro com LFO", "Filtro", "Implementacao propria (SVF TPT do motor)", 1.0f, 7,
+         {{"type", "Tipo", 0.0f, 2.0f, 0.0f, "", false, "Passa-baixa|Passa-banda|Passa-altas"},
+          {"cutoff", "Corte", 20.0f, 18000.0f, 600.0f, "Hz", true},
+          {"q", "Resson.", 0.5f, 12.0f, 2.0f, "", true},
+          {"shape", "Forma", 0.0f, 3.0f, 0.0f, "", false, "Seno|Triangulo|Quadrada|S&H"},
+          {"rate", "Rate", 0.05f, 20.0f, 1.0f, "Hz", true},
+          {"sync", "Sync", 0.0f, 9.0f, 0.0f, "", false, "Livre|1/1|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16"},
+          {"depth", "Profund.", 0.0f, 6.0f, 2.0f, "oit"}}},
+        {FxKind::PitchShift, "PitchShift", "Pitch shifter", "Pitch", "PitchShifter do Mutable Instruments Clouds (Emilie Gillet, MIT)", 0.5f, 3,
+         {{"semitones", "Semitons", -24.0f, 24.0f, 12.0f, "st"}, {"cents", "Cents", -50.0f, 50.0f, 0.0f}, {"window", "Janela", 0.0f, 1.0f, 0.6f}}},
+        {FxKind::Rotary, "Rotary", "Rotary (Leslie)", "Modulacao", "RotarySpeaker do sst-effects/Surge XT (GPLv3) + chave lento/rapido com inercia", 1.0f, 7,
+         {{"speed", "Velocidade", 0.0f, 1.0f, 0.0f, "", false, "Lento|Rapido"},
+          {"slowHz", "Lento", 0.3f, 2.0f, 0.8f, "Hz"},
+          {"fastHz", "Rapido", 3.0f, 9.0f, 6.7f, "Hz"},
+          {"doppler", "Doppler", 0.0f, 1.0f, 0.7f},
+          {"tremolo", "Tremolo", 0.0f, 1.0f, 0.5f},
+          {"drive", "Drive", 0.0f, 1.0f, 0.0f},
+          {"width", "Largura", 0.0f, 2.0f, 1.0f}}},
+        {FxKind::DigitalDelay, "DigitalDelay", "Delay digital", "Delay", "Implementacao propria: repeticoes limpas, ping-pong, sync no BPM", 0.3f, 6,
+         {{"time", "Tempo", 10.0f, 4000.0f, 375.0f, "ms", true},
+          {"sync", "Sync", 0.0f, 9.0f, 0.0f, "", false, "Livre|1/1|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16"},
+          {"feedback", "Feedback", 0.0f, 0.98f, 0.35f},
+          {"pingpong", "Ping-pong", 0.0f, 1.0f, 0.0f, "", false, "Nao|Sim"},
+          {"highCut", "High cut", 1000.0f, 20000.0f, 9000.0f, "Hz", true},
+          {"lowCut", "Low cut", 20.0f, 1000.0f, 80.0f, "Hz", true}}},
+        {FxKind::ReverseDelay, "ReverseDelay", "Delay reverso", "Delay", "Implementacao propria: pedacos tocados de tras pra frente com janelas de Hann", 0.5f, 3,
+         {{"time", "Tempo", 50.0f, 2000.0f, 500.0f, "ms", true},
+          {"sync", "Sync", 0.0f, 9.0f, 0.0f, "", false, "Livre|1/1|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16"},
+          {"feedback", "Feedback", 0.0f, 0.9f, 0.3f}}},
     };
     static_assert(sizeof(table) / sizeof(table[0]) == static_cast<size_t>(FxKind::Count), "fxInfo: um item por FxKind, na ordem");
     const int i = static_cast<int>(k);
@@ -310,6 +405,132 @@ private:
     ZamCompressor fx_;
 };
 
+// tempo de uma divisao de sync ("Livre|1/1|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16"); 0 = livre
+inline double syncBeats(float choice) {
+    static const int idx[10] = {-1, 2, 3, 6, 7, 8, 9, 10, 11, 12}; // indices de lfoDivisionBeats
+    const int c = std::clamp(static_cast<int>(std::lround(choice)), 0, 9);
+    return idx[c] < 0 ? 0.0 : lfoDivisionBeats(idx[c]);
+}
+
+// Airwindows: os parametros 0..1 vao direto pros A..F do plugin (Dry/Wet = 1:
+// o mix e do slot); processReplacing roda no bloco inteiro
+template <typename AW> class AirwindowsFx : public FxProcessor {
+public:
+    using Setter = void (*)(AW&, const FxSlotParams&);
+    explicit AirwindowsFx(Setter set) : set_(set) {}
+    void prepare(double sr) override { fx_.setSampleRate(sr); fx_.reset(); }
+    void reset() override { fx_.reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext&) override {
+        set_(fx_, s);
+        float* io[2] = {L, R};
+        fx_.processReplacing(io, io, n);
+    }
+private:
+    AW fx_;
+    Setter set_;
+};
+
+class SoftClipFx : public FxProcessor { // ClipSoftly com teto: ganho antes, o inverso depois
+public:
+    void prepare(double sr) override { fx_.setSampleRate(sr); fx_.reset(); }
+    void reset() override { fx_.reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext&) override {
+        const float ceil = std::pow(10.0f, s.p[0] / 20.0f), in = 1.0f / ceil;
+        for (int i = 0; i < n; ++i) { L[i] *= in; R[i] *= in; }
+        float* io[2] = {L, R};
+        fx_.processReplacing(io, io, n);
+        for (int i = 0; i < n; ++i) { L[i] *= ceil; R[i] *= ceil; }
+    }
+private:
+    airwindows::ClipSoftly fx_;
+};
+
+class TapeSimFx : public FxProcessor {
+public:
+    void prepare(double sr) override { fx_.prepare(sr); }
+    void reset() override { fx_.reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext&) override {
+        chowtape::TapeParams p;
+        p.drive = s.p[0]; p.saturation = s.p[1]; p.bias = s.p[2]; p.tone = s.p[3]; p.speed = s.p[4]; p.spacing = s.p[5];
+        p.gap = s.p[6]; p.thickness = s.p[7]; p.wow = s.p[8]; p.flutter = s.p[9]; p.degrade = s.p[10]; p.degradeAmount = s.p[11];
+        fx_.process(p, L, R, n);
+    }
+private:
+    chowtape::TapeMachine fx_;
+};
+
+class WahFx : public FxProcessor {
+public:
+    void prepare(double sr) override { fx_.prepare(sr); }
+    void reset() override { fx_.reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext&) override {
+        fx_.process(static_cast<fxextra::Wah::Mode>(std::lround(s.p[0])), s.p[1], s.p[2], s.p[3], s.p[4], L, R, n);
+    }
+private:
+    fxextra::Wah fx_;
+};
+
+class FilterLfoFx : public FxProcessor {
+public:
+    void prepare(double sr) override { fx_.prepare(sr); }
+    void reset() override { fx_.reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext& ctx) override {
+        fx_.process(static_cast<int>(std::lround(s.p[0])), s.p[1], s.p[2], static_cast<int>(std::lround(s.p[3])), s.p[4], s.p[6], L, R, n,
+                    ctx.beatPos, syncBeats(s.p[5]), ctx.bpm);
+    }
+private:
+    fxextra::LfoFilter fx_;
+};
+
+class PitchShiftFx : public FxProcessor {
+public:
+    void prepare(double sr) override { fx_.prepare(sr); }
+    void reset() override { fx_.reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext&) override {
+        fx_.setRatio(std::exp2((std::round(s.p[0]) + s.p[1] * 0.01f) / 12.0f));
+        for (int i = 0; i < n; ++i) { fx_.setSize(s.p[2]); fx_.processSample(L[i], R[i]); }
+    }
+private:
+    fxextra::PitchShifter fx_;
+};
+
+class RotaryFx : public FxProcessor {
+public:
+    void prepare(double sr) override { fx_.prepare(sr); }
+    void reset() override { fx_.reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext&) override {
+        fx_.process(s.p[0] >= 0.5f, s.p[1], s.p[2], s.p[3], s.p[4], s.p[5], s.p[6], L, R, n);
+    }
+private:
+    fxextra::Rotary fx_;
+};
+
+class DigitalDelayFx : public FxProcessor {
+public:
+    void prepare(double sr) override { fx_.prepare(sr); }
+    void reset() override { fx_.reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext& ctx) override {
+        const double beats = syncBeats(s.p[1]);
+        const float sec = beats > 0.0 ? static_cast<float>(beats * 60.0 / std::max(1.0f, ctx.bpm)) : s.p[0] * 0.001f;
+        fx_.process(sec, s.p[2], s.p[3] >= 0.5f, s.p[4], s.p[5], L, R, n);
+    }
+private:
+    fxextra::DigitalDelay fx_;
+};
+
+class ReverseDelayFx : public FxProcessor {
+public:
+    void prepare(double sr) override { fx_.prepare(sr); }
+    void reset() override { fx_.reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext& ctx) override {
+        const double beats = syncBeats(s.p[1]);
+        const float sec = beats > 0.0 ? static_cast<float>(beats * 60.0 / std::max(1.0f, ctx.bpm)) : s.p[0] * 0.001f;
+        fx_.process(sec, s.p[2], L, R, n);
+    }
+private:
+    fxextra::ReverseDelay fx_;
+};
+
 } // namespace fxrack_detail
 
 // Cria (e prepara) o DSP de um tipo. Chamar FORA da thread de audio.
@@ -324,6 +545,41 @@ inline std::unique_ptr<FxProcessor> makeFxProcessor(FxKind k, double sampleRate)
         case FxKind::ReverbClassic: p = std::make_unique<ReverbClassicFx>(); break;
         case FxKind::Eq3:           p = std::make_unique<Eq3Fx>(); break;
         case FxKind::Compressor:    p = std::make_unique<CompressorFx>(); break;
+        case FxKind::Overdrive: p = std::make_unique<AirwindowsFx<airwindows::Drive>>([](airwindows::Drive& a, const FxSlotParams& s) { a.A = s.p[0]; a.B = s.p[1]; a.C = s.p[2]; a.D = 1.0f; }); break;
+        case FxKind::Tube: p = std::make_unique<AirwindowsFx<airwindows::Tube2>>([](airwindows::Tube2& a, const FxSlotParams& s) { a.A = s.p[0]; a.B = s.p[1]; }); break;
+        case FxKind::Distortion:
+            p = std::make_unique<AirwindowsFx<airwindows::Distortion>>([](airwindows::Distortion& a, const FxSlotParams& s) {
+                a.A = 0.5f + s.p[0] / 24.0f; a.B = (std::round(s.p[1]) + 0.5f) / 5.0f; a.C = 0.5f + s.p[2] / 24.0f; a.D = 1.0f;
+            });
+            break;
+        case FxKind::Density: p = std::make_unique<AirwindowsFx<airwindows::Density2>>([](airwindows::Density2& a, const FxSlotParams& s) { a.A = s.p[0]; a.B = s.p[1]; a.C = s.p[2]; a.D = 1.0f; }); break;
+        case FxKind::TapeSim: p = std::make_unique<TapeSimFx>(); break;
+        case FxKind::TapeLite:
+            p = std::make_unique<AirwindowsFx<airwindows::ToTape6>>([](airwindows::ToTape6& a, const FxSlotParams& s) {
+                a.A = s.p[0]; a.B = s.p[1]; a.C = s.p[2]; a.D = s.p[3]; a.E = s.p[4]; a.F = 1.0f;
+            });
+            break;
+        case FxKind::Gate:
+            p = std::make_unique<AirwindowsFx<airwindows::Gatelope>>([](airwindows::Gatelope& a, const FxSlotParams& s) {
+                a.A = s.p[0]; a.B = s.p[1]; a.C = s.p[2]; a.D = s.p[3]; a.E = 1.0f;
+            });
+            break;
+        case FxKind::SoftClip: p = std::make_unique<SoftClipFx>(); break;
+        case FxKind::LoFi: p = std::make_unique<AirwindowsFx<airwindows::Pockey2>>([](airwindows::Pockey2& a, const FxSlotParams& s) { a.A = s.p[0]; a.B = s.p[1]; a.C = 1.0f; }); break;
+        case FxKind::Tremolo: p = std::make_unique<AirwindowsFx<airwindows::Tremolo>>([](airwindows::Tremolo& a, const FxSlotParams& s) { a.A = s.p[0]; a.B = s.p[1]; }); break;
+        case FxKind::AutoPan: p = std::make_unique<AirwindowsFx<airwindows::AutoPan>>([](airwindows::AutoPan& a, const FxSlotParams& s) { a.A = s.p[0]; a.B = s.p[1]; a.C = s.p[2]; a.D = 1.0f; }); break;
+        case FxKind::Vibrato:
+            p = std::make_unique<AirwindowsFx<airwindows::Vibrato>>([](airwindows::Vibrato& a, const FxSlotParams& s) {
+                a.A = s.p[0]; a.B = s.p[1]; a.C = s.p[2]; a.D = s.p[3]; a.E = 1.0f;
+            });
+            break;
+        case FxKind::RingMod: p = std::make_unique<AirwindowsFx<airwindows::RingModulator>>([](airwindows::RingModulator& a, const FxSlotParams& s) { a.A = s.p[0]; a.B = s.p[1]; a.C = s.p[2]; a.D = 1.0f; }); break;
+        case FxKind::Wah: p = std::make_unique<WahFx>(); break;
+        case FxKind::FilterLfo: p = std::make_unique<FilterLfoFx>(); break;
+        case FxKind::PitchShift: p = std::make_unique<PitchShiftFx>(); break;
+        case FxKind::Rotary: p = std::make_unique<RotaryFx>(); break;
+        case FxKind::DigitalDelay: p = std::make_unique<DigitalDelayFx>(); break;
+        case FxKind::ReverseDelay: p = std::make_unique<ReverseDelayFx>(); break;
         case FxKind::Off: case FxKind::Count: return nullptr;
     }
     if (p) p->prepare(sampleRate);

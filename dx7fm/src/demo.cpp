@@ -4429,6 +4429,205 @@ static void testFxRackKindSwapWhilePlaying() {
     check(finite && swaps.load() > 50, "rack: trocar o tipo dos slots durante o audio nao trava nem gera NaN");
 }
 
+// --- [ADICIONADO em 2026-10-29] todos os efeitos do rack ---
+// roda UM slot com o tipo k e parametros dados sobre gen(i) (estereo: R defasado)
+static std::pair<std::vector<float>, std::vector<float>> runSlot(FxKind k, const std::function<void(FxSlotParams&)>& setup,
+                                                                   const std::function<float(int)>& gen, int n, float bpm = 120.0f) {
+    FxRack rack;
+    rack.prepare(48000.0);
+    FxRackParams p;
+    p.chain[0].slot[0].setKind(k);
+    p.chain[0].slot[0].mix = 1.0f;
+    if (setup) setup(p.chain[0].slot[0]);
+    rack.setParams(p);
+    std::vector<float> L, R;
+    float a[256], b[256], z1[256], z2[256], d1[256], d2[256];
+    double beat = 0.0;
+    for (int at = 0; at < n; at += 256) {
+        const int len = std::min(256, n - at);
+        rack.beginBlock();
+        for (int i = 0; i < len; ++i) { a[i] = gen(at + i); b[i] = gen(at + i + 7); d1[i] = d2[i] = 0.0f; z1[i] = z2[i] = 0.0f; }
+        FxContext ctx;
+        ctx.bpm = bpm;
+        ctx.beatPos = beat;
+        beat += len * bpm / (60.0 * 48000.0);
+        rack.process(d1, d2, a, b, z1, z2, len, ctx);
+        for (int i = 0; i < len; ++i) { L.push_back(d1[i]); R.push_back(d2[i]); }
+    }
+    return {L, R};
+}
+
+static void testAllFxKindsStable() {
+    std::mt19937 rng(11);
+    std::uniform_real_distribution<float> u(0.0f, 1.0f), noise(-1.0f, 1.0f);
+    std::vector<float> nz(48000);
+    for (float& x : nz) x = noise(rng);
+    std::string bad;
+    int runs = 0;
+    for (int k = 1; k < static_cast<int>(FxKind::Count); ++k) {
+        const FxKind kind = static_cast<FxKind>(k);
+        const FxInfo& info = fxInfo(kind);
+        for (int variant = 0; variant < 5; ++variant) { // padrao, minimos, maximos, 2 aleatorios
+            for (float level : {0.01f, 0.5f, 2.0f}) {
+                auto set = [&](FxSlotParams& s) {
+                    for (int i = 0; i < info.nParams; ++i) {
+                        const auto& pi = info.params[i];
+                        if (variant == 1) s.p[i] = pi.min;
+                        else if (variant == 2) s.p[i] = pi.max;
+                        else if (variant >= 3) s.p[i] = pi.min + (pi.max - pi.min) * u(rng);
+                    }
+                };
+                for (int sig = 0; sig < 2; ++sig) {
+                    auto [L, R] = runSlot(kind, set, [&](int i) { return level * (sig == 0 ? nz[static_cast<size_t>(i) % nz.size()] : std::sin(0.0571f * i)); }, 24000);
+                    float pk = 0.0f;
+                    bool fin = true;
+                    for (size_t i = 0; i < L.size(); ++i) { fin &= std::isfinite(L[i]) && std::isfinite(R[i]); pk = std::max({pk, std::fabs(L[i]), std::fabs(R[i])}); }
+                    ++runs;
+                    if (!fin || pk > 40.0f * std::max(level, 0.05f)) {
+                        char b[128];
+                        std::snprintf(b, sizeof b, " %s(v%d nivel %.2f %s pico %.1f%s)", info.id, variant, level, sig ? "seno" : "ruido", pk, fin ? "" : " NaN");
+                        bad += b;
+                    }
+                }
+            }
+        }
+    }
+    std::printf("  (%d tipos x 5 ajustes x 3 niveis x ruido/seno = %d rodadas)\n", static_cast<int>(FxKind::Count) - 1, runs);
+    const std::string msg = "todos os efeitos do rack: estaveis e finitos com parametros nos extremos e sinais de -40 a +6 dB" + (bad.empty() ? std::string() : " --" + bad);
+    check(bad.empty(), msg.c_str());
+}
+
+static void testFxKindsCost() {
+    // custo de 1 s de audio estereo por tipo (o rack roda isso por slot ativo)
+    std::string top;
+    float worst = 0.0f;
+    std::vector<std::pair<float, std::string>> costs;
+    for (int k = 1; k < static_cast<int>(FxKind::Count); ++k) {
+        const FxKind kind = static_cast<FxKind>(k);
+        auto t0 = std::chrono::steady_clock::now();
+        auto out = runSlot(kind, nullptr, [](int i) { return 0.3f * std::sin(0.05f * i); }, 48000);
+        const float sec = std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
+        costs.push_back({out.first[100] == 12345.0f ? 0.0f : sec, fxInfo(kind).id});
+        worst = std::max(worst, sec);
+    }
+    std::sort(costs.rbegin(), costs.rend());
+    std::printf("  (mais caros por slot: ");
+    for (int i = 0; i < 5; ++i) std::printf("%s %.1f%%%s", costs[static_cast<size_t>(i)].second.c_str(), costs[static_cast<size_t>(i)].first * 100.0f, i < 4 ? ", " : ")\n");
+    check(worst < 0.10f, "cada efeito do rack custa menos de 10% de um nucleo (inclui criar o DSP)");
+}
+
+static float bandRms(const std::vector<float>& x, double f, size_t from, size_t len) {
+    std::vector<float> seg(x.begin() + static_cast<long>(from), x.begin() + static_cast<long>(from + len));
+    return goertzelMagnitude(seg, f, 48000.0);
+}
+
+static void testFxBehaviour() {
+    auto sine = [](float hz, float a) { return [hz, a](int i) { return a * std::sin(2.0f * kPi * hz * static_cast<float>(i) / 48000.0f); }; };
+    // overdrive: mais drive = mais 3o harmonico
+    {
+        auto lo = runSlot(FxKind::Overdrive, [](FxSlotParams& s) { s.p[0] = 0.1f; }, sine(220.0f, 0.5f), 24000).first;
+        auto hi = runSlot(FxKind::Overdrive, [](FxSlotParams& s) { s.p[0] = 0.9f; }, sine(220.0f, 0.5f), 24000).first;
+        const float r0 = bandRms(lo, 660.0, 12000, 9600) / bandRms(lo, 220.0, 12000, 9600), r1 = bandRms(hi, 660.0, 12000, 9600) / bandRms(hi, 220.0, 12000, 9600);
+        std::printf("  (overdrive: 3o harmonico/fundamental %.3f -> %.3f)\n", r0, r1);
+        check(r1 > 3.0f * r0, "overdrive (Airwindows Drive): mais drive gera mais harmonicos");
+    }
+    // pitch shifter +12: energia em 2f; -12: em f/2
+    {
+        auto up = runSlot(FxKind::PitchShift, [](FxSlotParams& s) { s.p[0] = 12.0f; }, sine(440.0f, 0.5f), 24000).first;
+        auto dn = runSlot(FxKind::PitchShift, [](FxSlotParams& s) { s.p[0] = -12.0f; }, sine(440.0f, 0.5f), 24000).first;
+        const float u2 = bandRms(up, 880.0, 9600, 9600), u1 = bandRms(up, 440.0, 9600, 9600);
+        const float d2 = bandRms(dn, 220.0, 9600, 9600), d1 = bandRms(dn, 440.0, 9600, 9600);
+        std::printf("  (pitch +12: 880/440 = %.1f; -12: 220/440 = %.1f)\n", u2 / u1, d2 / d1);
+        check(u2 > 5.0f * u1 && d2 > 5.0f * d1, "pitch shifter (Clouds): +12 st vai pra 2f, -12 st pra f/2");
+    }
+    // delay digital sincronizado: 1/4 a 120 BPM = eco em 0.5 s
+    {
+        auto [L, R] = runSlot(FxKind::DigitalDelay, [](FxSlotParams& s) { s.p[1] = 3.0f; s.p[2] = 0.0f; s.p[4] = 20000.0f; s.p[5] = 20.0f; },
+                              [](int i) { return i < 480 ? 0.5f : 0.0f; }, 48000);
+        int peak = 0;
+        for (int i = 1; i < 48000; ++i) if (std::fabs(L[static_cast<size_t>(i)]) > std::fabs(L[static_cast<size_t>(peak)])) peak = i;
+        std::printf("  (delay 1/4 a 120 BPM: eco em %.3f s, amostra %d)\n", peak / 48000.0, peak);
+        check(peak >= 24000 && peak < 24000 + 480 + 64, "delay digital: sync 1/4 a 120 BPM poe o eco em 0.5 s");
+    }
+    // delay reverso: uma rampa que desce volta subindo
+    {
+        auto [L, R] = runSlot(FxKind::ReverseDelay, [](FxSlotParams& s) { s.p[0] = 500.0f; s.p[2] = 0.0f; },
+                              [](int i) { return i < 12000 ? 0.8f * (1.0f - i / 12000.0f) * std::sin(0.2f * i) : 0.0f; }, 72000);
+        // depois do pedaco gravado, a energia do eco cresce (ataque invertido)
+        const float a = computeRms(L, 24000 + 1000, 4000), b = computeRms(L, 24000 + 14000, 4000);
+        std::printf("  (reverso: RMS no comeco %.3f, no fim do trecho %.3f)\n", a, b);
+        check(b > a * 1.3f, "delay reverso: o trecho volta de tras pra frente (o que decaia agora cresce)");
+    }
+    // gate: ruido baixo e cortado, alto passa
+    {
+        auto quiet = runSlot(FxKind::Gate, [](FxSlotParams& s) { s.p[0] = 0.3f; }, [](int i) { return 0.02f * std::sin(0.03f * i); }, 24000).first;
+        auto loud = runSlot(FxKind::Gate, [](FxSlotParams& s) { s.p[0] = 0.3f; }, [](int i) { return 0.8f * std::sin(0.03f * i); }, 24000).first;
+        const float q = computeRms(quiet, 12000, 12000) / (0.02f / std::sqrt(2.0f)), l = computeRms(loud, 12000, 12000) / (0.8f / std::sqrt(2.0f));
+        std::printf("  (gate: sinal baixo sai x%.3f, alto x%.2f)\n", q, l);
+        check(q < 0.1f && l > 0.5f, "noise gate (Airwindows Gatelope): fecha abaixo do threshold e deixa passar acima");
+    }
+    // tremolo: o volume oscila
+    {
+        auto t = runSlot(FxKind::Tremolo, [](FxSlotParams& s) { s.p[0] = 0.5f; s.p[1] = 1.0f; }, sine(440.0f, 0.5f), 96000).first;
+        float lo = 1.0f, hi = 0.0f;
+        for (int w = 4; w < 40; ++w) { const float r = computeRms(t, static_cast<size_t>(w * 2400), 2400); lo = std::min(lo, r); hi = std::max(hi, r); }
+        std::printf("  (tremolo: RMS em janelas de 50 ms entre %.3f e %.3f)\n", lo, hi);
+        check(hi > 3.0f * lo, "tremolo (Airwindows): o volume oscila");
+    }
+    // auto-wah: brilho segue o envelope
+    {
+        auto [L, R] = runSlot(FxKind::Wah, [](FxSlotParams& s) { s.p[0] = 1.0f; s.p[1] = 0.0f; s.p[2] = 8.0f; s.p[4] = 1.0f; },
+                              [](int i) { const float env = i < 24000 ? 0.05f : 0.8f; return env * (std::sin(0.02f * i) + std::sin(0.31f * i)); }, 48000);
+        const float softBright = bandRms(L, 48000.0 * 0.31 / (2 * kPi), 12000, 9600) / bandRms(L, 48000.0 * 0.02 / (2 * kPi), 12000, 9600);
+        const float loudBright = bandRms(L, 48000.0 * 0.31 / (2 * kPi), 36000, 9600) / bandRms(L, 48000.0 * 0.02 / (2 * kPi), 36000, 9600);
+        std::printf("  (auto-wah: agudo/grave com sinal fraco %.2f, forte %.2f)\n", softBright, loudBright);
+        check(loudBright > 2.0f * softBright, "auto-wah (Faust crybaby): tocar mais forte abre o filtro");
+    }
+    // filtro com LFO sincronizado: periodo = 1/4 a 120 BPM (0.5 s)
+    {
+        auto [L, R] = runSlot(FxKind::FilterLfo, [](FxSlotParams& s) { s.p[0] = 0.0f; s.p[1] = 200.0f; s.p[5] = 3.0f; s.p[6] = 5.0f; },
+                              [](int i) { return 0.3f * std::sin(0.27f * i); }, 96000);
+        std::vector<float> e;
+        for (int w = 0; w < 160; ++w) e.push_back(computeRms(L, static_cast<size_t>(w * 600), 600));
+        int bestLag = 0;
+        double best = -1e9;
+        for (int lag = 20; lag < 60; ++lag) { double c = 0; for (size_t i = 0; i + lag < e.size(); ++i) c += e[i] * e[i + static_cast<size_t>(lag)]; if (c > best) { best = c; bestLag = lag; } }
+        std::printf("  (filtro com LFO 1/4 a 120 BPM: periodo %.3f s)\n", bestLag * 600 / 48000.0);
+        check(std::abs(bestLag * 600 / 48000.0 - 0.5) < 0.03, "filtro com LFO: sync 1/4 a 120 BPM varre a cada 0.5 s");
+    }
+    // rotary: 1 s em lento, depois a chave vai pra rapido -- a corneta acelera com inercia
+    {
+        fxextra::Rotary rot;
+        rot.prepare(48000.0);
+        std::vector<float> L, R;
+        for (int b = 0; b < 48000 * 4 / 256; ++b) {
+            float l[256], r[256];
+            for (int i = 0; i < 256; ++i) l[i] = r[i] = 0.5f * std::sin(2.0f * kPi * 3000.0f * static_cast<float>(b * 256 + i) / 48000.0f);
+            rot.process(b * 256 >= 48000, 0.8f, 6.7f, 0.0f, 1.0f, 0.0f, 1.0f, l, r, 256);
+            L.insert(L.end(), l, l + 256);
+        }
+        auto rate = [&](size_t from) { // cruzamentos do envelope (tremolo) pela media em 1 s
+            std::vector<float> e;
+            for (int w = 0; w < 200; ++w) e.push_back(computeRms(L, from + static_cast<size_t>(w * 240), 240));
+            float m = 0; for (float x : e) m += x; m /= e.size();
+            int c = 0; for (size_t i = 1; i < e.size(); ++i) c += (e[i - 1] < m) != (e[i] < m);
+            return c / 2.0f;
+        };
+        const float slow = rate(0), ramp = rate(48000), fast = rate(48000 * 3);
+        std::printf("  (rotary: lento ~%.1f Hz; 1o segundo depois da chave ~%.1f Hz; depois ~%.1f Hz)\n", slow, ramp, fast);
+        check(slow < 1.5f && fast > 5.5f && ramp > slow && ramp < fast - 0.5f, "rotary: lento -> rapido acelera aos poucos (inercia da corneta)");
+    }
+    // fita: velocidade baixa perde agudo; wow modula a altura
+    {
+        auto fast = runSlot(FxKind::TapeSim, [](FxSlotParams& s) { s.p[4] = 30.0f; s.p[5] = 2.0f; }, [](int i) { return 0.2f * (std::sin(0.03f * i) + std::sin(1.05f * i)); }, 48000).first;
+        auto slow = runSlot(FxKind::TapeSim, [](FxSlotParams& s) { s.p[4] = 3.75f; s.p[5] = 2.0f; }, [](int i) { return 0.2f * (std::sin(0.03f * i) + std::sin(1.05f * i)); }, 48000).first;
+        const double fh = 48000.0 * 1.05 / (2 * kPi), fl = 48000.0 * 0.03 / (2 * kPi);
+        const float rf = bandRms(fast, fh, 24000, 9600) / bandRms(fast, fl, 24000, 9600), rs = bandRms(slow, fh, 24000, 9600) / bandRms(slow, fl, 24000, 9600);
+        std::printf("  (fita: agudo/grave a 30 ips %.2f, a 3.75 ips %.2f)\n", rf, rs);
+        check(rs < 0.7f * rf, "simulador de fita (CHOW): fita lenta perde agudos (perdas da cabeca)");
+    }
+}
+
 static void testGlobalFxOrder() {
     // a ordem dos slots muda o som: compressor antes x depois do reverb
     auto render = [](bool compFirst) {
@@ -4816,6 +5015,9 @@ int main() {
     testFxRackRouting();
     testFxRackSendsPerPart();
     testFxRackKindSwapWhilePlaying();
+    testAllFxKindsStable();
+    testFxBehaviour();
+    testFxKindsCost();
     testGlobalFxOrder();
     testGlobalFxCost();
     testDeadOperatorRevivedByLiveEdit();

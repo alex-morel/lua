@@ -747,6 +747,11 @@ public:
         for (int m = 0; m < kSide; ++m) side_[m] = h[kCenter - 1 - 2 * m] / total; // distancias 1, 3, 5, ...
     }
 
+    // coeficientes (normalizados pra ganho DC 1), pra quem monta o
+    // interpolador 2x com o mesmo filtro (chowtape::Oversampler2x)
+    double centerCoef() const { return center_; }
+    double sideCoef(int m) const { return side_[m]; } // distancia 2m+1 do centro
+
     // Chame 1x por amostra na taxa DE ENTRADA (superamostrada). Retorna
     // true e escreve out a cada 2 chamadas (na taxa decimada).
     bool process(float x, float& out) {

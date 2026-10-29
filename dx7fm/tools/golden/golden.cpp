@@ -76,6 +76,20 @@ std::vector<Scenario> scenarios() {
             if (b % 200 == 150) for (int p = 0; p < kNumParts; ++p) s.noteOff(p, 48 + p * 5 + (b / 200) % 3);
         });
     }});
+    // [2026-10-29] cada efeito do rack num slot da cadeia 1, sobre o patch padrao
+    for (int k = 1; k < static_cast<int>(FxKind::Count); ++k) {
+        const FxKind kind = static_cast<FxKind>(k);
+        v.push_back({std::string("rack_") + fxInfo(kind).id, [kind](std::vector<float>& o) {
+            Synth s; s.init(48000.0, 8); s.recompile(0);
+            FxRackParams r;
+            r.chain[0].slot[0].setKind(kind);
+            s.setFxRack(r);
+            run(o, s, 375, [](Synth& s, int b) {
+                if (b == 0) s.noteOn(0, 57, 110);
+                if (b == 60) s.noteOff(0, 57);
+            });
+        }});
+    }
     // banco de fabrica: a previa de cada preset
     for (const auto& f : dx7fm_app::factory::factoryBank()) {
         std::string n = "fabrica_";
