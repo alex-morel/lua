@@ -221,12 +221,26 @@ audio/UI instaladas).
 CMake tambem builda `gen_presets` e `patch_tests`. Rodando na pasta dx7fm/:
 
     ./build/gen_presets   # 12 patches em patches/ + previas em output/presets/
-    ./build/patch_tests   # confere o comportamento de cada patch (65 testes),
+    ./build/patch_tests   # confere o comportamento de cada patch (177 testes),
                           # grava os cenarios em output/patch_tests/
     python3 tools/presets/spectrogram.py output/patch_tests spec.png piano sino
 
 patches/ e output/ ficam fora do git: os patches sao montados em codigo em
 app/factory_bank.h (o mesmo banco "Fabrica" que o app mostra).
+
+[2026-10-29] Banco de fabrica = 39 patches em 4 familias:
+  app/factory_bank.h       os 12 de demonstracao + junta as outras familias
+  app/factory_preset.h     FactoryPreset (som + categoria, descricao, familia, previa)
+  app/factory_dx.h         Estilo DX7: DxVoice/DxOp em parametros do DX7 (0-99,
+                           coarse/fine, algoritmos 1-32) -> bytes VCED ->
+                           sysex::toPart, o mesmo caminho da importacao de .syx
+  app/factory_sy.h         Estilo SY77 (ondas AFM, serra em wavetable, filtros)
+  app/factory_originals.h  Originais (um recurso do dx7fm por patch)
+O volume de cada um e VoiceParams::volumeDb (vai com o patch; o nivel da parte
+e do mix e fica ao trocar de patch). No app: botao Fabrica no card PATCH.
+Ferramentas de design: ./build/audition [pasta] [filtro] (previa + envelope em
+dB de cada patch) e ./build/ui_shot saida.bmp [click:X,Y ...] (screenshot da
+UI sem tela: SDL_VIDEODRIVER=offscreen, XDG_CONFIG_HOME numa pasta temporaria).
 
 Testes de uma vez so (motor nos dois caminhos SIMD + patches de fabrica):
 

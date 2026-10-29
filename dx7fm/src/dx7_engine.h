@@ -413,6 +413,7 @@ private:
         cachedGeneration_ = generation_;
         // [2026-10-22] modulacao: so as rotas ativas e so os LFOs/envelopes que
         // alguem usa rodam por amostra (a matriz tem 16 rotas, quase sempre vazias)
+        patchGain_ = v.volumeDb != 0.0f ? dbToLinear(v.volumeDb) : 1.0f;
         numRoutes_ = 0;
         for (int k = 0; k < kNumLfos; ++k) lfoRateMul_[k] = lfoDepthMul_[k] = 1.0f; // rota removida: nao fica preso no valor antigo
         for (int k = 0; k < kNumLfos; ++k) lfoUsed_[k] = v.lfo(k).pitchDepth != 0.0f || v.lfo(k).ampDepth != 0.0f;
@@ -730,6 +731,7 @@ private:
         for (int i = 0; i < kNumOps; ++i) sum += ops_[i].signal * outMix_[i];
         for (auto& op : ops_) { op.prevPrevOut = op.prevOut; op.prevOut = op.signal; }
         if (voiceLevelTrim != 0.0f) sum *= std::max(0.0f, 1.0f + voiceLevelTrim); // ModDest::VoiceLevel
+        if (patchGain_ != 1.0f) sum *= patchGain_;                                  // VoiceParams::volumeDb
 
         // 7. idle check
         if (!anyCarrierSounding()) active_ = false;
@@ -842,6 +844,7 @@ private:
     LFO lfos_[kNumLfos];
     float lfoRateMul_[kNumLfos] = {1.0f, 1.0f, 1.0f, 1.0f}, lfoDepthMul_[kNumLfos] = {1.0f, 1.0f, 1.0f, 1.0f};
     float panMod_ = 0.0f;
+    float patchGain_ = 1.0f; // [2026-10-29] dbToLinear(VoiceParams::volumeDb), no rebuildCache
     VoiceControllers controllers_;
     std::mt19937 rng_{newRandomSeed()};
     std::uniform_real_distribution<float> dist_{-1.0f, 1.0f};

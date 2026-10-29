@@ -2014,6 +2014,27 @@ static void testMpeSlideSource() {
     check(back.modMatrix[0].src == ModSource::Slide, "fonte Slide salva e carrega no JSON do patch");
 }
 
+// [ADICIONADO em 2026-10-29] volume do patch (VoiceParams::volumeDb)
+static void testPatchVolume() {
+    auto rmsWith = [](float db) {
+        Synth synth;
+        synth.init(48000.0, 4);
+        synth.part(0).voice.volumeDb = db;
+        synth.recompile(0);
+        synth.noteOn(0, 60, 100);
+        double e = 0.0;
+        for (int i = 0; i < 9600; ++i) { float l, r; synth.renderStereo(l, r); if (i >= 4800) e += static_cast<double>(l) * l; }
+        return std::sqrt(e / 4800.0);
+    };
+    const double full = rmsWith(0.0f), half = rmsWith(-6.0206f);
+    check(std::fabs(half / full - 0.5) < 0.005, "volume do patch: -6 dB = metade da amplitude");
+    VoiceParams v;
+    v.volumeDb = -7.5f;
+    check(voiceParamsFromJson(JsonValue::parse(voiceParamsToJson(v).dump())).volumeDb == -7.5f &&
+              voiceParamsToJson(VoiceParams{}).find("volumeDb") == nullptr,
+          "volume do patch: salva/carrega no JSON (e nao aparece com 0 dB, como nos patches antigos)");
+}
+
 // --- [ADICIONADO em 2026-10-28] Mutar ---
 static void testMutatePatch() {
     using dx7fm_app::mutatePatch;
@@ -4567,6 +4588,7 @@ int main() {
     testMpeBendsOnlyItsNote();
     testMpeSlideSource();
     testMutatePatch();
+    testPatchVolume();
     testRecompileCacheFollowsMatrixChanges();
     testMasterVolume();
     testTriangleFoldShape();

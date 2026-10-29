@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <set>
 using namespace dx7fm;
 namespace fs = std::filesystem;
 
@@ -188,7 +189,13 @@ int main(int argc, char** argv) {
         }
     }
     std::printf("%zu patches carregados\n", P.size());
-    auto has = [&](const char* n) { if (!P.count(n)) { std::printf("FALTA %s\n", n); ++g_fail; return false; } std::printf("\n== %s\n", n); return true; };
+    std::set<std::string> tested;
+    auto has = [&](const char* n) {
+        if (!P.count(n)) { std::printf("FALTA %s\n", n); ++g_fail; return false; }
+        tested.insert(n);
+        std::printf("\n== %s\n", n);
+        return true;
+    };
 
     if (has("Piano Eletrico FM")) {
         auto& p = P["Piano Eletrico FM"];
@@ -368,6 +375,69 @@ int main(int argc, char** argv) {
         expect(rms(seg(t.l, 1.2, 0.2)) < 0.1f * rms(seg(t.l, 0.02, 0.1)), "", "decai rapido (percussivo)");
         general("tambor", p);
     }
+    // [2026-10-29] comportamento de alguns originais
+    if (has("Expressivo MPE")) {
+        auto& p = P["Expressivo MPE"];
+        auto none = play(p, chord({60}, 0.0, 1.0), 1.0, 120.0f, [](Synth& s) { s.modWheel(0, 0.0f); });
+        auto slide = play(p, chord({60}, 0.0, 1.0), 1.0, 120.0f, [](Synth& s) { s.modWheel(0, 0.0f); },
+                          [](Synth& s, double t) { if (t > 0.01) s.noteSlide(0, 60, 1.0f); });
+        auto press = play(p, chord({60}, 0.0, 1.0), 1.0, 120.0f, [](Synth& s) { s.modWheel(0, 0.0f); },
+                          [](Synth& s, double t) { if (t > 0.01) s.polyAftertouch(0, 60, 1.0f); });
+        const float b0 = bright(seg(none.l, 0.5, 0.17), noteHz(60)), bs = bright(seg(slide.l, 0.5, 0.17), noteHz(60)),
+                    bp = bright(seg(press.l, 0.5, 0.17), noteHz(60));
+        expect(bs > 1.5f * b0 && bp > 1.5f * b0, "", "slide (CC74) e pressao por nota abrem o brilho (harmonicos " + std::to_string(b0).substr(0, 5) +
+                                                         " -> slide " + std::to_string(bs).substr(0, 5) + ", pressao " + std::to_string(bp).substr(0, 5) + ")");
+    }
+    if (has("Baixo Wobble")) {
+        auto t = play(P["Baixo Wobble"], chord({33}, 0.0, 2.0), 2.0); // 120 BPM: 1/8 tercina = 1/6 s
+        std::vector<float> env;
+        for (double s0 = 0.2; s0 < 1.9; s0 += 0.01) env.push_back(bright(seg(t.l, s0, 0.03), noteHz(33)));
+        double mean = 0.0;
+        for (float x : env) mean += x;
+        mean /= env.size();
+        std::vector<double> ac(41, 0.0);
+        for (int lag = 0; lag <= 40; ++lag)
+            for (size_t i = 0; i + lag < env.size(); ++i) ac[lag] += (env[i] - mean) * (env[i + lag] - mean);
+        // primeiro pico da autocorrelacao (>= 80% do maior): o periodo, nao um multiplo dele
+        double best = 0.0, bestLag = 0.0;
+        for (int lag = 8; lag < 40; ++lag) best = std::max(best, ac[lag]);
+        for (int lag = 8; lag < 40; ++lag)
+            if (ac[lag] >= ac[lag - 1] && ac[lag] >= ac[lag + 1] && ac[lag] >= 0.8 * best) { bestLag = lag * 0.01; break; }
+        expect(std::fabs(bestLag - 1.0 / 6.0) < 0.02, "", "o filtro oscila na grade de 1/8 tercina (periodo " + std::to_string(bestLag).substr(0, 5) + " s, esperado 0.167)");
+    }
+    if (has("Feedback Cruzado")) {
+        auto& p = P["Feedback Cruzado"];
+        auto calm = play(p, chord({40}, 0.0, 1.5), 1.5, 120.0f, [](Synth& s) { s.setMacro(0, 0, 0.0f); });
+        auto chaos = play(p, chord({40}, 0.0, 1.5), 1.5, 120.0f, [](Synth& s) { s.setMacro(0, 0, 1.0f); });
+        const float b0 = bright(seg(calm.l, 1.0, 0.17), noteHz(40)), b1 = bright(seg(chaos.l, 1.0, 0.17), noteHz(40));
+        expect(b1 > 2.0f * b0, "", "Macro 1 (Caos) leva o laco do tom ao ruido (harmonicos " + std::to_string(b0).substr(0, 5) + " -> " + std::to_string(b1).substr(0, 5) + ")");
+    }
+    if (has("Kalimba Aditiva")) {
+        auto t = play(P["Kalimba Aditiva"], chord({67}, 0.0, 2.0), 2.0);
+        const float early = bright(seg(t.l, 0.005, 0.05), noteHz(67)), late = bright(seg(t.l, 0.8, 0.1), noteHz(67));
+        expect(early > 10.0f * late && rms(seg(t.l, 0.8, 0.1)) > 0.01f, "",
+               "os modos agudos somem e a fundamental continua (harmonicos " + std::to_string(early).substr(0, 5) + " -> " + std::to_string(late).substr(0, 6) + ")");
+    }
+
+    // [2026-10-29] os outros patches do banco (Estilo DX7, Estilo SY77, Originais):
+    // testes gerais + a previa nao clipa e tem volume parecido com o resto
+    for (const auto& [name, p] : P) {
+        if (tested.count(name)) continue;
+        std::printf("\n== %s\n", name.c_str());
+        general(name, p);
+    }
+    if (g_dir.empty())
+        for (const auto& f : dx7fm_app::factory::factoryBank()) {
+            std::vector<float> L, R;
+            dx7fm_app::factory::renderPreview(f, P[f.part.name], L, R);
+            float pk = 0.0f;
+            double mx = 0.0;
+            for (size_t i = 0; i < L.size(); ++i) pk = std::max({pk, std::fabs(L[i]), std::fabs(R[i])});
+            for (size_t a = 0; a + 2400 <= L.size(); a += 2400) mx = std::max(mx, static_cast<double>(rms(seg(L, a / 48000.0, 0.05))));
+            expect(pk <= 0.9f && mx > 0.05 && mx < 0.4, f.part.name,
+                   f.part.name + ": previa sem clipar e com volume na faixa do banco (pico " + std::to_string(pk).substr(0, 4) + ", RMS max " +
+                       std::to_string(mx).substr(0, 5) + ")");
+        }
     std::printf("\n== %d ok, %d falharam\n", g_pass, g_fail);
     return g_fail;
 }

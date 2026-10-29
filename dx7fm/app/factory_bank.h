@@ -1,41 +1,18 @@
 #pragma once
-#include "dx7_alloc.h"
-#include "dx7_algorithms.h"
-#include "dx7_wavegen.h"
-#include "additive_presets.h"
-#include <algorithm>
-#include <cmath>
-#include <string>
-#include <vector>
+#include "factory_preset.h"
+#include "factory_dx.h"
+#include "factory_sy.h"
+#include "factory_originals.h"
 
 // [ADICIONADO em 2026-10-28] Banco de fabrica: os patches de demonstracao,
 // montados em codigo (sem arquivos). Usado pelo app (banco "Fabrica" no
 // navegador de patches), por tools/presets/gen_presets (grava .json + previas
 // .wav), tools/presets/patch_tests (testes de comportamento) e tools/golden.
 // Mudar um patch daqui muda o golden dos cenarios de fabrica.
+// Familias: os 12 de demonstracao (aqui), Estilo DX7 (factory_dx.h),
+// Estilo SY77 (factory_sy.h) e Originais (factory_originals.h).
 namespace dx7fm_app::factory {
 using namespace dx7fm;
-
-inline void eg(EGParams& e, std::initializer_list<int> r, std::initializer_list<int> l) {
-    int i = 0;
-    for (int v : r) e.rate[i++] = static_cast<uint8_t>(v);
-    i = 0;
-    for (int v : l) e.level[i++] = static_cast<uint8_t>(v);
-}
-inline void silenceAll(VoiceParams& v) { // comeca do zero: nenhum operador soando nem modulando
-    v.matrix = AlgorithmMatrix{};
-    for (auto& op : v.op) { op = OperatorParams{}; op.outputLevel = 0; }
-}
-
-struct FactoryPreset {
-    PartParams part;
-    std::string category, description;
-    std::vector<int> notes; // o que tocar na previa
-    double seconds = 3.0;
-    double holdSec = 2.2;   // solta as notas aqui
-    float bpm = 120.0f;
-    float modWheel = -1.0f;
-};
 
 inline std::vector<FactoryPreset> factoryBank() {
     std::vector<FactoryPreset> out;
@@ -77,7 +54,7 @@ inline std::vector<FactoryPreset> factoryBank() {
         out.push_back(p);
     }
     { // 4. Pad: duas wavetables (serra -> pulso, morph espectral) movidas por um LFO global lento; unison
-        FactoryPreset p; auto& v = p.part.voice; silenceAll(v); p.part.name = "Pad Wavetable"; p.category = "Pad"; p.description = "2 wavetables serra/seno com morph espectral num LFO global sincronizado; unison";
+        FactoryPreset p; auto& v = p.part.voice; silenceAll(v); p.part.name = "Pad Wavetable"; p.category = "Pad"; p.description = "2 wavetables serra/seno com morph espectral num LFO global sincronizado; unison"; v.volumeDb = -5.0f; // o acorde com unison soma alto
         v.matrix.outputMix[0] = 1.0f; v.matrix.outputMix[1] = 1.0f;
         auto saw = wavegen::share(wavegen::fromShape(Waveform::Saw)), pulse = wavegen::share(wavegen::fromShape(Waveform::Sine));
         for (int i = 0; i < 2; ++i) {
@@ -106,7 +83,7 @@ inline std::vector<FactoryPreset> factoryBank() {
         out.push_back(p);
     }
     { // 6. Morph de algoritmos: 4 pares -> 2 cadeias de 4 -> 8 em serie, varrido por um envelope em loop no tempo
-        FactoryPreset p; auto& v = p.part.voice; silenceAll(v); p.part.name = "Algoritmos em Movimento"; p.category = "Movimento"; p.description = "morph entre 3 algoritmos varrido por envelope em loop no tempo"; p.part.level = 0.7f; // o slot com 4 portadoras soma alto
+        FactoryPreset p; auto& v = p.part.voice; silenceAll(v); p.part.name = "Algoritmos em Movimento"; p.category = "Movimento"; p.description = "morph entre 3 algoritmos varrido por envelope em loop no tempo"; v.volumeDb = -3.1f; // o slot com 4 portadoras soma alto (antes part.level 0.7, que nao vai junto ao carregar)
         applyAlgorithmToMatrix(v.algo(0), 15);
         applyAlgorithmToMatrix(v.algo(1), 5);
         applyAlgorithmToMatrix(v.algo(2), 1);
@@ -205,6 +182,9 @@ inline std::vector<FactoryPreset> factoryBank() {
         p.notes = {45}; p.seconds = 1.5; p.holdSec = 0.3;
         out.push_back(p);
     }
+    addDxPresets(out);
+    addSyPresets(out);
+    addOriginalPresets(out);
     return out;
 }
 

@@ -729,6 +729,7 @@ inline JsonValue voiceParamsToJson(const VoiceParams& v) {
     }
     j.set("macros", std::move(macros));
     // [2026-10-24] morph entre algoritmos: slots 2..numAlgos (o 1 e "matrix")
+    if (v.volumeDb != 0.0f) j.set("volumeDb", JsonValue::makeNumber(v.volumeDb)); // [2026-10-29] ausente = 0 dB
     if (v.activeAlgos() > 1) {
         JsonValue slots = JsonValue::makeArray();
         for (int k = 1; k < v.activeAlgos(); ++k) slots.push(algorithmMatrixToJson(v.algo(k)));
@@ -783,6 +784,7 @@ inline VoiceParams voiceParamsFromJson(const JsonValue& j) {
             v.macro[k] = clampCast<float>(m.numberAt("value", 0.0));
             v.macroName[k] = m.stringAt("name", v.macroName[k]).substr(0, 24);
         }
+    v.volumeDb = clampCast<float>(j.numberAt("volumeDb", 0.0));
     if (auto* slots = j.find("algorithms")) { // ausente (patch antigo) = 1 algoritmo, sem morph
         int n = std::min<int>(static_cast<int>(slots->arraySize()), kMaxAlgoSlots - 1);
         for (int k = 0; k < n; ++k) v.algoSlot[k] = algorithmMatrixFromJson(&slots->at(static_cast<size_t>(k)));

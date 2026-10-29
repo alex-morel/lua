@@ -271,6 +271,10 @@ struct VoiceParams {
     uint8_t numAlgos = 1; // 1 = sem morph (como antes)
     float algoMorph = 0.0f;
     bool algoStep = false;
+    // [ADICIONADO em 2026-10-29] volume do PATCH (dB, -30..+12), salvo com o
+    // som -- diferente do nivel da parte (mix), que fica quando se troca de
+    // patch. Deixa patches com muitas portadoras no mesmo volume dos outros.
+    float volumeDb = 0.0f;
 
     AlgorithmMatrix& algo(int s) { return s == 0 ? matrix : algoSlot[s - 1]; }
     const AlgorithmMatrix& algo(int s) const { return s == 0 ? matrix : algoSlot[s - 1]; }
@@ -570,6 +574,7 @@ inline void sanitize(VoiceParams& v) {
     v.arp.swing = sanF(v.arp.swing, 0.0f, 0.75f, 0.0f);
     v.numAlgos = static_cast<uint8_t>(std::clamp<int>(v.numAlgos, 1, kMaxAlgoSlots));
     v.algoMorph = sanF(v.algoMorph, 0.0f, 1.0f, 0.0f);
+    v.volumeDb = sanF(v.volumeDb, -30.0f, 12.0f, 0.0f);
     for (int s = 0; s < kMaxAlgoSlots; ++s) {
         auto& m = v.algo(s);
         for (int i = 0; i < kNumOps; ++i) {

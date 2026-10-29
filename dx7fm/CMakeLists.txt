@@ -16,7 +16,7 @@ target_include_directories(demo PRIVATE src) # demo.cpp inclui app/event_queue.h
 target_link_libraries(demo PRIVATE Threads::Threads)
 
 # --- patches de demonstracao: gerador + testes de comportamento ------------
-foreach(tool gen_presets patch_tests golden)
+foreach(tool gen_presets patch_tests audition golden)
     if(tool STREQUAL golden)
         add_executable(${tool} tools/golden/${tool}.cpp)
     else()
@@ -65,6 +65,16 @@ if(SDL2_FOUND AND ALSA_FOUND)
     target_compile_definitions(dx7fm_standalone PRIVATE DX7FM_FONT_DIR="${IMGUI_DIR}/misc/fonts")
     target_link_directories(dx7fm_standalone PRIVATE ${SDL2_LIBRARY_DIRS} ${ALSA_LIBRARY_DIRS})
     target_link_libraries(dx7fm_standalone PRIVATE ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} Threads::Threads)
+
+    # [2026-10-29] screenshot da UI sem tela (tools/ui_shot.cpp inclui app/main.cpp)
+    add_executable(ui_shot tools/ui_shot.cpp
+        ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp)
+    target_include_directories(ui_shot PRIVATE src app ${IMGUI_DIR} ${IMGUI_DIR}/backends ${SDL2_INCLUDE_DIRS} ${ALSA_INCLUDE_DIRS})
+    target_compile_options(ui_shot PRIVATE ${SDL2_CFLAGS_OTHER})
+    target_compile_definitions(ui_shot PRIVATE DX7FM_FONT_DIR="${IMGUI_DIR}/misc/fonts")
+    target_link_directories(ui_shot PRIVATE ${SDL2_LIBRARY_DIRS} ${ALSA_LIBRARY_DIRS})
+    target_link_libraries(ui_shot PRIVATE ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} Threads::Threads)
 else()
     message(WARNING "SDL2 e/ou ALSA nao encontrados via pkg-config -- pulando o target dx7fm_standalone (o target 'demo' ainda compila normalmente).")
 endif()

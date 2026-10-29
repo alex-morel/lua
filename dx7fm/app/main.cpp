@@ -23,6 +23,7 @@
 #include "midi_clock.h"
 #include "mpe.h"
 #include "patch_mutate.h"
+#include "factory_bank.h"
 #include <chrono>
 #include "viz.h"
 #include "patch_browser.h"
@@ -113,6 +114,10 @@ struct AppState {
     // tambem muda) por mpeOn/mpeMembers/mpeBend
     dx7fm_app::MpeInput mpe;
     float mutateAmount = 0.2f; // [2026-10-28] botao Mutar (so UI)
+    // [2026-10-29] banco de fabrica (montado 1x na partida) e o estado do dialogo
+    std::vector<dx7fm_app::factory::FactoryPreset> factory;
+    int factorySelected = -1, factoryFamily = 0, factoryCategory = 0;
+    char factoryFilter[64] = "";
     std::atomic<bool> mpeDirty{false}, mpeWantOn{false};
     std::atomic<float> mpeWantBend{48.0f};
     std::atomic<bool> mpeOn{false};
@@ -1434,6 +1439,92 @@ void DrawDx7Import(AppState& app, int part) {
     ImGui::EndPopup();
 }
 
+// [2026-10-29] Banco de fabrica: clicar carrega na parte (um passo de desfazer)
+void loadFactoryPreset(AppState& app, int part, int index) {
+    const auto& f = app.factory[static_cast<size_t>(index)];
+    historyCommit(app, part);
+    copyPatchKeepingRouting(app.synth.part(part), f.part);
+    publishPart(app, part);
+    sendPatchMacros(app, part);
+    historyCommit(app, part);
+    auto& ui = app.patchUi[part];
+    std::snprintf(ui.name, sizeof(ui.name), "%s", f.part.name.c_str());
+    ui.currentFile.clear();
+    ui.dirty = patchFingerprint(app.synth.part(part)) != ui.baseline;
+    setPatchStatus(ui, true, "Fabrica: " + f.part.name + " (Salvar grava uma copia em patches/)");
+    app.factorySelected = index;
+}
+
+void DrawFactoryBank(AppState& app, int part) {
+    if (ImGui::SmallButton("Fabrica")) ImGui::OpenPopup("Banco de fabrica");
+    ImGui::SetItemTooltip("%zu patches prontos: demonstracao, estilo DX7, estilo SY77 e originais", app.factory.size());
+    ImGui::SetNextWindowSize(ImVec2(820, 470), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Banco de fabrica", nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
+    static const char* kFamilies[] = {"Todas", "Demonstracao", "Estilo DX7", "Estilo SY77", "Originais"};
+    std::vector<std::string> cats = {"Todas"};
+    for (const auto& f : app.factory)
+        if (std::find(cats.begin(), cats.end(), f.category) == cats.end()) cats.push_back(f.category);
+    std::sort(cats.begin() + 1, cats.end());
+    app.factoryCategory = std::clamp(app.factoryCategory, 0, static_cast<int>(cats.size()) - 1);
+    ImGui::SetNextItemWidth(140);
+    ImGui::Combo("Familia", &app.factoryFamily, kFamilies, IM_ARRAYSIZE(kFamilies));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(130);
+    if (ImGui::BeginCombo("Categoria", cats[static_cast<size_t>(app.factoryCategory)].c_str())) {
+        for (int i = 0; i < static_cast<int>(cats.size()); ++i)
+            if (ImGui::Selectable(cats[static_cast<size_t>(i)].c_str(), i == app.factoryCategory)) app.factoryCategory = i;
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputTextWithHint("##fbusca", "buscar no nome ou na descricao...", app.factoryFilter, sizeof app.factoryFilter);
+
+    ImGui::BeginChild("##flist", ImVec2(330, -ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_Borders);
+    int shown = 0;
+    for (int i = 0; i < static_cast<int>(app.factory.size()); ++i) {
+        const auto& f = app.factory[static_cast<size_t>(i)];
+        if (app.factoryFamily > 0 && f.family != kFamilies[app.factoryFamily]) continue;
+        if (app.factoryCategory > 0 && f.category != cats[static_cast<size_t>(app.factoryCategory)]) continue;
+        if (app.factoryFilter[0] && !containsCaseInsensitive(f.part.name, app.factoryFilter) &&
+            !containsCaseInsensitive(f.description, app.factoryFilter))
+            continue;
+        ++shown;
+        char lbl[160];
+        std::snprintf(lbl, sizeof lbl, "%s##f%d", f.part.name.c_str(), i);
+        if (ImGui::Selectable(lbl, app.factorySelected == i)) loadFactoryPreset(app, part, i);
+        ImGui::SameLine(230);
+        ImGui::TextDisabled("%s", f.category.c_str());
+    }
+    if (shown == 0) ImGui::TextDisabled("nenhum patch com esse filtro");
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    if (app.factorySelected >= 0) {
+        const auto& f = app.factory[static_cast<size_t>(app.factorySelected)];
+        ImGui::PushStyleColor(ImGuiCol_Text, ui::col::kAccent);
+        ImGui::TextUnformatted(f.part.name.c_str());
+        ImGui::PopStyleColor();
+        ImGui::TextDisabled("%s  /  %s", f.family.c_str(), f.category.c_str());
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440);
+        ImGui::TextUnformatted(f.description.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+        ImGui::TextDisabled("Carregado nesta parte: toque pra ouvir. Ctrl+Z volta ao som\nanterior; Salvar grava uma copia editavel em patches/.");
+    } else {
+        ImGui::TextDisabled("Clique num patch pra carregar nesta parte e ouvir.\n"
+                            "Da pra ir trocando enquanto toca; Ctrl+Z volta ao som anterior.\n\n"
+                            "Familias:\n"
+                            "  Demonstracao  - um recurso do dx7fm por patch\n"
+                            "  Estilo DX7    - programados em parametros do DX7 (algoritmos originais)\n"
+                            "  Estilo SY77   - ondas AFM, filtros, camadas de ataque + sustain\n"
+                            "  Originais     - MPE, LFO sincronizado, ring mod, shifter, crusher, lacos...");
+    }
+    ImGui::EndGroup();
+    if (ImGui::Button("Fechar") || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
 // [2026-10-28] Mutar: variacao aleatoria do som atual (um passo de desfazer)
 void mutatePart(AppState& app, int part) {
     historyCommit(app, part);
@@ -1474,7 +1565,9 @@ void DrawPatchSection(AppState& app, int part) {
         ImGui::SetItemTooltip("Compara duas versoes do som: o outro lado guarda o som e o historico dele");
         ImGui::SameLine();
         if (ImGui::SmallButton(ab.side == 0 ? "Copiar A -> B" : "Copiar B -> A")) copyToOtherSide(app, part);
-        ImGui::SameLine(0, 18);
+        // segunda linha: de onde vem o som (fabrica, DX7) e variacoes dele
+        DrawFactoryBank(app, part);
+        ImGui::SameLine();
         DrawDx7Import(app, part);
         ImGui::SameLine(0, 18);
         if (ImGui::SmallButton("Mutar")) mutatePart(app, part);
@@ -1504,6 +1597,15 @@ void DrawPatchSection(AppState& app, int part) {
         else doInitPatch(app, part);
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Volta o som desta parte pro patch inicial (Init)");
+    ImGui::SameLine(0, 18);
+    ImGui::SetNextItemWidth(110);
+    if (ImGui::SliderFloat("Volume##patch", &pp.voice.volumeDb, -30.0f, 12.0f, "%+.1f dB")) { // [2026-10-29]
+        publishPart(app, part);
+        ui.dirty = patchFingerprint(pp) != ui.baseline;
+        app.hist[part].pending = true;
+    }
+    ImGui::SetItemTooltip("Volume do patch: vai junto com o som (o nivel da parte e do mix e fica ao trocar de patch).\n"
+                          "Ctrl+clique pra digitar.");
     if (ui.dirty) ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "* alteracoes nao salvas");
     else if (!ui.currentFile.empty()) ImGui::TextDisabled("salvo (%s)", ui.currentFile.filename().string().c_str());
     else ImGui::TextDisabled("nao salvo em arquivo");
@@ -2330,6 +2432,36 @@ void DrawMainUi(AppState& app, int forceTab = -1) {
 
 } // namespace
 
+// [2026-10-29] Estado inicial do app (configuracoes, banco de fabrica, synth,
+// partes). Separado do main() pra tools/ui_shot.cpp montar o mesmo estado.
+void initAppState(AppState& app) {
+    app.settings = dx7fm_app::loadSettings();
+    app.mpeWantOn.store(app.settings.mpe);
+    app.mpeWantBend.store(app.settings.mpeBendRange);
+    app.mpeOn.store(app.settings.mpe);
+    app.mpeBend.store(app.settings.mpeBendRange);
+    app.mpeDirty.store(true);
+    rebuildCcTable(app);
+    app.tuningBrowser.exts = {".scl", ".kbm"};
+    app.dx7Browser.exts = {".syx"};
+    app.factory = dx7fm_app::factory::factoryBank();
+    app.synth.init(kSampleRate, kMaxVoices, app.settings.oversample);
+    app.synth.setWorkerThreads(audioWorkerThreads());
+    // Por padrao so a parte A toca; B-D comecam desligadas (senao cada nota,
+    // MIDI ou do teclado do PC, dispararia 4 camadas empilhadas -- todas em
+    // omni). Liga-las e so marcar "Habilitada" na aba de cada uma.
+    for (int p = 0; p < kNumParts; ++p) { // afinacoes salvas (settings.json) de volta nas partes
+        if (!app.settings.sclPath[p].empty()) loadTuningFile(app, p, app.settings.sclPath[p]);
+        if (!app.settings.kbmPath[p].empty()) loadTuningFile(app, p, app.settings.kbmPath[p]);
+    }
+    for (int p = 0; p < kNumParts; ++p) {
+        app.synth.part(p).enabled = (p == 0);
+        app.synth.recompile(p);
+        syncRoutingCache(app, p);
+        initPatchUi(app, p);
+    }
+}
+
 int main(int, char**) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
         std::fprintf(stderr, "SDL_Init falhou: %s\n", SDL_GetError());
@@ -2359,31 +2491,7 @@ int main(int, char**) {
     ImGui_ImplSDLRenderer2_Init(renderer);
 
     AppState app;
-
-    app.settings = dx7fm_app::loadSettings();
-    app.mpeWantOn.store(app.settings.mpe);
-    app.mpeWantBend.store(app.settings.mpeBendRange);
-    app.mpeOn.store(app.settings.mpe);
-    app.mpeBend.store(app.settings.mpeBendRange);
-    app.mpeDirty.store(true);
-    rebuildCcTable(app);
-    app.tuningBrowser.exts = {".scl", ".kbm"};
-    app.dx7Browser.exts = {".syx"};
-    app.synth.init(kSampleRate, kMaxVoices, app.settings.oversample);
-    app.synth.setWorkerThreads(audioWorkerThreads());
-    // Por padrao so a parte A toca; B-D comecam desligadas (senao cada nota,
-    // MIDI ou do teclado do PC, dispararia 4 camadas empilhadas -- todas em
-    // omni). Liga-las e so marcar "Habilitada" na aba de cada uma.
-    for (int p = 0; p < kNumParts; ++p) { // afinacoes salvas (settings.json) de volta nas partes
-        if (!app.settings.sclPath[p].empty()) loadTuningFile(app, p, app.settings.sclPath[p]);
-        if (!app.settings.kbmPath[p].empty()) loadTuningFile(app, p, app.settings.kbmPath[p]);
-    }
-    for (int p = 0; p < kNumParts; ++p) {
-        app.synth.part(p).enabled = (p == 0);
-        app.synth.recompile(p);
-        syncRoutingCache(app, p);
-        initPatchUi(app, p);
-    }
+    initAppState(app);
 
     app.render = [&app](float* buf, int frames) { audioRenderCallback(app, buf, frames); };
     auto& render = app.render;
