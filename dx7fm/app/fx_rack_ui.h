@@ -127,6 +127,67 @@ inline void GainReductionMeter(float grDb, float width) {
     ImGui::PopStyleColor();
 }
 
+// diagrama de um algoritmo de roteamento, desenhado da propria tabela
+// (kFxAlgorithms): envios -> blocos de 2 pedais -> saida
+inline void AlgorithmDiagram(const FxRackParams& r, int a, ImVec2 size) {
+    const FxAlgorithm& alg = kFxAlgorithms[a];
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(size);
+    dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), ui::col::kKnobBody, 4.0f);
+    const float w = size.x, h = size.y;
+    const float bw = w * 0.2f, bh = h * 0.28f;
+    const float rowY[2] = {p.y + h * 0.28f, p.y + h * 0.72f};
+    const float bx[2] = {p.x + w * 0.22f, p.x + w * 0.52f};
+    const ImVec2 outPt(p.x + w * 0.92f, p.y + h * 0.5f);
+    auto boxL = [&](int b) { return ImVec2(bx[b % 2], rowY[b / 2]); };
+    auto boxR = [&](int b) { return ImVec2(bx[b % 2] + bw, rowY[b / 2]); };
+    const ImU32 line = ui::col::kTextDim, act = ui::col::kAccent;
+    auto wire = [&](ImVec2 a, ImVec2 b, ImU32 c) {
+        const float dx = std::max(14.0f, std::fabs(b.x - a.x) * 0.5f);
+        dl->AddBezierCubic(a, ImVec2(a.x + dx, a.y), ImVec2(b.x - dx, b.y), b, c, 1.6f);
+    };
+    // envios (entradas) a esquerda
+    const ImVec2 inPt[2] = {ImVec2(p.x + w * 0.07f, rowY[0]), ImVec2(p.x + w * 0.07f, rowY[1])};
+    for (int k = 0; k < 2; ++k) {
+        dl->AddCircleFilled(inPt[k], 3.0f, line);
+        dl->AddText(ImVec2(inPt[k].x - 4.0f, inPt[k].y - 17.0f), ui::col::kTextDim, k ? "2" : "1");
+    }
+    for (int b = 0; b < kFxBlocks; ++b) {
+        for (int k = 0; k < 2; ++k) {
+            if (!(alg.in[b] & (k ? kFxSrcIn2 : kFxSrcIn1))) continue;
+            if (b % 2 == 0 || b / 2 != k) { wire(inPt[k], boxL(b), line); continue; }
+            // envio direto pro 2o bloco da fileira: contorna o 1o por fora
+            const float y = rowY[k] + (k ? 1.0f : -1.0f) * (bh * 0.5f + 5.0f);
+            const ImVec2 pts[4] = {inPt[k], ImVec2(bx[0] - 6.0f, y), ImVec2(bx[1] - 8.0f, y), boxL(b)};
+            dl->AddPolyline(pts, 4, line, 0, 1.6f);
+        }
+        for (int k = 0; k < b; ++k) {
+            if (!(alg.in[b] & (kFxSrcA << k))) continue;
+            if (k / 2 == b / 2) { wire(boxR(k), boxL(b), act); continue; }
+            // entre fileiras: de baixo da caixa de cima pro topo da de baixo
+            const ImVec2 a0(bx[k % 2] + bw * 0.5f, rowY[k / 2] + bh * 0.5f), a1(bx[b % 2] + bw * 0.5f, rowY[b / 2] - bh * 0.5f);
+            const float dy = (a1.y - a0.y) * 0.5f;
+            dl->AddBezierCubic(a0, ImVec2(a0.x, a0.y + dy), ImVec2(a1.x, a1.y - dy), a1, act, 1.6f);
+            dl->AddTriangleFilled(ImVec2(a1.x - 3.5f, a1.y - 5.0f), ImVec2(a1.x + 3.5f, a1.y - 5.0f), a1, act);
+        }
+        if (alg.out & (kFxSrcA << b)) wire(boxR(b), outPt, act);
+    }
+    dl->AddCircleFilled(outPt, 4.0f, act);
+    for (int b = 0; b < kFxBlocks; ++b) { // caixas por cima dos fios
+        const int c = b / 2, s0 = (b % 2) * 2;
+        const ImVec2 q0(bx[b % 2], rowY[c] - bh * 0.5f), q1(bx[b % 2] + bw, rowY[c] + bh * 0.5f);
+        bool any = false;
+        for (int s = s0; s < s0 + 2; ++s) any = any || r.chain[c].slot[s].active();
+        dl->AddRectFilled(q0, q1, any ? ui::rgb(44, 60, 66) : ui::col::kCard, 3.0f);
+        dl->AddRect(q0, q1, any ? act : ui::col::kCardBorder, 3.0f);
+        char t[16];
+        std::snprintf(t, sizeof t, "%d.%d-%d", c + 1, s0 + 1, s0 + 2);
+        const ImVec2 ts = ImGui::CalcTextSize(t);
+        dl->AddText(ImVec2((q0.x + q1.x - ts.x) * 0.5f, (q0.y + q1.y - ts.y) * 0.5f), ui::col::kText, t);
+    }
+}
+
 struct DragSlot { int chain, slot; };
 
 inline void DrawPedal(FxRackUi& ui, dx7fm::Synth& synth, int c, int s) {
@@ -263,11 +324,37 @@ inline void DrawRackMixer(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks& 
     ui::EndCard();
 
     if (ui::BeginCard("##fxchains", "CADEIAS")) {
-        int mode = r.serial ? 1 : 0;
-        if (ImGui::RadioButton("Paralelo", &mode, 0)) r.serial = false;
+        // algoritmo de roteamento: combo (cada item mostra o diagrama no tooltip) + diagrama atual
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Algoritmo");
         ImGui::SameLine();
-        if (ImGui::RadioButton("Serie", &mode, 1)) r.serial = true;
-        ImGui::TextDisabled(r.serial ? "partes -> [1] -> [2] -> saida\n(o envio 2 tambem entra na 2)" : "partes -> [1] -> saida\npartes -> [2] -> saida");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        char cur[48];
+        std::snprintf(cur, sizeof cur, "%d. %s", r.algorithm + 1, kFxAlgorithms[r.algorithm].name);
+        if (ImGui::BeginCombo("##fxalgo", cur)) {
+            for (int a = 0; a < kFxNumAlgorithms; ++a) {
+                char lbl[48];
+                std::snprintf(lbl, sizeof lbl, "%d. %s", a + 1, kFxAlgorithms[a].name);
+                if (ImGui::Selectable(lbl, a == r.algorithm)) r.algorithm = static_cast<uint8_t>(a);
+                if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
+                    AlgorithmDiagram(r, a, ImVec2(220, 76));
+                    ImGui::TextUnformatted(kFxAlgorithms[a].description);
+                    ImGui::EndTooltip();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        // setas: anterior/proximo (tocar e ir trocando)
+        if (ImGui::ArrowButton("##algoprev", ImGuiDir_Left)) r.algorithm = static_cast<uint8_t>((r.algorithm + kFxNumAlgorithms - 1) % kFxNumAlgorithms);
+        ImGui::SameLine();
+        if (ImGui::ArrowButton("##algonext", ImGuiDir_Right)) r.algorithm = static_cast<uint8_t>((r.algorithm + 1) % kFxNumAlgorithms);
+        ImGui::SameLine();
+        ImGui::TextDisabled("1 e 2 = envios");
+        AlgorithmDiagram(r, r.algorithm, ImVec2(ImGui::GetContentRegionAvail().x, 80));
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("%s", kFxAlgorithms[r.algorithm].description);
+        ImGui::PopTextWrapPos();
+        ImGui::TextDisabled("Nivel/pan: o que sai da fileira.");
         for (int c = 0; c < kFxChains; ++c) {
             ImGui::PushID(100 + c);
             ImGui::Text("Cadeia %d", c + 1);
@@ -401,7 +488,7 @@ inline void DrawFxRackPanel(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks
             ImGui::Text("CADEIA %d", c + 1);
             ImGui::PopStyleColor();
             ImGui::SameLine();
-            ImGui::TextDisabled(c == 0 ? "o sinal passa da esquerda pra direita" : ui.edit.serial ? "recebe a saida da cadeia 1" : "em paralelo com a cadeia 1");
+            if (c == 0) ImGui::TextDisabled("algoritmo %d: %s", ui.edit.algorithm + 1, kFxAlgorithms[ui.edit.algorithm].name);
             char tid[16];
             std::snprintf(tid, sizeof tid, "##chain%d", c);
             if (ImGui::BeginTable(tid, kFxSlots, ImGuiTableFlags_SizingStretchSame)) {

@@ -10,6 +10,7 @@
 // ja ter este arquivo). Os cenarios "fabrica_*" vem de app/factory_bank.h:
 // mudar um patch de fabrica muda o golden dele, e isso e esperado.
 #include "dx7_alloc.h"
+#include "fx_factory.h"
 #include "factory_bank.h"
 #include <algorithm>
 #include <cctype>
@@ -87,6 +88,20 @@ std::vector<Scenario> scenarios() {
             run(o, s, 375, [](Synth& s, int b) {
                 if (b == 0) s.noteOn(0, 57, 110);
                 if (b == 60) s.noteOff(0, 57);
+            });
+        }});
+    }
+    // [2026-10-30] presets de efeitos de fabrica (cobrem os algoritmos de roteamento)
+    for (const auto& f : dx7fm_app::fxfactory::fxFactoryBank()) {
+        std::string n = "rackpreset_";
+        for (char c : f.name) n += (std::isalnum(static_cast<unsigned char>(c)) ? c : '_');
+        v.push_back({n, [f](std::vector<float>& o) {
+            Synth s; s.init(48000.0, 8);
+            for (int p = 0; p < 2; ++p) { s.part(p).enabled = true; s.recompile(p); }
+            s.setFxRack(f.rack);
+            run(o, s, 375, [](Synth& s, int b) {
+                if (b == 0) { s.noteOn(0, 57, 110); s.noteOn(1, 64, 100); }
+                if (b == 60) { s.noteOff(0, 57); s.noteOff(1, 64); }
             });
         }});
     }

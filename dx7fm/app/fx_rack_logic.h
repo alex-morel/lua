@@ -32,7 +32,7 @@ inline bool slotEqual(const FxSlotParams& a, const FxSlotParams& b) {
 }
 
 inline bool rackEqual(const FxRackParams& a, const FxRackParams& b) {
-    if (a.serial != b.serial) return false;
+    if (a.algorithm != b.algorithm) return false;
     for (int c = 0; c < kFxChains; ++c) {
         if (a.chain[c].level != b.chain[c].level || a.chain[c].pan != b.chain[c].pan) return false;
         for (int s = 0; s < kFxSlots; ++s) if (!slotEqual(a.chain[c].slot[s], b.chain[c].slot[s])) return false;

@@ -344,10 +344,49 @@ struct FxExpression {
     float min = 0.0f, max = 1.0f; // em unidades do parametro
 };
 
+// [2026-10-30] Algoritmos de roteamento (como os do FM, mas de efeitos):
+// cada cadeia vira 2 blocos de 2 pedais -- A = 1.1-1.2, B = 1.3-1.4,
+// C = 2.1-2.2, D = 2.3-2.4 -- e o algoritmo diz de onde cada bloco recebe
+// (envio 1, envio 2, saida de um bloco anterior; somados) e quais blocos vao
+// pra saida. Nivel/pan de uma cadeia valem pro que SAI da fileira dela (pra
+// saida ou pra outra fileira); A -> B e C -> D (o vizinho na fileira) passam
+// direto. Novos algoritmos SEMPRE no fim (o id vai no JSON).
+enum : uint8_t { kFxSrcIn1 = 1, kFxSrcIn2 = 2, kFxSrcA = 4, kFxSrcB = 8, kFxSrcC = 16, kFxSrcD = 32 };
+constexpr int kFxBlocks = 4;
+struct FxAlgorithm {
+    const char* id;
+    const char* name;
+    const char* description;
+    uint8_t in[kFxBlocks]; // fontes de A, B, C, D (so blocos anteriores)
+    uint8_t out;           // blocos que vao pra saida (kFxSrcA..D)
+};
+inline const FxAlgorithm kFxAlgorithms[] = {
+    {"Parallel", "Paralelo", "cadeia 1 e cadeia 2 lado a lado",
+     {kFxSrcIn1, kFxSrcA, kFxSrcIn2, kFxSrcC}, kFxSrcB | kFxSrcD},
+    {"Serial", "Serie", "cadeia 1 -> cadeia 2 (8 pedais em fila); o envio 2 entra na cadeia 2",
+     {kFxSrcIn1, kFxSrcA, kFxSrcIn2 | kFxSrcB, kFxSrcC}, kFxSrcD},
+    {"SerialDirect", "Serie + direto", "a cadeia 1 sai E alimenta a 2 (ex.: drive na 1, reverb 100% molhado na 2)",
+     {kFxSrcIn1, kFxSrcA, kFxSrcIn2 | kFxSrcB, kFxSrcC}, kFxSrcB | kFxSrcD},
+    {"SplitMerge", "Divide e junta", "1.1-1.2 -> divide em (1.3-1.4 | 2.1-2.2) -> junta em 2.3-2.4",
+     {kFxSrcIn1, kFxSrcA, kFxSrcIn2 | kFxSrcA, kFxSrcB | kFxSrcC}, kFxSrcD},
+    {"CommonPre", "Pre comum", "cadeia 1 inteira -> divide em 2.1-2.2 | 2.3-2.4",
+     {kFxSrcIn1, kFxSrcA, kFxSrcIn2 | kFxSrcB, kFxSrcIn2 | kFxSrcB}, kFxSrcC | kFxSrcD},
+    {"CommonPost", "Pos comum", "cadeia 1 | 2.1-2.2 -> juntam em 2.3-2.4 (ex.: um reverb final pra tudo)",
+     {kFxSrcIn1, kFxSrcA, kFxSrcIn2, kFxSrcB | kFxSrcC}, kFxSrcD},
+    {"FourBranches", "Quatro ramos", "4 pares de pedais em paralelo (envio 1 -> 1.x, envio 2 -> 2.x)",
+     {kFxSrcIn1, kFxSrcIn1, kFxSrcIn2, kFxSrcIn2}, kFxSrcA | kFxSrcB | kFxSrcC | kFxSrcD},
+};
+constexpr int kFxNumAlgorithms = static_cast<int>(sizeof(kFxAlgorithms) / sizeof(kFxAlgorithms[0]));
+enum FxAlgo : uint8_t { kFxAlgoParallel = 0, kFxAlgoSerial = 1 };
+inline int fxAlgorithmFromId(const std::string& id) {
+    for (int a = 0; a < kFxNumAlgorithms; ++a) if (id == kFxAlgorithms[a].id) return a;
+    return -1;
+}
+
 struct FxRackParams {
     FxChainParams chain[kFxChains];
     FxExpression expr;
-    bool serial = false;       // true: cadeia 1 -> cadeia 2 (so a 2 sai)
+    uint8_t algorithm = kFxAlgoParallel; // kFxAlgorithms (antes: bool serial)
     // por parte (A-D): nivel seco direto pra saida e envios pras cadeias.
     // Padrao: tudo entra na cadeia 1 (o rack vazio e identidade, como os
     // efeitos globais de antes).
@@ -372,6 +411,7 @@ inline void sanitize(FxRackParams& r) {
             }
         }
     }
+    if (r.algorithm >= kFxNumAlgorithms) r.algorithm = kFxAlgoParallel;
     // pedal de expressao: alvo valido, parametro existente e nao "rebuild"
     auto& e = r.expr;
     if (e.chain < 0 || e.chain >= kFxChains || e.slot < 0 || e.slot >= kFxSlots) e.chain = -1;
@@ -883,21 +923,49 @@ public:
     // (n amostras, n <= kMaxBlock). Saida em L/R. Chamar depois de beginBlock().
     void process(float* L, float* R, float* in1L, float* in1R, float* in2L, float* in2R, int n, const FxContext& ctx) {
         const FxRackParams& p = *cur_;
-        runChain(0, p.chain[0], in1L, in1R, n, ctx);
-        if (p.serial) {
-            for (int i = 0; i < n; ++i) { in2L[i] += in1L[i]; in2R[i] += in1R[i]; }
-        } else {
-            for (int i = 0; i < n; ++i) { L[i] += in1L[i]; R[i] += in1R[i]; }
+        const FxAlgorithm& alg = kFxAlgorithms[p.algorithm < kFxNumAlgorithms ? p.algorithm : 0];
+        float peak[kFxChains] = {0.0f, 0.0f};
+        for (int b = 0; b < kFxBlocks; ++b) {
+            const int c = b / 2;               // fileira (cadeia)
+            float* bl = blkL_[b];
+            float* br = blkR_[b];
+            // entrada: soma das fontes, na ordem in1, in2, A, B, C (a mesma
+            // ordem de soma de antes: Paralelo/Serie ficam bit a bit iguais)
+            bool first = true;
+            auto add = [&](const float* xl, const float* xr) {
+                if (first) { std::memcpy(bl, xl, sizeof(float) * static_cast<size_t>(n)); std::memcpy(br, xr, sizeof(float) * static_cast<size_t>(n)); first = false; }
+                else for (int i = 0; i < n; ++i) { bl[i] += xl[i]; br[i] += xr[i]; }
+            };
+            const uint8_t src = alg.in[b];
+            if (src & kFxSrcIn1) add(in1L, in1R);
+            if (src & kFxSrcIn2) add(in2L, in2R);
+            for (int k = 0; k < b; ++k) {
+                if (!(src & (kFxSrcA << k))) continue;
+                const bool neighbour = k + 1 == b && k / 2 == c; // A -> B, C -> D: direto
+                if (neighbour) add(blkL_[k], blkR_[k]);
+                else add(outL_[k], outR_[k]);
+            }
+            if (first) { std::fill(bl, bl + n, 0.0f); std::fill(br, br + n, 0.0f); }
+            runSlots(c, (b % 2) * 2, (b % 2) * 2 + 2, p.chain[c], bl, br, n, ctx);
+            // o que sai da fileira: com nivel/pan da cadeia
+            const FxChainParams& ch = p.chain[c];
+            const float gl = ch.level * std::min(1.0f, 1.0f - ch.pan), gr = ch.level * std::min(1.0f, 1.0f + ch.pan);
+            if (gl == 1.0f && gr == 1.0f) {
+                std::memcpy(outL_[b], bl, sizeof(float) * static_cast<size_t>(n));
+                std::memcpy(outR_[b], br, sizeof(float) * static_cast<size_t>(n));
+            } else {
+                for (int i = 0; i < n; ++i) { outL_[b][i] = bl[i] * gl; outR_[b][i] = br[i] * gr; }
+            }
+            bool leaves = (alg.out & (kFxSrcA << b)) != 0;
+            for (int k = b + 1; k < kFxBlocks; ++k)
+                if ((alg.in[k] & (kFxSrcA << b)) && !(k == b + 1 && k / 2 == c)) leaves = true;
+            if (leaves)
+                for (int i = 0; i < n; ++i) peak[c] = std::max({peak[c], std::fabs(outL_[b][i]), std::fabs(outR_[b][i])});
         }
-        runChain(1, p.chain[1], in2L, in2R, n, ctx);
-        for (int i = 0; i < n; ++i) { L[i] += in2L[i]; R[i] += in2R[i]; }
-        for (int c = 0; c < kFxChains; ++c) {
-            float pk = 0.0f;
-            const float* xl = c == 0 ? in1L : in2L;
-            const float* xr = c == 0 ? in1R : in2R;
-            for (int i = 0; i < n; ++i) pk = std::max({pk, std::fabs(xl[i]), std::fabs(xr[i])});
-            chainPeak_[c].store(pk, std::memory_order_relaxed);
-        }
+        for (int b = 0; b < kFxBlocks; ++b)
+            if (alg.out & (kFxSrcA << b))
+                for (int i = 0; i < n; ++i) { L[i] += outL_[b][i]; R[i] += outR_[b][i]; }
+        for (int c = 0; c < kFxChains; ++c) chainPeak_[c].store(peak[c], std::memory_order_relaxed);
         blocks_.fetch_add(1, std::memory_order_acq_rel);
     }
 
@@ -912,9 +980,10 @@ public:
     float slotMeter(int c, int s) const { return slotMeter_[c][s].load(std::memory_order_relaxed); }
 
 private:
-    void runChain(int c, const FxChainParams& ch, float* L, float* R, int n, const FxContext& ctx) {
+    // roda os slots [s0, s1) da cadeia c no lugar (sem nivel/pan)
+    void runSlots(int c, int s0, int s1, const FxChainParams& ch, float* L, float* R, int n, const FxContext& ctx) {
         const FxExpression& ex = cur_->expr;
-        for (int s = 0; s < kFxSlots; ++s) {
+        for (int s = s0; s < s1; ++s) {
             FxSlotParams exprSlot;
             const FxSlotParams* spp = &ch.slot[s];
             if (ex.chain == c && ex.slot == s && expression_ >= 0.0f) { // pedal: o parametro alvo segue o pedal
@@ -940,15 +1009,11 @@ private:
             }
             slotMeter_[c][s].store(proc->meter(), std::memory_order_relaxed);
         }
-        if (ch.level != 1.0f || ch.pan != 0.0f) { // balanco: o lado oposto ao pan cai, o outro fica
-            const float gl = ch.level * std::min(1.0f, 1.0f - ch.pan), gr = ch.level * std::min(1.0f, 1.0f + ch.pan);
-            for (int i = 0; i < n; ++i) { L[i] *= gl; R[i] *= gr; }
-        }
         for (int i = 0; i < n; ++i) { // rede de seguranca: um NaN nao pode travar a saida
             if (!std::isfinite(L[i]) || !std::isfinite(R[i])) {
                 std::fill(L, L + n, 0.0f);
                 std::fill(R, R + n, 0.0f);
-                for (int s = 0; s < kFxSlots; ++s) wasOn_[c][s] = false;
+                for (int s = s0; s < s1; ++s) wasOn_[c][s] = false;
                 break;
             }
         }
@@ -984,6 +1049,8 @@ private:
     FxProcessor* audioProc_[kFxChains][kFxSlots] = {};
     bool wasOn_[kFxChains][kFxSlots] = {};
     float dryL_[kMaxBlock], dryR_[kMaxBlock];
+    float blkL_[kFxBlocks][kMaxBlock], blkR_[kFxBlocks][kMaxBlock];  // saida crua de cada bloco
+    float outL_[kFxBlocks][kMaxBlock], outR_[kFxBlocks][kMaxBlock];  // com nivel/pan (sai da fileira)
     float expression_ = -1.0f;
     std::atomic<float> chainPeak_[kFxChains] = {};
     std::atomic<float> slotMeter_[kFxChains][kFxSlots] = {};
@@ -997,7 +1064,7 @@ private:
 // -----------------------------------------------------------------------------
 inline FxRackParams fxRackFromLegacy(const GlobalFxParams& g) {
     FxRackParams r;
-    r.serial = true;
+    r.algorithm = kFxAlgoSerial;
     int at = 0;
     auto next = [&]() -> FxSlotParams& { FxSlotParams& s = r.chain[at / kFxSlots].slot[at % kFxSlots]; ++at; return s; };
     for (GlobalFxType t : g.order) {

@@ -4,7 +4,8 @@
 // puxar o DSP do rack.
 //
 // Formato (versao 1):
-//   { "version": 1, "serial": false,
+//   { "version": 1, "algorithm": "Parallel",   (id de kFxAlgorithms; arquivos
+//     antigos com "serial": true viram "Serial")
 //     "parts": [ {"dry": 0, "send1": 1, "send2": 0}, ... x4 ],
 //     "chains": [ {"level": 1, "pan": 0,
 //                  "slots": [ {"kind": "Hall", "on": true, "mix": 0.3,
@@ -25,7 +26,7 @@ namespace dx7fm {
 inline JsonValue fxRackToJson(const FxRackParams& r) {
     JsonValue j = JsonValue::makeObject();
     j.set("version", JsonValue::makeNumber(1));
-    j.set("serial", JsonValue::makeBool(r.serial));
+    j.set("algorithm", JsonValue::makeString(kFxAlgorithms[r.algorithm < kFxNumAlgorithms ? r.algorithm : 0].id));
     JsonValue parts = JsonValue::makeArray();
     for (int p = 0; p < kFxParts; ++p) {
         JsonValue e = JsonValue::makeObject();
@@ -72,7 +73,8 @@ inline JsonValue fxRackToJson(const FxRackParams& r) {
 // Campos ausentes/invalidos ficam no padrao; o resultado ja sai sanitizado.
 inline FxRackParams fxRackFromJson(const JsonValue& j) {
     FxRackParams r;
-    r.serial = j.boolAt("serial", false);
+    const int alg = fxAlgorithmFromId(j.stringAt("algorithm", ""));
+    r.algorithm = static_cast<uint8_t>(alg >= 0 ? alg : j.boolAt("serial", false) ? kFxAlgoSerial : kFxAlgoParallel);
     if (auto* parts = j.find("parts"))
         for (size_t p = 0; p < parts->arraySize() && p < static_cast<size_t>(kFxParts); ++p) {
             const JsonValue& e = parts->at(p);
