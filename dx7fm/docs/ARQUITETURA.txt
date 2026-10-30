@@ -2837,8 +2837,10 @@ ImGui::GetWindowDrawList() + AddLine/AddRectFilled/AddRect/AddText/
 AddTriangleFilled/AddCircle diretamente (API padrao do ImDrawList, sem
 biblioteca de grafo externa).
 
-Selecionar um algoritmo no combo (32 opcoes, "N: nome") + clicar
-"Aplicar algoritmo" chama applyAlgorithm() na copia de STAGING da parte e
+Selecionar um algoritmo DIFERENTE no combo (32 opcoes, "N: nome") ja
+chama applyAlgorithm() [ALTERADO em 2026-10-30: antes havia um botao
+"Aplicar"; com varios algoritmos de morph, applyAlgorithmToMatrix() no
+slot em edicao] na copia de STAGING da parte e
 marca `changed=true` -- assim como qualquer outra edicao na UI, so tem
 efeito apos o recompile() automatico daquele frame (ver secao 13.5).
 

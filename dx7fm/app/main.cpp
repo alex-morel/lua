@@ -1760,19 +1760,27 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
         }
         changed |= DrawAlgoSlots(app, pp.voice);
         const int nAlgo = pp.voice.activeAlgos();
-        ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 80.0f));
-        ImGui::Combo("##algo", &app.selectedAlgo, namePtrs.data(), static_cast<int>(namePtrs.size()));
-        ImGui::SetItemTooltip("Design proprio de 32 algoritmos p/ 8 operadores (nao e a lista oficial do DX7\n"
-                              "nem do Montage) -- ver ARQUITETURA.txt secao 14.");
-        ImGui::SameLine();
-        if (ImGui::Button("Aplicar")) {
-            if (nAlgo == 1) applyAlgorithm(pp.voice, app.selectedAlgo + 1);
-            else applyAlgorithmToMatrix(pp.voice.algo(app.algoSlot), app.selectedAlgo + 1);
-            changed = true;
+        // [2026-10-30] escolher um algoritmo diferente ja aplica (antes havia um botao Aplicar)
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::Combo("##algo", &app.selectedAlgo, namePtrs.data(), static_cast<int>(namePtrs.size()))) {
+            // so vira edicao (e passo de desfazer) se mudar o som: escolher o
+            // algoritmo que o patch ja usa nao faz nada
+            VoiceParams next = pp.voice;
+            if (nAlgo == 1) applyAlgorithm(next, app.selectedAlgo + 1);
+            else applyAlgorithmToMatrix(next.algo(app.algoSlot), app.selectedAlgo + 1);
+            if (voiceParamsToJson(next).dump() != voiceParamsToJson(pp.voice).dump()) {
+                pp.voice = next;
+                changed = true;
+            }
         }
-        if (nAlgo == 1) ImGui::SetItemTooltip("Sobrescreve a matriz e o feedback de todos os operadores");
-        else ImGui::SetItemTooltip("Sobrescreve so o algoritmo %d (o feedback do preset vai pra diagonal dele, pra fazer morph junto;\n"
-                                   "o Feedback de cada operador na tabela continua valendo em todos os algoritmos)", app.algoSlot + 1);
+        if (nAlgo == 1)
+            ImGui::SetItemTooltip("Escolher um algoritmo ja troca: sobrescreve a matriz e o feedback de todos os operadores (Ctrl+Z desfaz).\n"
+                                  "Design proprio de 32 algoritmos p/ 8 operadores (nao e a lista oficial do DX7\n"
+                                  "nem do Montage) -- ver ARQUITETURA.txt secao 14.");
+        else
+            ImGui::SetItemTooltip("Escolher um algoritmo ja troca o algoritmo %d (Ctrl+Z desfaz). O feedback do preset vai pra diagonal\n"
+                                  "dele, pra fazer morph junto; o Feedback de cada operador na tabela continua valendo em todos os algoritmos.",
+                                  app.algoSlot + 1);
         if (nAlgo > 1 && app.algoMorphView) {
             // ponto interpolado na posicao do knob (como o motor faz, sem a modulacao)
             const auto& v = pp.voice;
