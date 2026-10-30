@@ -4329,40 +4329,65 @@ static void testFxRackRouting() {
     par.chain[1].slot[0] = eqCut();
     par.send[0][1] = 1.0f;
     ser = par;
-    ser.algorithm = kFxAlgoSerial;
+    ser.link = kFxLinkSerial;
     const float gp = rackGainAt1k(par), gs = rackGainAt1k(ser);
     std::printf("  (1 EQ: %.3f; duas cadeias com EQ, paralelo %.3f (esperado %.3f), serie %.3f (esperado %.3f))\n", g, gp, 2 * g, gs,
                 g * (1 + g));
     check(g < 0.2f && std::fabs(gp - 2 * g) < 0.01f * g && std::fabs(gs - g * (1 + g)) < 0.01f * g,
           "rack: paralelo soma as cadeias; em serie a cadeia 1 entra na 2 (junto com o envio da parte)");
 
-    // [2026-10-30] algoritmos: um EQ (ganho g a 1 kHz) no 1o pedal de cada
-    // bloco, nivel da cadeia 1 = 0.5; o ganho medido bate com o grafo
-    // calculado em escalares (vizinho na fileira passa cru; o que sai da
-    // fileira leva o nivel)
+    // [2026-10-30] algoritmo de cada cadeia: EQs de ganhos diferentes (a
+    // 1 kHz) em cada pedal; o ganho medido bate com o grafo calculado em
+    // escalares (juncoes e saida = media dos ramos). A cadeia 2 (com outro
+    // algoritmo) roda junto em paralelo: cada cadeia segue o PROPRIO algoritmo.
     {
-        bool allOk = true;
-        for (int a = 0; a < kFxNumAlgorithms; ++a) {
-            FxRackParams r;
-            r.algorithm = static_cast<uint8_t>(a);
-            for (int c = 0; c < kFxChains; ++c) { r.chain[c].slot[0] = eqCut(); r.chain[c].slot[2] = eqCut(); }
-            r.chain[0].level = 0.5f;
-            r.send[0][1] = 1.0f;
-            const FxAlgorithm& alg = kFxAlgorithms[a];
-            double raw[kFxBlocks] = {}, out[kFxBlocks] = {}, expect = 0.0;
-            for (int b = 0; b < kFxBlocks; ++b) {
-                double in = ((alg.in[b] & kFxSrcIn1) ? 1.0 : 0.0) + ((alg.in[b] & kFxSrcIn2) ? 1.0 : 0.0);
-                for (int k = 0; k < b; ++k)
-                    if (alg.in[b] & (kFxSrcA << k)) in += (k + 1 == b && k / 2 == b / 2) ? raw[k] : out[k];
-                raw[b] = g * in;
-                out[b] = raw[b] * (b < 2 ? 0.5 : 1.0);
-                if (alg.out & (kFxSrcA << b)) expect += out[b];
+        auto eqDb = [](float db) { // so o medio, centrado em 1 kHz (fase 0 no centro)
+            FxSlotParams sp;
+            sp.setKind(FxKind::Eq3);
+            sp.p[2] = 1000.0f; sp.p[3] = db; sp.p[4] = 0.5f;
+            return sp;
+        };
+        const float dbs[kFxSlots] = {-6.0f, -12.0f, -3.0f, -9.0f};
+        std::printf("  (ganho medido de cada EQ: ");
+        float gs[kFxSlots];
+        for (int k = 0; k < kFxSlots; ++k) { FxRackParams o; o.chain[0].slot[0] = eqDb(dbs[k]); gs[k] = rackGainAt1k(o); std::printf("%.3f ", gs[k]); }
+        std::printf(")\n");
+        auto model = [&](int a) {
+            const FxChainAlgorithm& alg = kFxChainAlgorithms[a];
+            double y[kFxSlots] = {}, out = 0.0;
+            int no = 0;
+            for (int s2 = 0; s2 < kFxSlots; ++s2) {
+                double in = 0.0;
+                int cnt = 0;
+                if (alg.in[s2] & kFxSrcIn) { in += 1.0; ++cnt; }
+                for (int k = 0; k < s2; ++k) if (alg.in[s2] & (kFxSrc1 << k)) { in += y[k]; ++cnt; }
+                y[s2] = gs[s2] * (cnt ? in / cnt : 0.0);
+                if (alg.out & (kFxOut1 << s2)) { out += y[s2]; ++no; }
             }
+            return out / no;
+        };
+        bool allOk = true;
+        for (int a = 0; a < kFxNumChainAlgorithms; ++a) {
+            const int b2 = (a + 3) % kFxNumChainAlgorithms; // a cadeia 2 com outro algoritmo
+            FxRackParams r;
+            for (int c = 0; c < kFxChains; ++c)
+                for (int k = 0; k < kFxSlots; ++k) r.chain[c].slot[k] = eqDb(dbs[k]);
+            r.chain[0].algorithm = static_cast<uint8_t>(a);
+            r.chain[1].algorithm = static_cast<uint8_t>(b2);
+            r.send[0][1] = 1.0f;
+            const double expect = model(a) + model(b2);
             const float got = rackGainAt1k(r);
-            std::printf("  (algoritmo %-14s ganho %.4f, esperado %.4f)\n", alg.name, got, expect);
-            if (std::fabs(got - expect) > 0.02 * expect + 1e-4) allOk = false;
+            std::printf("  (cadeia 1 %-16s + cadeia 2 %-16s ganho %.4f, esperado %.4f)\n", kFxChainAlgorithms[a].name, kFxChainAlgorithms[b2].name, got, expect);
+            if (std::fabs(got - expect) > 0.02 * expect) allOk = false;
         }
-        check(allOk, "rack: cada algoritmo de roteamento liga os blocos como a tabela diz (nivel so no que sai da fileira)");
+        check(allOk, "rack: cada cadeia liga os 4 pedais pelo proprio algoritmo (juncoes = media dos ramos)");
+        // ligacao Serie + direto: a 1 sai e alimenta a 2
+        FxRackParams sd;
+        sd.chain[0].slot[0] = eqDb(-6.0f);
+        sd.chain[1].slot[0] = eqDb(-12.0f);
+        sd.link = kFxLinkSerialDirect;
+        const float gsd = rackGainAt1k(sd);
+        check(std::fabs(gsd - (gs[0] + gs[0] * gs[1])) < 0.02f * gsd, "rack: ligacao Serie + direto = cadeia 1 + cadeia 2(cadeia 1)");
     }
 
     FxRackParams dry;
@@ -4779,7 +4804,8 @@ static void testReverbMachines() {
 // desconhecido carrega o resto; lixo nao vira rack.
 static void testFxRackJson() {
     FxRackParams r;
-    r.algorithm = 3; // Divide e junta
+    r.link = kFxLinkSerialDirect;
+    r.chain[1].algorithm = 2; // Divide e junta
     r.dry[2] = 0.7f; r.send[1][1] = 0.4f;
     r.chain[1].level = 1.3f; r.chain[1].pan = -0.25f;
     r.chain[0].slot[0].setKind(FxKind::Hall); r.chain[0].slot[0].p[0] = 3.5f; r.chain[0].slot[0].mix = 0.42f;
@@ -4790,7 +4816,7 @@ static void testFxRackJson() {
     const std::string text = fxRackToString(r);
     FxRackParams b = fxRackFromString(text);
     check(fxRackToString(b) == text, "rack JSON: ida e volta identica");
-    check(b.algorithm == 3 && b.chain[0].slot[2].kind == FxKind::Micro && !b.chain[0].slot[2].on && b.chain[0].slot[2].p[0] == 6.0f,
+    check(b.link == kFxLinkSerialDirect && b.chain[1].algorithm == 2 && b.chain[0].slot[2].kind == FxKind::Micro && !b.chain[0].slot[2].on && b.chain[0].slot[2].p[0] == 6.0f,
           "rack JSON: tipo, on e parametro de escolha voltam");
     check(b.expr.chain == 1 && b.expr.slot == 3 && b.expr.param == 2 && b.expr.max == 0.8f, "rack JSON: pedal de expressao volta");
 

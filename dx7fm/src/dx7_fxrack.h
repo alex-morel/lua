@@ -333,6 +333,7 @@ struct FxChainParams {
     FxSlotParams slot[kFxSlots];
     float level = 1.0f;        // 0..2
     float pan = 0.0f;          // -1..1 (balanco)
+    uint8_t algorithm = 0;     // kFxChainAlgorithms (0 = Serie)
 };
 
 // Pedal de expressao: um parametro de um slot vai de min a max conforme o
@@ -344,49 +345,56 @@ struct FxExpression {
     float min = 0.0f, max = 1.0f; // em unidades do parametro
 };
 
-// [2026-10-30] Algoritmos de roteamento (como os do FM, mas de efeitos):
-// cada cadeia vira 2 blocos de 2 pedais -- A = 1.1-1.2, B = 1.3-1.4,
-// C = 2.1-2.2, D = 2.3-2.4 -- e o algoritmo diz de onde cada bloco recebe
-// (envio 1, envio 2, saida de um bloco anterior; somados) e quais blocos vao
-// pra saida. Nivel/pan de uma cadeia valem pro que SAI da fileira dela (pra
-// saida ou pra outra fileira); A -> B e C -> D (o vizinho na fileira) passam
-// direto. Novos algoritmos SEMPRE no fim (o id vai no JSON).
-enum : uint8_t { kFxSrcIn1 = 1, kFxSrcIn2 = 2, kFxSrcA = 4, kFxSrcB = 8, kFxSrcC = 16, kFxSrcD = 32 };
-constexpr int kFxBlocks = 4;
-struct FxAlgorithm {
+// [2026-10-30] ALGORITMO DE CADA CADEIA (como os do FM, mas de efeitos): como
+// os 4 pedais da cadeia se ligam. Cada pedal recebe a entrada da cadeia e/ou
+// a saida de pedais anteriores; onde ramos se juntam (e na saida da cadeia)
+// o sinal e a MEDIA dos ramos -- como o "merge" das pedaleiras, sem ganho a
+// mais por ter mais ramos. Um pedal vazio/desligado num ramo = ramo seco.
+// Novos algoritmos SEMPRE no fim (o id vai no JSON).
+enum : uint8_t { kFxSrcIn = 1, kFxSrc1 = 2, kFxSrc2 = 4, kFxSrc3 = 8 }; // fontes: entrada, pedal 1..3
+enum : uint8_t { kFxOut1 = 1, kFxOut2 = 2, kFxOut3 = 4, kFxOut4 = 8 };   // pedais que vao pra saida
+struct FxChainAlgorithm {
     const char* id;
     const char* name;
     const char* description;
-    uint8_t in[kFxBlocks]; // fontes de A, B, C, D (so blocos anteriores)
-    uint8_t out;           // blocos que vao pra saida (kFxSrcA..D)
+    uint8_t in[kFxSlots]; // fontes de cada pedal (so pedais anteriores)
+    uint8_t out;
 };
-inline const FxAlgorithm kFxAlgorithms[] = {
-    {"Parallel", "Paralelo", "cadeia 1 e cadeia 2 lado a lado",
-     {kFxSrcIn1, kFxSrcA, kFxSrcIn2, kFxSrcC}, kFxSrcB | kFxSrcD},
-    {"Serial", "Serie", "cadeia 1 -> cadeia 2 (8 pedais em fila); o envio 2 entra na cadeia 2",
-     {kFxSrcIn1, kFxSrcA, kFxSrcIn2 | kFxSrcB, kFxSrcC}, kFxSrcD},
-    {"SerialDirect", "Serie + direto", "a cadeia 1 sai E alimenta a 2 (ex.: drive na 1, reverb 100% molhado na 2)",
-     {kFxSrcIn1, kFxSrcA, kFxSrcIn2 | kFxSrcB, kFxSrcC}, kFxSrcB | kFxSrcD},
-    {"SplitMerge", "Divide e junta", "1.1-1.2 -> divide em (1.3-1.4 | 2.1-2.2) -> junta em 2.3-2.4",
-     {kFxSrcIn1, kFxSrcA, kFxSrcIn2 | kFxSrcA, kFxSrcB | kFxSrcC}, kFxSrcD},
-    {"CommonPre", "Pre comum", "cadeia 1 inteira -> divide em 2.1-2.2 | 2.3-2.4",
-     {kFxSrcIn1, kFxSrcA, kFxSrcIn2 | kFxSrcB, kFxSrcIn2 | kFxSrcB}, kFxSrcC | kFxSrcD},
-    {"CommonPost", "Pos comum", "cadeia 1 | 2.1-2.2 -> juntam em 2.3-2.4 (ex.: um reverb final pra tudo)",
-     {kFxSrcIn1, kFxSrcA, kFxSrcIn2, kFxSrcB | kFxSrcC}, kFxSrcD},
-    {"FourBranches", "Quatro ramos", "4 pares de pedais em paralelo (envio 1 -> 1.x, envio 2 -> 2.x)",
-     {kFxSrcIn1, kFxSrcIn1, kFxSrcIn2, kFxSrcIn2}, kFxSrcA | kFxSrcB | kFxSrcC | kFxSrcD},
+inline const FxChainAlgorithm kFxChainAlgorithms[] = {
+    {"Serial", "Serie", "1 -> 2 -> 3 -> 4", {kFxSrcIn, kFxSrc1, kFxSrc2, kFxSrc3}, kFxOut4},
+    {"TwoPairs", "Dois pares", "(1 -> 2) | (3 -> 4)", {kFxSrcIn, kFxSrc1, kFxSrcIn, kFxSrc3}, kFxOut2 | kFxOut4},
+    {"SplitMerge", "Divide e junta", "1 -> (2 | 3) -> 4", {kFxSrcIn, kFxSrc1, kFxSrc1, kFxSrc2 | kFxSrc3}, kFxOut4},
+    {"PreSplit3", "Pre + 3 ramos", "1 -> (2 | 3 | 4)", {kFxSrcIn, kFxSrc1, kFxSrc1, kFxSrc1}, kFxOut2 | kFxOut3 | kFxOut4},
+    {"Split3Post", "3 ramos + pos", "(1 | 2 | 3) -> 4", {kFxSrcIn, kFxSrcIn, kFxSrcIn, kFxSrc1 | kFxSrc2 | kFxSrc3}, kFxOut4},
+    {"PairSplit", "Par + 2 ramos", "1 -> 2 -> (3 | 4)", {kFxSrcIn, kFxSrc1, kFxSrc2, kFxSrc2}, kFxOut3 | kFxOut4},
+    {"SplitPair", "2 ramos + par", "(1 | 2) -> 3 -> 4", {kFxSrcIn, kFxSrcIn, kFxSrc1 | kFxSrc2, kFxSrc3}, kFxOut4},
+    {"ThreeAndOne", "Tres e um", "(1 -> 2 -> 3) | 4", {kFxSrcIn, kFxSrc1, kFxSrc2, kFxSrcIn}, kFxOut3 | kFxOut4},
+    {"UnevenMerge", "Ramos desiguais", "(1 | 2 -> 3) -> 4", {kFxSrcIn, kFxSrcIn, kFxSrc2, kFxSrc1 | kFxSrc3}, kFxOut4},
+    {"Parallel4", "Quatro paralelos", "1 | 2 | 3 | 4", {kFxSrcIn, kFxSrcIn, kFxSrcIn, kFxSrcIn}, kFxOut1 | kFxOut2 | kFxOut3 | kFxOut4},
 };
-constexpr int kFxNumAlgorithms = static_cast<int>(sizeof(kFxAlgorithms) / sizeof(kFxAlgorithms[0]));
-enum FxAlgo : uint8_t { kFxAlgoParallel = 0, kFxAlgoSerial = 1 };
-inline int fxAlgorithmFromId(const std::string& id) {
-    for (int a = 0; a < kFxNumAlgorithms; ++a) if (id == kFxAlgorithms[a].id) return a;
+constexpr int kFxNumChainAlgorithms = static_cast<int>(sizeof(kFxChainAlgorithms) / sizeof(kFxChainAlgorithms[0]));
+inline int fxChainAlgorithmFromId(const std::string& id) {
+    for (int a = 0; a < kFxNumChainAlgorithms; ++a) if (id == kFxChainAlgorithms[a].id) return a;
+    return -1;
+}
+
+// Ligacao ENTRE as cadeias (o que entra em cada uma sao os envios das partes)
+enum FxLink : uint8_t { kFxLinkParallel = 0, kFxLinkSerial = 1, kFxLinkSerialDirect = 2, kFxNumLinks = 3 };
+struct FxLinkInfo { const char* id; const char* name; const char* description; };
+inline const FxLinkInfo kFxLinks[kFxNumLinks] = {
+    {"Parallel", "Paralelo", "cadeia 1 e cadeia 2 lado a lado"},
+    {"Serial", "Serie", "cadeia 1 -> cadeia 2; so a 2 sai (o envio 2 tambem entra na 2)"},
+    {"SerialDirect", "Serie + direto", "a cadeia 1 sai E alimenta a 2 (ex.: drive na 1, reverb 100% molhado na 2)"},
+};
+inline int fxLinkFromId(const std::string& id) {
+    for (int a = 0; a < kFxNumLinks; ++a) if (id == kFxLinks[a].id) return a;
     return -1;
 }
 
 struct FxRackParams {
     FxChainParams chain[kFxChains];
     FxExpression expr;
-    uint8_t algorithm = kFxAlgoParallel; // kFxAlgorithms (antes: bool serial)
+    uint8_t link = kFxLinkParallel; // FxLink: como as 2 cadeias se ligam (antes: bool serial)
     // por parte (A-D): nivel seco direto pra saida e envios pras cadeias.
     // Padrao: tudo entra na cadeia 1 (o rack vazio e identidade, como os
     // efeitos globais de antes).
@@ -411,7 +419,8 @@ inline void sanitize(FxRackParams& r) {
             }
         }
     }
-    if (r.algorithm >= kFxNumAlgorithms) r.algorithm = kFxAlgoParallel;
+    if (r.link >= kFxNumLinks) r.link = kFxLinkParallel;
+    for (auto& c : r.chain) if (c.algorithm >= kFxNumChainAlgorithms) c.algorithm = 0;
     // pedal de expressao: alvo valido, parametro existente e nao "rebuild"
     auto& e = r.expr;
     if (e.chain < 0 || e.chain >= kFxChains || e.slot < 0 || e.slot >= kFxSlots) e.chain = -1;
@@ -923,49 +932,20 @@ public:
     // (n amostras, n <= kMaxBlock). Saida em L/R. Chamar depois de beginBlock().
     void process(float* L, float* R, float* in1L, float* in1R, float* in2L, float* in2R, int n, const FxContext& ctx) {
         const FxRackParams& p = *cur_;
-        const FxAlgorithm& alg = kFxAlgorithms[p.algorithm < kFxNumAlgorithms ? p.algorithm : 0];
-        float peak[kFxChains] = {0.0f, 0.0f};
-        for (int b = 0; b < kFxBlocks; ++b) {
-            const int c = b / 2;               // fileira (cadeia)
-            float* bl = blkL_[b];
-            float* br = blkR_[b];
-            // entrada: soma das fontes, na ordem in1, in2, A, B, C (a mesma
-            // ordem de soma de antes: Paralelo/Serie ficam bit a bit iguais)
-            bool first = true;
-            auto add = [&](const float* xl, const float* xr) {
-                if (first) { std::memcpy(bl, xl, sizeof(float) * static_cast<size_t>(n)); std::memcpy(br, xr, sizeof(float) * static_cast<size_t>(n)); first = false; }
-                else for (int i = 0; i < n; ++i) { bl[i] += xl[i]; br[i] += xr[i]; }
-            };
-            const uint8_t src = alg.in[b];
-            if (src & kFxSrcIn1) add(in1L, in1R);
-            if (src & kFxSrcIn2) add(in2L, in2R);
-            for (int k = 0; k < b; ++k) {
-                if (!(src & (kFxSrcA << k))) continue;
-                const bool neighbour = k + 1 == b && k / 2 == c; // A -> B, C -> D: direto
-                if (neighbour) add(blkL_[k], blkR_[k]);
-                else add(outL_[k], outR_[k]);
-            }
-            if (first) { std::fill(bl, bl + n, 0.0f); std::fill(br, br + n, 0.0f); }
-            runSlots(c, (b % 2) * 2, (b % 2) * 2 + 2, p.chain[c], bl, br, n, ctx);
-            // o que sai da fileira: com nivel/pan da cadeia
-            const FxChainParams& ch = p.chain[c];
-            const float gl = ch.level * std::min(1.0f, 1.0f - ch.pan), gr = ch.level * std::min(1.0f, 1.0f + ch.pan);
-            if (gl == 1.0f && gr == 1.0f) {
-                std::memcpy(outL_[b], bl, sizeof(float) * static_cast<size_t>(n));
-                std::memcpy(outR_[b], br, sizeof(float) * static_cast<size_t>(n));
-            } else {
-                for (int i = 0; i < n; ++i) { outL_[b][i] = bl[i] * gl; outR_[b][i] = br[i] * gr; }
-            }
-            bool leaves = (alg.out & (kFxSrcA << b)) != 0;
-            for (int k = b + 1; k < kFxBlocks; ++k)
-                if ((alg.in[k] & (kFxSrcA << b)) && !(k == b + 1 && k / 2 == c)) leaves = true;
-            if (leaves)
-                for (int i = 0; i < n; ++i) peak[c] = std::max({peak[c], std::fabs(outL_[b][i]), std::fabs(outR_[b][i])});
+        runChain(0, p.chain[0], in1L, in1R, n, ctx);
+        if (p.link != kFxLinkParallel) // serie: a saida da 1 entra na 2
+            for (int i = 0; i < n; ++i) { in2L[i] += in1L[i]; in2R[i] += in1R[i]; }
+        if (p.link != kFxLinkSerial)   // paralelo / serie + direto: a 1 tambem sai
+            for (int i = 0; i < n; ++i) { L[i] += in1L[i]; R[i] += in1R[i]; }
+        runChain(1, p.chain[1], in2L, in2R, n, ctx);
+        for (int i = 0; i < n; ++i) { L[i] += in2L[i]; R[i] += in2R[i]; }
+        for (int c = 0; c < kFxChains; ++c) {
+            float pk = 0.0f;
+            const float* xl = c == 0 ? in1L : in2L;
+            const float* xr = c == 0 ? in1R : in2R;
+            for (int i = 0; i < n; ++i) pk = std::max({pk, std::fabs(xl[i]), std::fabs(xr[i])});
+            chainPeak_[c].store(pk, std::memory_order_relaxed);
         }
-        for (int b = 0; b < kFxBlocks; ++b)
-            if (alg.out & (kFxSrcA << b))
-                for (int i = 0; i < n; ++i) { L[i] += outL_[b][i]; R[i] += outR_[b][i]; }
-        for (int c = 0; c < kFxChains; ++c) chainPeak_[c].store(peak[c], std::memory_order_relaxed);
         blocks_.fetch_add(1, std::memory_order_acq_rel);
     }
 
@@ -980,6 +960,41 @@ public:
     float slotMeter(int c, int s) const { return slotMeter_[c][s].load(std::memory_order_relaxed); }
 
 private:
+    // uma cadeia no lugar (L/R = entrada -> saida): algoritmo, nivel e pan
+    void runChain(int c, const FxChainParams& ch, float* L, float* R, int n, const FxContext& ctx) {
+        const FxChainAlgorithm& alg = kFxChainAlgorithms[ch.algorithm < kFxNumChainAlgorithms ? ch.algorithm : 0];
+        if (ch.algorithm == 0) {
+            runSlots(c, 0, kFxSlots, ch, L, R, n, ctx); // serie: no lugar, como sempre foi
+        } else {
+            for (int s = 0; s < kFxSlots; ++s) {
+                float* bl = slotL_[s];
+                float* br = slotR_[s];
+                // entrada do pedal: media das fontes (entrada da cadeia, pedais anteriores)
+                int count = 0;
+                auto add = [&](const float* xl, const float* xr) {
+                    if (count++ == 0) { std::memcpy(bl, xl, sizeof(float) * static_cast<size_t>(n)); std::memcpy(br, xr, sizeof(float) * static_cast<size_t>(n)); }
+                    else for (int i = 0; i < n; ++i) { bl[i] += xl[i]; br[i] += xr[i]; }
+                };
+                if (alg.in[s] & kFxSrcIn) add(L, R);
+                for (int k = 0; k < s; ++k) if (alg.in[s] & (kFxSrc1 << k)) add(slotL_[k], slotR_[k]);
+                if (count == 0) { std::fill(bl, bl + n, 0.0f); std::fill(br, br + n, 0.0f); }
+                else if (count > 1) { const float g = 1.0f / static_cast<float>(count); for (int i = 0; i < n; ++i) { bl[i] *= g; br[i] *= g; } }
+                runSlots(c, s, s + 1, ch, bl, br, n, ctx);
+            }
+            int count = 0;
+            for (int s = 0; s < kFxSlots; ++s) {
+                if (!(alg.out & (kFxOut1 << s))) continue;
+                if (count++ == 0) { std::memcpy(L, slotL_[s], sizeof(float) * static_cast<size_t>(n)); std::memcpy(R, slotR_[s], sizeof(float) * static_cast<size_t>(n)); }
+                else for (int i = 0; i < n; ++i) { L[i] += slotL_[s][i]; R[i] += slotR_[s][i]; }
+            }
+            if (count > 1) { const float g = 1.0f / static_cast<float>(count); for (int i = 0; i < n; ++i) { L[i] *= g; R[i] *= g; } }
+        }
+        if (ch.level != 1.0f || ch.pan != 0.0f) { // balanco: o lado oposto ao pan cai, o outro fica
+            const float gl = ch.level * std::min(1.0f, 1.0f - ch.pan), gr = ch.level * std::min(1.0f, 1.0f + ch.pan);
+            for (int i = 0; i < n; ++i) { L[i] *= gl; R[i] *= gr; }
+        }
+    }
+
     // roda os slots [s0, s1) da cadeia c no lugar (sem nivel/pan)
     void runSlots(int c, int s0, int s1, const FxChainParams& ch, float* L, float* R, int n, const FxContext& ctx) {
         const FxExpression& ex = cur_->expr;
@@ -1049,8 +1064,7 @@ private:
     FxProcessor* audioProc_[kFxChains][kFxSlots] = {};
     bool wasOn_[kFxChains][kFxSlots] = {};
     float dryL_[kMaxBlock], dryR_[kMaxBlock];
-    float blkL_[kFxBlocks][kMaxBlock], blkR_[kFxBlocks][kMaxBlock];  // saida crua de cada bloco
-    float outL_[kFxBlocks][kMaxBlock], outR_[kFxBlocks][kMaxBlock];  // com nivel/pan (sai da fileira)
+    float slotL_[kFxSlots][kMaxBlock], slotR_[kFxSlots][kMaxBlock];  // saida de cada pedal (algoritmos com ramos)
     float expression_ = -1.0f;
     std::atomic<float> chainPeak_[kFxChains] = {};
     std::atomic<float> slotMeter_[kFxChains][kFxSlots] = {};
@@ -1064,7 +1078,7 @@ private:
 // -----------------------------------------------------------------------------
 inline FxRackParams fxRackFromLegacy(const GlobalFxParams& g) {
     FxRackParams r;
-    r.algorithm = kFxAlgoSerial;
+    r.link = kFxLinkSerial;
     int at = 0;
     auto next = [&]() -> FxSlotParams& { FxSlotParams& s = r.chain[at / kFxSlots].slot[at % kFxSlots]; ++at; return s; };
     for (GlobalFxType t : g.order) {

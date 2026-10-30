@@ -127,65 +127,93 @@ inline void GainReductionMeter(float grDb, float width) {
     ImGui::PopStyleColor();
 }
 
-// diagrama de um algoritmo de roteamento, desenhado da propria tabela
-// (kFxAlgorithms): envios -> blocos de 2 pedais -> saida
-inline void AlgorithmDiagram(const FxRackParams& r, int a, ImVec2 size) {
-    const FxAlgorithm& alg = kFxAlgorithms[a];
+// diagrama do algoritmo de uma cadeia, desenhado da propria tabela
+// (kFxChainAlgorithms): entrada -> pedais (coluna = profundidade) -> saida
+inline void ChainAlgorithmDiagram(const FxChainParams& ch, int a, ImVec2 size, bool names) {
+    const FxChainAlgorithm& alg = kFxChainAlgorithms[a];
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::Dummy(size);
     dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), ui::col::kKnobBody, 4.0f);
-    const float w = size.x, h = size.y;
-    const float bw = w * 0.2f, bh = h * 0.28f;
-    const float rowY[2] = {p.y + h * 0.28f, p.y + h * 0.72f};
-    const float bx[2] = {p.x + w * 0.22f, p.x + w * 0.52f};
-    const ImVec2 outPt(p.x + w * 0.92f, p.y + h * 0.5f);
-    auto boxL = [&](int b) { return ImVec2(bx[b % 2], rowY[b / 2]); };
-    auto boxR = [&](int b) { return ImVec2(bx[b % 2] + bw, rowY[b / 2]); };
-    const ImU32 line = ui::col::kTextDim, act = ui::col::kAccent;
-    auto wire = [&](ImVec2 a, ImVec2 b, ImU32 c) {
-        const float dx = std::max(14.0f, std::fabs(b.x - a.x) * 0.5f);
-        dl->AddBezierCubic(a, ImVec2(a.x + dx, a.y), ImVec2(b.x - dx, b.y), b, c, 1.6f);
+    // coluna de cada pedal = caminho mais longo desde a entrada
+    int depth[kFxSlots] = {}, maxDepth = 1, rows[kFxSlots + 1] = {}, row[kFxSlots] = {};
+    for (int s = 0; s < kFxSlots; ++s) {
+        depth[s] = 1;
+        for (int k = 0; k < s; ++k) if (alg.in[s] & (kFxSrc1 << k)) depth[s] = std::max(depth[s], depth[k] + 1);
+        maxDepth = std::max(maxDepth, depth[s]);
+        row[s] = rows[depth[s]]++;
+    }
+    const float padX = 18.0f, colW = (size.x - 2.0f * padX) / static_cast<float>(maxDepth);
+    const float bw = std::min(colW - 14.0f, names ? 110.0f : 34.0f), bh = std::min(18.0f, size.y / 4.0f - 2.0f);
+    auto center = [&](int s) {
+        const int n = rows[depth[s]];
+        const float x = p.x + padX + colW * (static_cast<float>(depth[s]) - 0.5f);
+        const float y = p.y + size.y * (static_cast<float>(row[s]) + 0.5f) / static_cast<float>(n);
+        return ImVec2(x, y);
     };
-    // envios (entradas) a esquerda
-    const ImVec2 inPt[2] = {ImVec2(p.x + w * 0.07f, rowY[0]), ImVec2(p.x + w * 0.07f, rowY[1])};
-    for (int k = 0; k < 2; ++k) {
-        dl->AddCircleFilled(inPt[k], 3.0f, line);
-        dl->AddText(ImVec2(inPt[k].x - 4.0f, inPt[k].y - 17.0f), ui::col::kTextDim, k ? "2" : "1");
+    const ImVec2 inPt(p.x + 7.0f, p.y + size.y * 0.5f), outPt(p.x + size.x - 7.0f, p.y + size.y * 0.5f);
+    const ImU32 act = ui::col::kAccent;
+    auto wire = [&](ImVec2 a0, ImVec2 a1) {
+        const float dx = std::max(8.0f, (a1.x - a0.x) * 0.5f);
+        dl->AddBezierCubic(a0, ImVec2(a0.x + dx, a0.y), ImVec2(a1.x - dx, a1.y), a1, act, 1.5f);
+    };
+    for (int s = 0; s < kFxSlots; ++s) {
+        const ImVec2 c = center(s), left(c.x - bw * 0.5f, c.y), right(c.x + bw * 0.5f, c.y);
+        if (alg.in[s] & kFxSrcIn) wire(inPt, left);
+        for (int k = 0; k < s; ++k) if (alg.in[s] & (kFxSrc1 << k)) { const ImVec2 ck = center(k); wire(ImVec2(ck.x + bw * 0.5f, ck.y), left); }
+        if (alg.out & (kFxOut1 << s)) wire(right, outPt);
     }
-    for (int b = 0; b < kFxBlocks; ++b) {
-        for (int k = 0; k < 2; ++k) {
-            if (!(alg.in[b] & (k ? kFxSrcIn2 : kFxSrcIn1))) continue;
-            if (b % 2 == 0 || b / 2 != k) { wire(inPt[k], boxL(b), line); continue; }
-            // envio direto pro 2o bloco da fileira: contorna o 1o por fora
-            const float y = rowY[k] + (k ? 1.0f : -1.0f) * (bh * 0.5f + 5.0f);
-            const ImVec2 pts[4] = {inPt[k], ImVec2(bx[0] - 6.0f, y), ImVec2(bx[1] - 8.0f, y), boxL(b)};
-            dl->AddPolyline(pts, 4, line, 0, 1.6f);
-        }
-        for (int k = 0; k < b; ++k) {
-            if (!(alg.in[b] & (kFxSrcA << k))) continue;
-            if (k / 2 == b / 2) { wire(boxR(k), boxL(b), act); continue; }
-            // entre fileiras: de baixo da caixa de cima pro topo da de baixo
-            const ImVec2 a0(bx[k % 2] + bw * 0.5f, rowY[k / 2] + bh * 0.5f), a1(bx[b % 2] + bw * 0.5f, rowY[b / 2] - bh * 0.5f);
-            const float dy = (a1.y - a0.y) * 0.5f;
-            dl->AddBezierCubic(a0, ImVec2(a0.x, a0.y + dy), ImVec2(a1.x, a1.y - dy), a1, act, 1.6f);
-            dl->AddTriangleFilled(ImVec2(a1.x - 3.5f, a1.y - 5.0f), ImVec2(a1.x + 3.5f, a1.y - 5.0f), a1, act);
-        }
-        if (alg.out & (kFxSrcA << b)) wire(boxR(b), outPt, act);
-    }
-    dl->AddCircleFilled(outPt, 4.0f, act);
-    for (int b = 0; b < kFxBlocks; ++b) { // caixas por cima dos fios
-        const int c = b / 2, s0 = (b % 2) * 2;
-        const ImVec2 q0(bx[b % 2], rowY[c] - bh * 0.5f), q1(bx[b % 2] + bw, rowY[c] + bh * 0.5f);
-        bool any = false;
-        for (int s = s0; s < s0 + 2; ++s) any = any || r.chain[c].slot[s].active();
-        dl->AddRectFilled(q0, q1, any ? ui::rgb(44, 60, 66) : ui::col::kCard, 3.0f);
-        dl->AddRect(q0, q1, any ? act : ui::col::kCardBorder, 3.0f);
-        char t[16];
-        std::snprintf(t, sizeof t, "%d.%d-%d", c + 1, s0 + 1, s0 + 2);
+    dl->AddCircleFilled(inPt, 3.5f, ui::col::kTextDim);
+    dl->AddCircleFilled(outPt, 3.5f, act);
+    for (int s = 0; s < kFxSlots; ++s) { // caixas por cima dos fios
+        const ImVec2 c = center(s), q0(c.x - bw * 0.5f, c.y - bh * 0.5f), q1(c.x + bw * 0.5f, c.y + bh * 0.5f);
+        const FxSlotParams& sp = ch.slot[s];
+        const bool on = sp.active();
+        dl->AddRectFilled(q0, q1, on ? ui::rgb(40, 52, 58) : ui::col::kCard, 3.0f);
+        dl->AddRect(q0, q1, on ? categoryColor(fxInfo(sp.kind).category) : ui::col::kCardBorder, 3.0f);
+        char t[48];
+        if (names && sp.kind != FxKind::Off) std::snprintf(t, sizeof t, "%d %s", s + 1, fxInfo(sp.kind).name);
+        else std::snprintf(t, sizeof t, "%d", s + 1);
+        dl->PushClipRect(q0, q1, true);
         const ImVec2 ts = ImGui::CalcTextSize(t);
-        dl->AddText(ImVec2((q0.x + q1.x - ts.x) * 0.5f, (q0.y + q1.y - ts.y) * 0.5f), ui::col::kText, t);
+        dl->AddText(ImVec2(std::max(q0.x + 3.0f, c.x - ts.x * 0.5f), c.y - ts.y * 0.5f), on ? ui::col::kText : ui::col::kTextDim, t);
+        dl->PopClipRect();
     }
+}
+
+// cabecalho de uma cadeia na pedaleira: algoritmo (combo + setas) e diagrama
+inline void ChainHeader(FxChainParams& ch, int c) {
+    ImGui::PushID(200 + c);
+    ImGui::BeginGroup();
+    ImGui::PushStyleColor(ImGuiCol_Text, ui::col::kAccent);
+    ImGui::Text("CADEIA %d", c + 1);
+    ImGui::PopStyleColor();
+    char cur[48];
+    std::snprintf(cur, sizeof cur, "%d. %s", ch.algorithm + 1, kFxChainAlgorithms[ch.algorithm].name);
+    ImGui::SetNextItemWidth(170);
+    if (ImGui::BeginCombo("##algo", cur, ImGuiComboFlags_HeightLarge)) {
+        for (int a = 0; a < kFxNumChainAlgorithms; ++a) {
+            char lbl[48];
+            std::snprintf(lbl, sizeof lbl, "%d. %s", a + 1, kFxChainAlgorithms[a].name);
+            if (ImGui::Selectable(lbl, a == ch.algorithm)) ch.algorithm = static_cast<uint8_t>(a);
+            if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
+                ChainAlgorithmDiagram(ch, a, ImVec2(200, 64), false);
+                ImGui::TextUnformatted(kFxChainAlgorithms[a].description);
+                ImGui::EndTooltip();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("Algoritmo da cadeia: como os 4 pedais se ligam.\nOnde ramos se juntam, o sinal e a media deles.");
+    if (ImGui::ArrowButton("##prev", ImGuiDir_Left)) ch.algorithm = static_cast<uint8_t>((ch.algorithm + kFxNumChainAlgorithms - 1) % kFxNumChainAlgorithms);
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##next", ImGuiDir_Right)) ch.algorithm = static_cast<uint8_t>((ch.algorithm + 1) % kFxNumChainAlgorithms);
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", kFxChainAlgorithms[ch.algorithm].description);
+    ImGui::EndGroup();
+    ImGui::SameLine(0, 16);
+    ChainAlgorithmDiagram(ch, ch.algorithm, ImVec2(std::min(560.0f, ImGui::GetContentRegionAvail().x), 74), true);
+    ImGui::PopID();
 }
 
 struct DragSlot { int chain, slot; };
@@ -324,37 +352,16 @@ inline void DrawRackMixer(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks& 
     ui::EndCard();
 
     if (ui::BeginCard("##fxchains", "CADEIAS")) {
-        // algoritmo de roteamento: combo (cada item mostra o diagrama no tooltip) + diagrama atual
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("Algoritmo");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        char cur[48];
-        std::snprintf(cur, sizeof cur, "%d. %s", r.algorithm + 1, kFxAlgorithms[r.algorithm].name);
-        if (ImGui::BeginCombo("##fxalgo", cur)) {
-            for (int a = 0; a < kFxNumAlgorithms; ++a) {
-                char lbl[48];
-                std::snprintf(lbl, sizeof lbl, "%d. %s", a + 1, kFxAlgorithms[a].name);
-                if (ImGui::Selectable(lbl, a == r.algorithm)) r.algorithm = static_cast<uint8_t>(a);
-                if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
-                    AlgorithmDiagram(r, a, ImVec2(220, 76));
-                    ImGui::TextUnformatted(kFxAlgorithms[a].description);
-                    ImGui::EndTooltip();
-                }
-            }
-            ImGui::EndCombo();
+        // ligacao entre as cadeias (o algoritmo de cada uma fica no cabecalho dela)
+        ImGui::TextUnformatted("Ligacao entre as cadeias");
+        for (int l = 0; l < kFxNumLinks; ++l) {
+            int cur = r.link;
+            if (ImGui::RadioButton(kFxLinks[l].name, &cur, l)) r.link = static_cast<uint8_t>(l);
+            ImGui::SetItemTooltip("%s", kFxLinks[l].description);
         }
-        // setas: anterior/proximo (tocar e ir trocando)
-        if (ImGui::ArrowButton("##algoprev", ImGuiDir_Left)) r.algorithm = static_cast<uint8_t>((r.algorithm + kFxNumAlgorithms - 1) % kFxNumAlgorithms);
-        ImGui::SameLine();
-        if (ImGui::ArrowButton("##algonext", ImGuiDir_Right)) r.algorithm = static_cast<uint8_t>((r.algorithm + 1) % kFxNumAlgorithms);
-        ImGui::SameLine();
-        ImGui::TextDisabled("1 e 2 = envios");
-        AlgorithmDiagram(r, r.algorithm, ImVec2(ImGui::GetContentRegionAvail().x, 80));
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("%s", kFxAlgorithms[r.algorithm].description);
+        ImGui::TextDisabled("%s", kFxLinks[r.link].description);
         ImGui::PopTextWrapPos();
-        ImGui::TextDisabled("Nivel/pan: o que sai da fileira.");
         for (int c = 0; c < kFxChains; ++c) {
             ImGui::PushID(100 + c);
             ImGui::Text("Cadeia %d", c + 1);
@@ -484,11 +491,8 @@ inline void DrawFxRackPanel(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks
         DrawRackMixer(ui, synth, hooks);
         ImGui::TableSetColumnIndex(1);
         for (int c = 0; c < kFxChains; ++c) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ui::col::kAccent);
-            ImGui::Text("CADEIA %d", c + 1);
-            ImGui::PopStyleColor();
-            ImGui::SameLine();
-            if (c == 0) ImGui::TextDisabled("algoritmo %d: %s", ui.edit.algorithm + 1, kFxAlgorithms[ui.edit.algorithm].name);
+            if (c == 1) ImGui::TextDisabled(ui.edit.link == kFxLinkParallel ? "(em paralelo com a cadeia 1)" : "(recebe a saida da cadeia 1)");
+            ChainHeader(ui.edit.chain[c], c);
             char tid[16];
             std::snprintf(tid, sizeof tid, "##chain%d", c);
             if (ImGui::BeginTable(tid, kFxSlots, ImGuiTableFlags_SizingStretchSame)) {

@@ -4,8 +4,8 @@
 // puxar o DSP do rack.
 //
 // Formato (versao 1):
-//   { "version": 1, "algorithm": "Parallel",   (id de kFxAlgorithms; arquivos
-//     antigos com "serial": true viram "Serial")
+//   { "version": 1, "link": "Parallel",   (FxLink; arquivos antigos com
+//     "serial": true viram "Serial")
 //     "parts": [ {"dry": 0, "send1": 1, "send2": 0}, ... x4 ],
 //     "chains": [ {"level": 1, "pan": 0,
 //                  "slots": [ {"kind": "Hall", "on": true, "mix": 0.3,
@@ -26,7 +26,7 @@ namespace dx7fm {
 inline JsonValue fxRackToJson(const FxRackParams& r) {
     JsonValue j = JsonValue::makeObject();
     j.set("version", JsonValue::makeNumber(1));
-    j.set("algorithm", JsonValue::makeString(kFxAlgorithms[r.algorithm < kFxNumAlgorithms ? r.algorithm : 0].id));
+    j.set("link", JsonValue::makeString(kFxLinks[r.link < kFxNumLinks ? r.link : 0].id));
     JsonValue parts = JsonValue::makeArray();
     for (int p = 0; p < kFxParts; ++p) {
         JsonValue e = JsonValue::makeObject();
@@ -41,6 +41,7 @@ inline JsonValue fxRackToJson(const FxRackParams& r) {
         JsonValue cj = JsonValue::makeObject();
         cj.set("level", JsonValue::makeNumber(c.level));
         cj.set("pan", JsonValue::makeNumber(c.pan));
+        cj.set("algorithm", JsonValue::makeString(kFxChainAlgorithms[c.algorithm < kFxNumChainAlgorithms ? c.algorithm : 0].id));
         JsonValue slots = JsonValue::makeArray();
         for (const auto& s : c.slot) {
             const FxInfo& info = fxInfo(s.kind);
@@ -73,8 +74,8 @@ inline JsonValue fxRackToJson(const FxRackParams& r) {
 // Campos ausentes/invalidos ficam no padrao; o resultado ja sai sanitizado.
 inline FxRackParams fxRackFromJson(const JsonValue& j) {
     FxRackParams r;
-    const int alg = fxAlgorithmFromId(j.stringAt("algorithm", ""));
-    r.algorithm = static_cast<uint8_t>(alg >= 0 ? alg : j.boolAt("serial", false) ? kFxAlgoSerial : kFxAlgoParallel);
+    const int link = fxLinkFromId(j.stringAt("link", ""));
+    r.link = static_cast<uint8_t>(link >= 0 ? link : j.boolAt("serial", false) ? kFxLinkSerial : kFxLinkParallel);
     if (auto* parts = j.find("parts"))
         for (size_t p = 0; p < parts->arraySize() && p < static_cast<size_t>(kFxParts); ++p) {
             const JsonValue& e = parts->at(p);
@@ -88,6 +89,8 @@ inline FxRackParams fxRackFromJson(const JsonValue& j) {
             FxChainParams& ch = r.chain[c];
             ch.level = clampCast<float>(cj.numberAt("level", 1.0));
             ch.pan = clampCast<float>(cj.numberAt("pan", 0.0));
+            const int alg = fxChainAlgorithmFromId(cj.stringAt("algorithm", "Serial"));
+            ch.algorithm = static_cast<uint8_t>(alg >= 0 ? alg : 0);
             const JsonValue* slots = cj.find("slots");
             if (!slots) continue;
             for (size_t s = 0; s < slots->arraySize() && s < static_cast<size_t>(kFxSlots); ++s) {

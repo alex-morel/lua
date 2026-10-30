@@ -1873,18 +1873,23 @@ simulador de fita aberto. Plano em 7 passos, um commit cada (19cec00,
   vazio = identidade EXATA (golden). Depois: volume geral e limitador.
 
   ALGORITMOS [2026-10-30, pedido do usuario: "as cadeias devem ter
-  algoritmos em vez de so paralelo ou serie"]: FxRackParams::algorithm
-  indexa kFxAlgorithms. Cada cadeia vira 2 blocos de 2 pedais (A = 1.1-1.2,
-  B = 1.3-1.4, C = 2.1-2.2, D = 2.3-2.4); o algoritmo da a soma de fontes
-  de cada bloco (in1, in2, blocos anteriores) e os blocos que vao pra
-  saida. Nivel/pan da cadeia valem pro que SAI da fileira (pra saida ou
-  pra outra fileira); A -> B e C -> D passam crus. Lista: 1 Paralelo,
-  2 Serie, 3 Serie + direto, 4 Divide e junta, 5 Pre comum, 6 Pos comum,
-  7 Quatro ramos. Paralelo e Serie somam na mesma ordem de antes (golden
-  identico); JSON guarda o id ("algorithm"), "serial": true antigo vira
-  Serie. testFxRackRouting confere os 7 contra o grafo calculado em
-  escalares (um EQ de ganho conhecido por bloco). A UI desenha o diagrama
-  a partir da propria tabela (fxui::AlgorithmDiagram).
+  algoritmos em vez de so paralelo ou serie" e depois "cada cadeia deve ser
+  capaz de selecionar seu proprio algoritmo"]: FxChainParams::algorithm
+  indexa kFxChainAlgorithms -- como os 4 pedais DAQUELA cadeia se ligam.
+  Cada pedal recebe a entrada da cadeia e/ou a saida de pedais anteriores;
+  nas juncoes e na saida da cadeia o sinal e a MEDIA dos ramos (merge sem
+  ganho extra; ramo com pedal vazio/desligado = ramo seco). 10 algoritmos:
+  Serie, Dois pares, Divide e junta, Pre + 3 ramos, 3 ramos + pos, Par +
+  2 ramos, 2 ramos + par, Tres e um, Ramos desiguais, Quatro paralelos.
+  Serie (0) roda no lugar como sempre (golden identico). Nivel/pan no fim
+  da cadeia. ENTRE as cadeias: FxRackParams::link (kFxLinks) = Paralelo,
+  Serie (1 -> 2, so a 2 sai) ou Serie + direto (a 1 sai e alimenta a 2).
+  JSON: "link" no rack e "algorithm" em cada cadeia (ids); "serial": true
+  antigo vira link Serie. testFxRackRouting confere os 10 (com a cadeia 2
+  noutro algoritmo ao mesmo tempo) contra o grafo calculado em escalares,
+  com um EQ de ganho diferente em cada pedal. A UI desenha o diagrama de
+  cada cadeia a partir da tabela (fxui::ChainAlgorithmDiagram: coluna =
+  caminho mais longo desde a entrada).
 
   PARAMETROS: FxSlotParams{kind, on, mix, p[12]} generico; o significado de
   p[i] vem de fxInfo(kind) (FxInfo: id estavel, nome, categoria, origem e
@@ -1938,7 +1943,7 @@ simulador de fita aberto. Plano em 7 passos, um commit cada (19cec00,
   PERSISTENCIA (dx7_fxrack_io.h): JSON versao 1 com efeito e parametros
   POR NOME; efeito desconhecido vira slot vazio, parametro desconhecido e
   ignorado, ausentes ficam no padrao. Presets do usuario em fxpresets/
-  (relativo ao diretorio do app, como patches/); 27 presets de fabrica em
+  (relativo ao diretorio do app, como patches/); 28 presets de fabrica em
   app/fx_factory.h; ultimo estado em $XDG_CONFIG_HOME/dx7fm/fxrack.json
   (salvo 1 s depois da ultima mudanca e na saida). O rack NAO vai no patch.
 

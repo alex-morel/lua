@@ -171,44 +171,49 @@ inline std::vector<FxFactoryPreset> fxFactoryBank() {
         for (int p = 2; p < kFxParts; ++p) { r.send[p][0] = 0; r.send[p][1] = 0; r.dry[p] = 1; }
     });
     add("Serie: lo-fi no reverb", "Roteamento", "cadeia 1 (reverb) em serie com a 2 (fita + lo-fi)", [](FxRackParams& r) {
-        r.algorithm = kFxAlgoSerial;
+        r.link = kFxLinkSerial;
         slot(r, 0, 0, FxKind::Cloud, 0.4f);
         slot(r, 1, 0, FxKind::TapeSim, 1.0f, {{"wow", 0.5f}, {"flutter", 0.4f}, {"speed", 3.75f}});
         slot(r, 1, 1, FxKind::FilterLfo, 1.0f, {{"type", 0}, {"cutoff", 2500}, {"rate", 0.2f}, {"depth", 1}});
     });
 
-    // --- algoritmos de roteamento (2026-10-30) ----------------------------------
-    add("Divide e junta", "Algoritmos", "compressor -> (delay | chorus) -> hall", [](FxRackParams& r) {
-        r.algorithm = 3; // Divide e junta
+    // --- algoritmos das cadeias (2026-10-30) -------------------------------------
+    add("Divide e junta", "Algoritmos", "cadeia 1 em 1 -> (2 | 3) -> 4: compressor -> (delay | chorus) -> hall", [](FxRackParams& r) {
+        r.chain[0].algorithm = 2; // Divide e junta
         slot(r, 0, 0, FxKind::Compressor, 1.0f, {{"threshold", -20}, {"ratio", 3}, {"makeup", 4}});
-        slot(r, 0, 2, FxKind::DigitalDelay, 1.0f, {{"sync", 7}, {"feedback", 0.45f}, {"pingpong", 1}});
-        slot(r, 1, 0, FxKind::Chorus, 1.0f, {{"depth", 0.7f}});
-        slot(r, 1, 2, FxKind::Hall, 0.3f, {{"decay", 3}});
-        r.chain[0].level = 0.6f; // os dois ramos somam no hall
+        slot(r, 0, 1, FxKind::DigitalDelay, 1.0f, {{"sync", 7}, {"feedback", 0.45f}, {"pingpong", 1}});
+        slot(r, 0, 2, FxKind::Chorus, 1.0f, {{"depth", 0.7f}});
+        slot(r, 0, 3, FxKind::Hall, 0.3f, {{"decay", 3}});
     });
-    add("Drive com reverb ao lado", "Algoritmos", "Serie + direto: drive sai seco e alimenta um Cloud 100% molhado", [](FxRackParams& r) {
-        r.algorithm = 2; // Serie + direto
+    add("Drive com reverb ao lado", "Algoritmos", "ligacao Serie + direto: o drive sai e alimenta um Cloud 100% molhado", [](FxRackParams& r) {
+        r.link = kFxLinkSerialDirect;
         slot(r, 0, 0, FxKind::Overdrive, 1.0f, {{"drive", 0.55f}, {"output", 0.8f}});
         slot(r, 0, 1, FxKind::Eq3, 1.0f, {{"highGain", -4}});
         slot(r, 1, 0, FxKind::Cloud, 1.0f, {{"decay", 0.75f}});
         r.chain[1].level = 0.8f;
     });
-    add("Pos comum", "Algoritmos", "fita na cadeia 1 | tremolo em 2.1 -> um reverb Plate pra tudo", [](FxRackParams& r) {
-        r.algorithm = 5; // Pos comum
+    add("Tres ramos num plate", "Algoritmos", "cadeia 1 em (1 | 2 | 3) -> 4: fita | tremolo | chorus -> plate", [](FxRackParams& r) {
+        r.chain[0].algorithm = 4; // 3 ramos + pos
         slot(r, 0, 0, FxKind::TapeSim, 1.0f, {{"wow", 0.3f}, {"flutter", 0.2f}});
-        slot(r, 1, 0, FxKind::Tremolo, 1.0f, {{"speed", 0.4f}});
-        slot(r, 1, 2, FxKind::Plate, 0.3f, {{"decay", 2}});
-        for (auto& sd : r.send) sd[1] = 1.0f; // a parte entra nos dois ramos
-        r.chain[0].level = 0.5f; r.chain[1].level = 1.0f;
+        slot(r, 0, 1, FxKind::Tremolo, 1.0f, {{"speed", 0.4f}});
+        slot(r, 0, 2, FxKind::Chorus, 1.0f);
+        slot(r, 0, 3, FxKind::Plate, 0.3f, {{"decay", 2}});
     });
-    add("Quatro ramos", "Algoritmos", "4 efeitos lado a lado, cada um com o proprio mix", [](FxRackParams& r) {
-        r.algorithm = 6; // Quatro ramos
-        slot(r, 0, 0, FxKind::Room, 1.0f, {{"decay", 0.6f}});
-        slot(r, 0, 2, FxKind::PitchShift, 1.0f, {{"semitones", 12}});
-        slot(r, 1, 0, FxKind::DigitalDelay, 1.0f, {{"sync", 4}, {"feedback", 0.3f}});
-        slot(r, 1, 2, FxKind::Micro, 1.0f, {{"variation", 3}});
-        r.chain[0].level = 0.35f; r.chain[1].level = 0.35f;
-        for (auto& sd : r.send) sd[1] = 1.0f;
+    add("Quatro paralelos", "Algoritmos", "cadeia 1 com 4 efeitos lado a lado (a saida e a media)", [](FxRackParams& r) {
+        r.chain[0].algorithm = 9; // Quatro paralelos
+        slot(r, 0, 0, FxKind::Room, 0.6f, {{"decay", 0.6f}});
+        slot(r, 0, 1, FxKind::PitchShift, 0.5f, {{"semitones", 12}});
+        slot(r, 0, 2, FxKind::DigitalDelay, 0.6f, {{"sync", 4}, {"feedback", 0.3f}});
+        slot(r, 0, 3, FxKind::Micro, 0.6f, {{"variation", 3}});
+    });
+    add("Delays em ramos", "Algoritmos", "cadeia 1 em 1 -> (2 | 3 | 4): drive -> delay 1/4 | delay 1/8. | reverso; cadeia 2 = shimmer", [](FxRackParams& r) {
+        r.chain[0].algorithm = 3; // Pre + 3 ramos
+        slot(r, 0, 0, FxKind::Tube, 1.0f, {{"input", 0.5f}});
+        slot(r, 0, 1, FxKind::DigitalDelay, 0.5f, {{"sync", 3}, {"feedback", 0.35f}});
+        slot(r, 0, 2, FxKind::DigitalDelay, 0.5f, {{"sync", 7}, {"feedback", 0.3f}, {"pingpong", 1}});
+        slot(r, 0, 3, FxKind::ReverseDelay, 0.5f, {{"sync", 2}});
+        slot(r, 1, 0, FxKind::Shimmer, 1.0f, {{"decay", 5}});
+        sendAllTo2(r, 0.4f);
     });
     return out;
 }
