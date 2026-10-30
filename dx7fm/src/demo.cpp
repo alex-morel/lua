@@ -4628,6 +4628,93 @@ static void testFxBehaviour() {
     }
 }
 
+// --- [ADICIONADO em 2026-10-29] reverbs estilo BigSky ---
+static std::vector<float> envDb(const std::vector<float>& x, int win) { // RMS em janelas, em dB
+    std::vector<float> e;
+    for (size_t a = 0; a + static_cast<size_t>(win) <= x.size(); a += static_cast<size_t>(win))
+        e.push_back(20.0f * std::log10(computeRms(x, a, static_cast<size_t>(win)) + 1e-9f));
+    return e;
+}
+
+static void testReverbMachines() {
+    auto impulse = [](int i) { return i < 48 ? 0.5f : 0.0f; };
+    // Hall: o decay medido (inclinacao da cauda) acompanha o knob
+    auto t60 = [&](float decay) {
+        auto L = runSlot(FxKind::Hall, [decay](FxSlotParams& s) { s.p[0] = decay; s.p[1] = 0.0f; }, impulse, 48000 * 6).first;
+        auto e = envDb(L, 2400);
+        // inclinacao entre 0.3 s e o ponto em que caiu 40 dB
+        const float start = e[6];
+        size_t k = 6;
+        while (k < e.size() && e[k] > start - 40.0f) ++k;
+        return (k - 6) * 0.05f * 60.0f / 40.0f;
+    };
+    const float t1 = t60(1.0f), t4 = t60(4.0f);
+    std::printf("  (Hall: RT60 medido com decay 1 s = %.2f s, com 4 s = %.2f s)\n", t1, t4);
+    check(t4 > 2.5f * t1 && t1 > 0.5f && t1 < 2.0f, "Hall (Dragonfly): o decay medido acompanha o knob");
+    // pre-delay: nada molhado antes dele
+    {
+        auto L = runSlot(FxKind::Hall, [](FxSlotParams& s) { s.p[1] = 60.0f; s.p[6] = 0.0f; }, impulse, 48000).first;
+        const float before = computeRms(L, 0, 2400), after = computeRms(L, 3360, 4800);
+        std::printf("  (Hall com pre-delay 60 ms: RMS antes de 50 ms %.5f, depois de 70 ms %.4f)\n", before, after);
+        check(before < 0.05f * after, "Hall: o pre-delay atrasa a cauda");
+    }
+    // shimmer: aparece energia uma oitava acima de uma nota que ja acabou
+    {
+        auto L = runSlot(FxKind::Shimmer, [](FxSlotParams& s) { s.p[1] = 12.0f; s.p[2] = 12.0f; s.p[3] = 0.8f; s.p[4] = 16000.0f; },
+                         [](int i) { return i < 9600 ? 0.4f * std::sin(2.0f * kPi * 440.0f * i / 48000.0f) : 0.0f; }, 48000 * 3).first;
+        const float oct = bandRms(L, 880.0, 48000 * 2, 9600), fund = bandRms(L, 440.0, 48000 * 2, 9600);
+        auto plainHall = runSlot(FxKind::Hall, [](FxSlotParams& s) { s.p[0] = 4.0f; s.p[3] = 16000.0f; },
+                                 [](int i) { return i < 9600 ? 0.4f * std::sin(2.0f * kPi * 440.0f * i / 48000.0f) : 0.0f; }, 48000 * 3).first;
+        const float hOct = bandRms(plainHall, 880.0, 48000 * 2, 9600), hFund = bandRms(plainHall, 440.0, 48000 * 2, 9600);
+        std::printf("  (2 s depois: oitava/fundamental no Shimmer %.2f, no Hall puro %.3f)\n", oct / fund, hOct / hFund);
+        check(oct / fund > 10.0f * (hOct / hFund), "Shimmer: a cauda sobe uma oitava (pitch shifter do Clouds na realimentacao)");
+    }
+    // nonlinear: Reverse cresce ate o fim do tempo e corta; Gate fica plano e corta
+    {
+        auto rev = runSlot(FxKind::Nonlinear, [](FxSlotParams& s) { s.p[0] = 0.0f; s.p[1] = 400.0f; s.p[2] = 0.3f; }, impulse, 48000).first;
+        auto gate = runSlot(FxKind::Nonlinear, [](FxSlotParams& s) { s.p[0] = 3.0f; s.p[1] = 400.0f; s.p[2] = 0.3f; }, impulse, 48000).first;
+        const float r1 = computeRms(rev, 2400, 4800), r2 = computeRms(rev, 13000, 4800), rAfter = computeRms(rev, 24000, 4800);
+        const float g1 = computeRms(gate, 2400, 4800), g2 = computeRms(gate, 13000, 4800), gAfter = computeRms(gate, 24000, 4800);
+        std::printf("  (Nonlinear Reverse: %.4f -> %.4f, depois %.5f; Gate: %.4f -> %.4f, depois %.5f)\n", r1, r2, rAfter, g1, g2, gAfter);
+        check(r2 > 2.0f * r1 && rAfter < 0.1f * r2, "Nonlinear Reverse: a cauda cresce e corta no fim do tempo");
+        check(std::fabs(g2 / g1 - 1.0f) < 0.5f && gAfter < 0.1f * g2, "Nonlinear Gate: a cauda fica plana e corta");
+    }
+    // swell: o ataque some (as primeiras dezenas de ms ficam baixas e o som cresce)
+    {
+        auto [L, R] = runSlot(FxKind::Swell, [](FxSlotParams& s) { s.p[0] = 500.0f; s.p[4] = 0.0f; },
+                              [](int i) { return i < 48000 ? 0.4f * std::sin(2.0f * kPi * 330.0f * i / 48000.0f) : 0.0f; }, 48000);
+        const float early = computeRms(L, 240, 960), late = computeRms(L, 30000, 4800);
+        std::printf("  (Swell: RMS nos primeiros 25 ms %.4f, depois de 0.6 s %.4f)\n", early, late);
+        check(early < 0.1f * late, "Swell: o ataque some e a nota cresce aos poucos");
+    }
+    // reflections: resposta ao impulso feita de picos separados (reflexoes discretas)
+    {
+        auto L = runSlot(FxKind::Reflections, nullptr, [](int i) { return i == 0 ? 1.0f : 0.0f; }, 9600).first;
+        float pk = 0.0f;
+        for (float x : L) pk = std::max(pk, std::fabs(x));
+        int peaks = 0;
+        for (size_t i = 1; i + 1 < L.size(); ++i)
+            if (std::fabs(L[i]) > 0.2f * pk && std::fabs(L[i]) >= std::fabs(L[i - 1]) && std::fabs(L[i]) >= std::fabs(L[i + 1])) ++peaks;
+        std::printf("  (Reflections: %d picos acima de 20%% do maior em 200 ms)\n", peaks);
+        check(peaks >= 4 && peaks < 400, "Reflections (Dragonfly): reflexoes discretas, nao uma cauda continua");
+    }
+    // rebuild: mudar o tamanho troca o DSP (sem alocar no audio) e continua soando
+    {
+        FxRack rack;
+        rack.prepare(48000.0);
+        FxRackParams p;
+        p.chain[0].slot[0].setKind(FxKind::Hall);
+        rack.setParams(p);
+        auto a = runRack(rack, [](int i) { return 0.3f * std::sin(0.05f * i); }, 9600);
+        p.chain[0].slot[0].p[2] = 50.0f; // tamanho: parametro "rebuild"
+        rack.setParams(p);
+        auto b = runRack(rack, [](int i) { return 0.3f * std::sin(0.05f * i); }, 24000);
+        bool fin = true;
+        for (float x : b) fin &= std::isfinite(x);
+        check(fin && computeRms(b, 12000, 9600) > 0.01f, "reverbs: mudar o tamanho recria o DSP na thread da UI e segue soando");
+    }
+}
+
 static void testGlobalFxOrder() {
     // a ordem dos slots muda o som: compressor antes x depois do reverb
     auto render = [](bool compFirst) {
@@ -5018,6 +5105,7 @@ int main() {
     testAllFxKindsStable();
     testFxBehaviour();
     testFxKindsCost();
+    testReverbMachines();
     testGlobalFxOrder();
     testGlobalFxCost();
     testDeadOperatorRevivedByLiveEdit();

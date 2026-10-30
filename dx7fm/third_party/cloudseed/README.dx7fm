@@ -1,0 +1,8 @@
+Cloud Seed Core (Ghost Note Audio, licenca MIT -- ver LICENSE), de
+github.com/GhostNoteAudio/CloudSeedCore (branch master), baixado em 2026-10-29.
+So DSP/, Parameters.h/.cpp, LICENSE e o Readme. Uma mudanca MECANICA:
+  - DSP/Utils.h: "#define _USE_MATH_DEFINES 1" -> "#define _USE_MATH_DEFINES"
+    (os outros arquivos definem vazio; com valores diferentes o GCC avisa a
+    redefinicao. A macro so tem efeito no MSVC.)
+O strcpy_s (so existe no MSVC) usado em Parameters.h vem de um shim em
+src/dx7_fx_reverbs.h, sem mudar o codigo deles.

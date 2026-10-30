@@ -1,0 +1,11 @@
+freeverb3 (Teru Kamogashira, GPLv2 ou posterior -- ver COPYING), na copia
+distribuida com o Dragonfly Reverb (github.com/michaelwillis/dragonfly-reverb,
+common/freeverb, + common/fv3_config.h), baixada em 2026-10-29.
+
+So os arquivos que o Dragonfly compila (os 17 .cpp listados em
+src/dx7_fx_reverbs.h) e todos os headers. DUAS mudancas MECANICAS, nenhuma no
+DSP:
+  1. removidas as especificacoes de excecao dinamicas "throw(std::bad_alloc)"
+     (invalidas desde o C++17; o dx7fm compila em C++20);
+  2. includes achatados: "freeverb/x.hpp" -> "x.hpp" (todos no mesmo diretorio).
+Compilado so pra float (LIBFV3_FLOAT), como no Dragonfly.

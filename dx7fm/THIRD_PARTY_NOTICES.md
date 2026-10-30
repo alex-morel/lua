@@ -24,6 +24,10 @@ completo sob a GPLv3.
 | sst-effects — RotarySpeaker | rotary/Leslie do rack (`fxextra::Rotary`, `src/dx7_fx_extra.h`) | Surge Synth Team | GPLv3 | porta do algoritmo, com infraestrutura própria e chave lento/rápido com inércia |
 | Faust vaeffects.lib (crybaby, autowah) | wah do rack (`fxextra::Wah`) | Julius O. Smith III | STK-4.3 (estilo MIT) | porta |
 | Clouds — PitchShifter | pitch shifter do rack (`fxextra::PitchShifter`) | Emilie Gillet (Mutable Instruments) | MIT | porta, com mudanças |
+| freeverb3 | base dos reverbs Hall, Room, Plate e Reflections (`third_party/freeverb3`) | Teru Kamogashira (e Fons Adriaensen em zrev) | GPLv2 ou posterior | vendorizado (a cópia do Dragonfly), com 2 mudanças mecânicas descritas em `third_party/freeverb3/README.dx7fm` |
+| Dragonfly Reverb | Hall, Room, Plate e Reflections do rack (`src/dx7_fx_reverbs.h`) | Michael Willis | GPLv3 | porta da configuração e dos laços (classes NRev/NRevB), com valores dos presets do plugin; os laços do Plate são chamados direto (no plugin distribuído eles não entram) |
+| Cloud Seed Core | reverb Cloud, Swell e Bloom (`third_party/cloudseed`) | Ghost Note Audio | MIT | vendorizado, com 1 mudança mecânica (`third_party/cloudseed/README.dx7fm`) |
+| Surge XT — chowdsp/spring_reverb | reverb Spring (`reverbs::Spring`) | Jatin Chowdhury / Surge Synth Team | GPLv3 | porta escalar, com linhas de atraso do tamanho que usam |
 | Roboto Medium | fonte da interface (`third_party/imgui/misc/fonts/Roboto-Medium.ttf`) | Google (Christian Robertson) | Apache 2.0 | arquivo distribuído com o Dear ImGui, carregado em tempo de execução |
 
 As mudanças feitas em cada porta estão descritas no comentário de cabeçalho
@@ -50,6 +54,10 @@ do bloco correspondente em `src/dx7_globalfx.h`.
   - sst-effects: <https://github.com/surge-synthesizer/sst-effects> (`include/sst/effects/RotarySpeaker.h`)
   - Faust: `vaeffects.lib` (crybaby, autowah) do mesmo repositório de cima
   - Clouds: `clouds/dsp/fx/pitch_shifter.h` do mesmo repositório da Mutable de cima
+  - Dragonfly Reverb: <https://github.com/michaelwillis/dragonfly-reverb> (`common/freeverb/*`,
+    `common/fv3_config.h`, `plugins/dragonfly-*/DSP.cpp`, `DistrhoPluginInfo.h`)
+  - Cloud Seed Core: <https://github.com/GhostNoteAudio/CloudSeedCore> (`DSP/*`, `Parameters.*`, `LICENSE`)
+  - Surge XT: `src/common/dsp/effects/chowdsp/spring_reverb/*` e `chowdsp/shared/chowdsp_DelayInterpolation.h`
 - msfa (baixado em 2026-10-24): <https://github.com/google/music-synthesizer-for-android>
   (`app/src/main/jni/fm_core.cc`, `dx7note.cc`, `env.cc`, `lfo.cc`)
 
@@ -109,13 +117,46 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### CHOW Tape Model, Surge XT, sst-effects, ZetaCarinaeModules — GNU GPL v3
+### Cloud Seed Core — MIT
+
+```
+MIT License
+
+Copyright (c) 2024 Ghost Note Audio
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### freeverb3 — GNU GPL v2 ou posterior
+
+Copyright (C) 2006-2018 Teru Kamogashira; partes (zrev) Copyright (C)
+2003-2010 Fons Adriaensen. Licenciado "GPL versão 2 ou (a seu critério)
+qualquer versão posterior" — usado aqui sob a GPLv3. Texto da GPLv2 em
+`third_party/freeverb3/COPYING`.
+
+### CHOW Tape Model, Surge XT, sst-effects, ZetaCarinaeModules, Dragonfly Reverb — GNU GPL v3
 
 O código portado desses projetos é GPLv3, a mesma licença do dx7fm (texto
 completo em `LICENSE`). Avisos de copyright: CHOW Tape Model © Jatin
 Chowdhury; Surge XT © 2018-2024 Surge Synth Team e autores (originalmente
 © Claes Johanson / Vember Audio 2004-2018); sst-effects © Surge Synth Team;
-ZetaCarinaeModules © Michael Hampton.
+ZetaCarinaeModules © Michael Hampton; Dragonfly Reverb © Michael Willis.
 
 ### Faust phaflangers.lib e vaeffects.lib (funções de Julius O. Smith III) — STK-4.3
 

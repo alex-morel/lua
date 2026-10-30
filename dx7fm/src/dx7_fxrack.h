@@ -1,6 +1,7 @@
 #pragma once
 #include "dx7_globalfx.h"
 #include "dx7_fx_extra.h"
+#include "dx7_fx_reverbs.h"
 #include "dx7_params.h"
 #include "chowtape/ChowTape.h"
 #include "airwindows/AutoPan.h"
@@ -57,6 +58,7 @@ enum class FxKind : uint8_t {
     Overdrive, Tube, Distortion, Density, TapeSim, TapeLite, Gate, SoftClip, LoFi,  // 2026-10-29: drives, fita, dinamica
     Tremolo, AutoPan, Vibrato, RingMod, Wah, FilterLfo, PitchShift, Rotary,         //   modulacao, filtros, pitch
     DigitalDelay, ReverseDelay,                                                      //   delays
+    Hall, Room, Plate, Reflections, Cloud, Spring, Swell, Bloom, Chorale, Shimmer, Magneto, Nonlinear, // reverbs estilo BigSky
     Count
 };
 
@@ -67,6 +69,9 @@ struct FxParamInfo {
     const char* unit = "";
     bool log = false;            // knob em escala logaritmica
     const char* choices = nullptr; // "A|B|C": parametro de escolha (valor = indice)
+    // mudar este parametro recria o DSP do slot na thread da UI (ex.: tamanho e
+    // pre-delay dos reverbs do freeverb3, que realocam buffers) -- ver FxRack
+    bool rebuild = false;
 };
 
 struct FxInfo {
@@ -212,6 +217,73 @@ inline const FxInfo& fxInfo(FxKind k) {
          {{"time", "Tempo", 50.0f, 2000.0f, 500.0f, "ms", true},
           {"sync", "Sync", 0.0f, 9.0f, 0.0f, "", false, "Livre|1/1|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16"},
           {"feedback", "Feedback", 0.0f, 0.9f, 0.3f}}},
+        // --- reverbs no estilo das maquinas do BigSky -------------------------
+        {FxKind::Hall, "Hall", "Hall", "Reverb", "Dragonfly Hall Reverb (Michael Willis, GPLv3) sobre o freeverb3 (Teru Kamogashira, GPLv2+)", 0.3f, 7,
+         {{"decay", "Decay", 0.2f, 10.0f, 2.0f, "s", true},
+          {"predelay", "Pre-delay", 0.0f, 100.0f, 10.0f, "ms", false, nullptr, true},
+          {"size", "Tamanho", 10.0f, 60.0f, 24.0f, "m", false, nullptr, true},
+          {"tone", "Tom", 1000.0f, 16000.0f, 7600.0f, "Hz", true},
+          {"diffusion", "Difusao", 0.0f, 1.0f, 0.9f},
+          {"mod", "Mod", 0.0f, 1.0f, 0.15f},
+          {"early", "Reflexoes", 0.0f, 1.0f, 0.5f}}},
+        {FxKind::Room, "Room", "Room", "Reverb", "Dragonfly Room Reverb (Michael Willis, GPLv3) sobre o freeverb3 (GPLv2+)", 0.3f, 7,
+         {{"decay", "Decay", 0.2f, 10.0f, 0.8f, "s", true},
+          {"predelay", "Pre-delay", 0.0f, 100.0f, 8.0f, "ms", false, nullptr, true},
+          {"size", "Tamanho", 8.0f, 32.0f, 12.0f, "m", false, nullptr, true},
+          {"tone", "Tom", 1000.0f, 16000.0f, 9400.0f, "Hz", true},
+          {"diffusion", "Difusao", 0.0f, 1.0f, 0.7f},
+          {"boost", "Grave", 0.0f, 1.0f, 0.5f},
+          {"early", "Reflexoes", 0.0f, 1.0f, 0.5f}}},
+        {FxKind::Plate, "Plate", "Plate", "Reverb", "Dragonfly Plate Reverb (Michael Willis, GPLv3): nrev/nrevb/strev do freeverb3 (GPLv2+)", 0.3f, 4,
+         {{"algorithm", "Placa", 0.0f, 2.0f, 1.0f, "", false, "NRev|NRevB|STRev"},
+          {"decay", "Decay", 0.2f, 10.0f, 1.5f, "s", true},
+          {"predelay", "Pre-delay", 0.0f, 100.0f, 0.0f, "ms", false, nullptr, true},
+          {"tone", "Tom", 1000.0f, 16000.0f, 7000.0f, "Hz", true}}},
+        {FxKind::Reflections, "Reflections", "Reflections", "Reverb", "Dragonfly Early Reflections (Michael Willis, GPLv3) sobre o freeverb3 (GPLv2+)", 0.4f, 4,
+         {{"program", "Sala", 0.0f, 7.0f, 2.0f, "", false, "Abrupt Echo|Backstage Pass|Concert Venue|Damaged Goods|Elevator Pitch|Floor Thirteen|Garage Band|Home Studio", true},
+          {"size", "Tamanho", 10.0f, 60.0f, 20.0f, "m", false, nullptr, true},
+          {"width", "Largura", 0.5f, 1.5f, 1.0f},
+          {"tone", "Tom", 1000.0f, 16000.0f, 10000.0f, "Hz", true}}},
+        {FxKind::Cloud, "Cloud", "Cloud", "Reverb", "Cloud Seed Core (Ghost Note Audio, MIT)", 0.35f, 6,
+         {{"decay", "Decay", 0.0f, 1.0f, 0.6f}, {"size", "Tamanho", 0.0f, 1.0f, 0.6f}, {"mod", "Mod", 0.0f, 1.0f, 0.4f},
+          {"diffusion", "Difusao", 0.0f, 1.0f, 0.8f}, {"tone", "Tom", 0.0f, 1.0f, 0.7f}, {"predelay", "Pre-delay", 0.0f, 1.0f, 0.0f}}},
+        {FxKind::Spring, "Spring", "Spring", "Reverb", "SpringReverbProc do chowdsp no Surge XT (Jatin Chowdhury, GPLv3)", 0.35f, 6,
+         {{"size", "Tamanho", 0.0f, 1.0f, 0.5f}, {"decay", "Decay", 0.0f, 1.0f, 0.5f}, {"reflections", "Reflexoes", 0.0f, 1.0f, 1.0f},
+          {"spin", "Spin", 0.0f, 1.0f, 0.5f}, {"damping", "Escuro", 0.0f, 1.0f, 0.5f}, {"chaos", "Caos", 0.0f, 1.0f, 0.0f}}},
+        {FxKind::Swell, "Swell", "Swell", "Reverb", "Proprio: cada ataque vira uma rampa de volume, num Cloud Seed (MIT)", 1.0f, 5,
+         {{"rise", "Subida", 50.0f, 3000.0f, 600.0f, "ms", true}, {"sensitivity", "Sensib.", 0.0f, 1.0f, 0.5f},
+          {"decay", "Decay", 0.0f, 1.0f, 0.6f}, {"tone", "Tom", 0.0f, 1.0f, 0.7f}, {"reverb", "Reverb", 0.0f, 1.0f, 0.5f}}},
+        {FxKind::Bloom, "Bloom", "Bloom", "Reverb", "Proprio: Cloud Seed (MIT) num laco de difusores com realimentacao", 0.4f, 4,
+         {{"decay", "Decay", 0.0f, 1.0f, 0.7f}, {"length", "Laco", 50.0f, 1000.0f, 300.0f, "ms", true},
+          {"feedback", "Florescer", 0.0f, 0.95f, 0.7f}, {"tone", "Tom", 0.0f, 1.0f, 0.6f}}},
+        {FxKind::Chorale, "Chorale", "Chorale", "Reverb", "Proprio: Dragonfly Hall (GPLv3) num banco de formantes de vogal", 0.4f, 6,
+         {{"decay", "Decay", 0.2f, 10.0f, 2.5f, "s", true},
+          {"vowel", "Vogal", 0.0f, 4.0f, 0.0f, "", false, "A|E|I|O|U"},
+          {"resonance", "Resson.", 1.0f, 12.0f, 5.0f, "", true},
+          {"amount", "Coro", 0.0f, 1.0f, 0.7f},
+          {"tone", "Tom", 1000.0f, 16000.0f, 7000.0f, "Hz", true},
+          {"size", "Tamanho", 10.0f, 60.0f, 30.0f, "m", false, nullptr, true}}},
+        {FxKind::Shimmer, "Shimmer", "Shimmer", "Reverb", "Proprio: Dragonfly Hall (GPLv3) com 2 pitch shifters do Clouds (MIT) na realimentacao", 0.4f, 6,
+         {{"decay", "Decay", 0.2f, 10.0f, 4.0f, "s", true},
+          {"interval1", "Voz 1", -24.0f, 24.0f, 12.0f, "st"},
+          {"interval2", "Voz 2", -24.0f, 24.0f, 7.0f, "st"},
+          {"amount", "Brilho", 0.0f, 0.9f, 0.5f},
+          {"tone", "Tom", 1000.0f, 16000.0f, 6000.0f, "Hz", true},
+          {"size", "Tamanho", 10.0f, 60.0f, 30.0f, "m", false, nullptr, true}}},
+        {FxKind::Magneto, "Magneto", "Magneto", "Reverb", "Proprio: eco de 4 cabecas com wow, difusao e Dragonfly Hall (GPLv3)", 0.4f, 8,
+         {{"time", "Tempo", 50.0f, 2000.0f, 400.0f, "ms", true},
+          {"sync", "Sync", 0.0f, 9.0f, 0.0f, "", false, "Livre|1/1|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16"},
+          {"heads", "Cabecas", 0.0f, 9.0f, 7.0f, "", false, "1|2|3|4|1+2|2+3|1+2+3|Todas|1+3|2+4"},
+          {"feedback", "Feedback", 0.0f, 0.95f, 0.4f},
+          {"diffusion", "Difusao", 0.0f, 1.0f, 0.5f},
+          {"decay", "Decay", 0.2f, 5.0f, 1.2f, "s", true},
+          {"tone", "Tom", 0.0f, 1.0f, 0.5f},
+          {"wow", "Wow", 0.0f, 1.0f, 0.3f}}},
+        {FxKind::Nonlinear, "Nonlinear", "Nonlinear", "Reverb", "Proprio: 48 taps com envelope (reverso, swoosh, rampa, gate) e difusao", 0.4f, 4,
+         {{"shape", "Forma", 0.0f, 3.0f, 0.0f, "", false, "Reverse|Swoosh|Ramp|Gate"},
+          {"time", "Tempo", 50.0f, 1000.0f, 300.0f, "ms", true},
+          {"diffusion", "Difusao", 0.0f, 1.0f, 0.6f},
+          {"tone", "Tom", 0.0f, 1.0f, 0.7f}}},
     };
     static_assert(sizeof(table) / sizeof(table[0]) == static_cast<size_t>(FxKind::Count), "fxInfo: um item por FxKind, na ordem");
     const int i = static_cast<int>(k);
@@ -296,6 +368,9 @@ public:
     virtual void reset() = 0;                    // zera o estado (sem alocar)
     virtual void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext& ctx) = 0;
     virtual float meter() const { return 0.0f; } // ex.: reducao de ganho em dB
+    // thread da UI, logo depois do prepare (e quando um parametro "rebuild"
+    // muda): aplica o que aloca. O padrao nao faz nada.
+    virtual void configure(const FxSlotParams&) {}
 };
 
 namespace fxrack_detail {
@@ -531,6 +606,30 @@ private:
     fxextra::ReverseDelay fx_;
 };
 
+// --- reverbs estilo BigSky (dx7_fx_reverbs.h) -----------------------------------
+// o configure() cria/aloca (thread da UI); process() so o que nao aloca
+template <typename RV> class ReverbFx : public FxProcessor {
+public:
+    using Configure = void (*)(RV&, double, const FxSlotParams&);
+    using Process = void (*)(RV&, const FxSlotParams&, float*, float*, int, const FxContext&);
+    ReverbFx(Configure c, Process p) : configure_(c), process_(p) {}
+    void prepare(double sr) override { sr_ = sr; }
+    void configure(const FxSlotParams& s) override { rv_ = std::make_unique<RV>(); configure_(*rv_, sr_, s); }
+    void reset() override { if (rv_) rv_->reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext& ctx) override {
+        if (!rv_) { std::fill(L, L + n, 0.0f); std::fill(R, R + n, 0.0f); return; }
+        process_(*rv_, s, L, R, n, ctx);
+    }
+private:
+    double sr_ = 48000.0;
+    std::unique_ptr<RV> rv_;
+    Configure configure_;
+    Process process_;
+};
+
+// os da familia Dragonfly tem mute() em vez de reset()
+template <typename T> struct WithReset : T { void reset() { this->mute(); } };
+
 } // namespace fxrack_detail
 
 // Cria (e prepara) o DSP de um tipo. Chamar FORA da thread de audio.
@@ -580,6 +679,75 @@ inline std::unique_ptr<FxProcessor> makeFxProcessor(FxKind k, double sampleRate)
         case FxKind::Rotary: p = std::make_unique<RotaryFx>(); break;
         case FxKind::DigitalDelay: p = std::make_unique<DigitalDelayFx>(); break;
         case FxKind::ReverseDelay: p = std::make_unique<ReverseDelayFx>(); break;
+        case FxKind::Hall:
+            p = std::make_unique<ReverbFx<WithReset<reverbs::DragonflyHall>>>(
+                [](WithReset<reverbs::DragonflyHall>& r, double sr, const FxSlotParams& s) { r.configure(sr, s.p[2], s.p[1]); },
+                [](WithReset<reverbs::DragonflyHall>& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) { r.process(s.p[0], s.p[3], s.p[4], s.p[5], s.p[6], L, R, n); });
+            break;
+        case FxKind::Room:
+            p = std::make_unique<ReverbFx<WithReset<reverbs::DragonflyRoom>>>(
+                [](WithReset<reverbs::DragonflyRoom>& r, double sr, const FxSlotParams& s) { r.configure(sr, s.p[2], s.p[1]); },
+                [](WithReset<reverbs::DragonflyRoom>& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) { r.process(s.p[0], s.p[3], s.p[4], s.p[5], s.p[6], L, R, n); });
+            break;
+        case FxKind::Plate:
+            p = std::make_unique<ReverbFx<WithReset<reverbs::DragonflyPlate>>>(
+                [](WithReset<reverbs::DragonflyPlate>& r, double sr, const FxSlotParams& s) { r.configure(sr, s.p[2]); },
+                [](WithReset<reverbs::DragonflyPlate>& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) { r.process(static_cast<int>(std::lround(s.p[0])), s.p[1], s.p[3], L, R, n); });
+            break;
+        case FxKind::Reflections:
+            p = std::make_unique<ReverbFx<WithReset<reverbs::DragonflyEarly>>>(
+                [](WithReset<reverbs::DragonflyEarly>& r, double sr, const FxSlotParams& s) { r.configure(sr, static_cast<int>(std::lround(s.p[0])), s.p[1]); },
+                [](WithReset<reverbs::DragonflyEarly>& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) { r.process(s.p[2], s.p[3], L, R, n); });
+            break;
+        case FxKind::Cloud:
+            p = std::make_unique<ReverbFx<reverbs::CloudSeedFx>>(
+                [](reverbs::CloudSeedFx& r, double sr, const FxSlotParams&) { r.configure(sr); },
+                [](reverbs::CloudSeedFx& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) { r.process(s.p[0], s.p[1], s.p[2], s.p[3], s.p[4], s.p[5], L, R, n); });
+            break;
+        case FxKind::Spring:
+            p = std::make_unique<ReverbFx<reverbs::Spring>>(
+                [](reverbs::Spring& r, double sr, const FxSlotParams&) { r.configure(sr); },
+                [](reverbs::Spring& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) { r.process(s.p[0], s.p[1], s.p[2], s.p[3], s.p[4], s.p[5], L, R, n); });
+            break;
+        case FxKind::Swell:
+            p = std::make_unique<ReverbFx<reverbs::Swell>>(
+                [](reverbs::Swell& r, double sr, const FxSlotParams&) { r.configure(sr); },
+                [](reverbs::Swell& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) { r.process(s.p[0], s.p[1], s.p[2], s.p[3], s.p[4], L, R, n); });
+            break;
+        case FxKind::Bloom:
+            p = std::make_unique<ReverbFx<reverbs::Bloom>>(
+                [](reverbs::Bloom& r, double sr, const FxSlotParams&) { r.configure(sr); },
+                [](reverbs::Bloom& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) { r.process(s.p[0], s.p[1], s.p[2], s.p[3], L, R, n); });
+            break;
+        case FxKind::Chorale:
+            p = std::make_unique<ReverbFx<reverbs::Chorale>>(
+                [](reverbs::Chorale& r, double sr, const FxSlotParams& s) { r.configure(sr, s.p[5]); },
+                [](reverbs::Chorale& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) {
+                    r.process(s.p[0], static_cast<int>(std::lround(s.p[1])), s.p[2], s.p[3], s.p[4], L, R, n);
+                });
+            break;
+        case FxKind::Shimmer:
+            p = std::make_unique<ReverbFx<reverbs::Shimmer>>(
+                [](reverbs::Shimmer& r, double sr, const FxSlotParams& s) { r.configure(sr, s.p[5]); },
+                [](reverbs::Shimmer& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) { r.process(s.p[0], s.p[1], s.p[2], s.p[3], s.p[4], L, R, n); });
+            break;
+        case FxKind::Magneto:
+            p = std::make_unique<ReverbFx<reverbs::Magneto>>(
+                [](reverbs::Magneto& r, double sr, const FxSlotParams&) { r.configure(sr); },
+                [](reverbs::Magneto& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext& ctx) {
+                    static const int kMasks[10] = {1, 2, 4, 8, 3, 6, 7, 15, 5, 10};
+                    const double beats = syncBeats(s.p[1]);
+                    const float sec = beats > 0.0 ? static_cast<float>(beats * 60.0 / std::max(1.0f, ctx.bpm)) : s.p[0] * 0.001f;
+                    r.process(sec, kMasks[std::clamp(static_cast<int>(std::lround(s.p[2])), 0, 9)], s.p[3], s.p[4], s.p[5], s.p[6], s.p[7], L, R, n);
+                });
+            break;
+        case FxKind::Nonlinear:
+            p = std::make_unique<ReverbFx<reverbs::Nonlinear>>(
+                [](reverbs::Nonlinear& r, double sr, const FxSlotParams&) { r.configure(sr); },
+                [](reverbs::Nonlinear& r, const FxSlotParams& s, float* L, float* R, int n, const FxContext&) {
+                    r.process(static_cast<int>(std::lround(s.p[0])), s.p[1], s.p[2], s.p[3], L, R, n);
+                });
+            break;
         case FxKind::Off: case FxKind::Count: return nullptr;
     }
     if (p) p->prepare(sampleRate);
@@ -621,9 +789,17 @@ public:
         sanitize(p);
         for (int c = 0; c < kFxChains; ++c)
             for (int s = 0; s < kFxSlots; ++s) {
-                const FxKind k = p.chain[c].slot[s].kind;
-                if (k == uiKind_[c][s]) continue;
+                const FxSlotParams& ns = p.chain[c].slot[s];
+                const FxKind k = ns.kind;
+                bool rebuild = k != uiKind_[c][s];
+                if (!rebuild) { // mesmo tipo: so recria se um parametro "rebuild" mudou
+                    const FxInfo& info = fxInfo(k);
+                    for (int i = 0; i < info.nParams; ++i)
+                        if (info.params[i].rebuild && ns.p[i] != ui_.chain[c].slot[s].p[i]) rebuild = true;
+                }
+                if (!rebuild) continue;
                 FxProcessor* fresh = makeFxProcessor(k, sampleRate_).release();
+                if (fresh) fresh->configure(ns);
                 FxProcessor* old = proc_[c][s].exchange(fresh, std::memory_order_acq_rel);
                 if (old) graveyard_.push_back({old, blocks_.load(std::memory_order_acquire)});
                 uiKind_[c][s] = k;
