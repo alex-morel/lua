@@ -50,7 +50,7 @@ ImGuiKey keyNamed(const std::string& n) {
 int main(int argc, char** argv) {
     if (argc < 2) { std::fprintf(stderr, "uso: ui_shot saida.bmp [click:X,Y | key:NOME | text:T | frames:N | load:NOME]...\n"); return 2; }
     SDL_Init(SDL_INIT_VIDEO);
-    SDL_Window* window = SDL_CreateWindow("dx7fm", 0, 0, 1440, 900, 0);
+    SDL_Window* window = SDL_CreateWindow("Mare Tranquillitatis", 0, 0, 1440, 900, 0);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();

@@ -18,7 +18,7 @@
 //  - so o caminho escalar em double da histerese (sem SSE);
 //  - infraestrutura trocada por equivalentes pequenos: SmoothedValue
 //    (linear/multiplicativo, como o do JUCE), oversampling 2x com os
-//    half-band do dx7fm, biquads RBJ, atraso com interpolacao de Lagrange 3a
+//    half-band do Mare Tranquillitatis, biquads RBJ, atraso com interpolacao de Lagrange 3a
 //    ordem, ruido normal/uniforme de std:: com semente de newRandomSeed();
 //  - blocos de tamanho variavel (o Surge assume BLOCK_SIZE fixo);
 //  - robustez: a checagem de instabilidade da histerese vale pros 2 lados
@@ -94,7 +94,7 @@ struct Biquad {
     }
 };
 
-// 2x: zera-e-filtra pra subir (o mesmo half-band do decimador, ganho 2), decimador do dx7fm pra descer
+// 2x: zera-e-filtra pra subir (o mesmo half-band do decimador, ganho 2), decimador do Mare Tranquillitatis pra descer
 class Oversampler2x {
 public:
     void reset() { for (auto& d : down_) d = HalfbandDecimator2x{}; for (auto& u : upHist_) for (float& x : u) x = 0.0f; upPos_[0] = upPos_[1] = 0; }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(dx7fm CXX)
+project(mare_tranquillitatis CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -44,7 +44,7 @@ endif()
 if(SDL2_FOUND AND ALSA_FOUND)
     set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/third_party/imgui)
 
-    add_executable(dx7fm_standalone
+    add_executable(mare_tranquillitatis
         app/main.cpp
         ${IMGUI_DIR}/imgui.cpp
         ${IMGUI_DIR}/imgui_draw.cpp
@@ -53,18 +53,18 @@ if(SDL2_FOUND AND ALSA_FOUND)
         ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
         ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
     )
-    target_include_directories(dx7fm_standalone PRIVATE
+    target_include_directories(mare_tranquillitatis PRIVATE
         src
         ${IMGUI_DIR}
         ${IMGUI_DIR}/backends
         ${SDL2_INCLUDE_DIRS}
         ${ALSA_INCLUDE_DIRS}
     )
-    target_compile_options(dx7fm_standalone PRIVATE -Wall -Wextra ${SDL2_CFLAGS_OTHER})
+    target_compile_options(mare_tranquillitatis PRIVATE -Wall -Wextra ${SDL2_CFLAGS_OTHER})
     # fonte da UI (Roboto Medium, distribuida com o Dear ImGui)
-    target_compile_definitions(dx7fm_standalone PRIVATE DX7FM_FONT_DIR="${IMGUI_DIR}/misc/fonts")
-    target_link_directories(dx7fm_standalone PRIVATE ${SDL2_LIBRARY_DIRS} ${ALSA_LIBRARY_DIRS})
-    target_link_libraries(dx7fm_standalone PRIVATE ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} Threads::Threads)
+    target_compile_definitions(mare_tranquillitatis PRIVATE DX7FM_FONT_DIR="${IMGUI_DIR}/misc/fonts")
+    target_link_directories(mare_tranquillitatis PRIVATE ${SDL2_LIBRARY_DIRS} ${ALSA_LIBRARY_DIRS})
+    target_link_libraries(mare_tranquillitatis PRIVATE ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} Threads::Threads)
 
     # [2026-10-29] screenshot da UI sem tela (tools/ui_shot.cpp inclui app/main.cpp)
     add_executable(ui_shot tools/ui_shot.cpp
@@ -76,5 +76,5 @@ if(SDL2_FOUND AND ALSA_FOUND)
     target_link_directories(ui_shot PRIVATE ${SDL2_LIBRARY_DIRS} ${ALSA_LIBRARY_DIRS})
     target_link_libraries(ui_shot PRIVATE ${SDL2_LIBRARIES} ${ALSA_LIBRARIES} Threads::Threads)
 else()
-    message(WARNING "SDL2 e/ou ALSA nao encontrados via pkg-config -- pulando o target dx7fm_standalone (o target 'demo' ainda compila normalmente).")
+    message(WARNING "SDL2 e/ou ALSA nao encontrados via pkg-config -- pulando o target mare_tranquillitatis (o target 'demo' ainda compila normalmente).")
 endif()

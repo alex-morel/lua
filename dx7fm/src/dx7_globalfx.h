@@ -32,7 +32,7 @@
 // (GlobalFxParams::order). Cada bloco e baseado num efeito open source de
 // referencia; origem e licenca no cabecalho de cada um e em
 // THIRD_PARTY_NOTICES.md. ATENCAO: o modo Plate do reverb (MVerb) e o
-// compressor (porta do ZamComp) sao GPL -- distribuir o dx7fm implica GPLv3
+// compressor (porta do ZamComp) sao GPL -- distribuir o Mare Tranquillitatis implica GPLv3
 // (ver LICENSE).
 //
 // Convencoes: process() e chamado 1x por amostra estereo; todo bloco
@@ -283,7 +283,7 @@ private:
 
 // -----------------------------------------------------------------------------
 // Delay estereo estilo fita -- implementacao propria (evolucao do delay
-// anterior do dx7fm). Feedback com cross-feed (ping-pong) passando por
+// anterior do Mare Tranquillitatis). Feedback com cross-feed (ping-pong) passando por
 // passa-altas + passa-baixas de 1 polo e saturacao tanh normalizada (ganho 1
 // pra sinal pequeno, entao nao instabiliza o loop); tempo suavizado (~60ms:
 // mexer no tempo da um "glide" de fita em vez de clique) e modulado por wow

@@ -11,7 +11,7 @@
 //       Surge Synth Team, GPLv3), portado;
 //   Swell, Bloom, Chorale, Shimmer, Magneto, Nonlinear -- combinacoes
 //       proprias dessas bases com o pitch shifter do Clouds (MIT) e o delay
-//       de fita do dx7fm.
+//       de fita do Mare Tranquillitatis.
 //
 // ATENCAO: o freeverb3 e o Cloud Seed tem .cpp (funcoes nao-inline) e sao
 // incluidos aqui como "unity build". Isso so funciona porque cada executavel

@@ -5,7 +5,7 @@
 // programacoes proprias que usam o que o SY77 tinha alem do DX7 -- formas de
 // onda por operador (AFM: meio seno, seno retificado...), filtros com
 // envelope, camada de ataque + camada de sustain, pan em movimento --
-// com os recursos nativos do dx7fm (8 operadores, wavetable de serra sem
+// com os recursos nativos do Mare Tranquillitatis (8 operadores, wavetable de serra sem
 // aliasing, filtro por operador, LFO global).
 namespace dx7fm_app::factory {
 

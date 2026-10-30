@@ -1,7 +1,7 @@
 # Componentes de terceiros e licenças
 
-O dx7fm inclui código e algoritmos portados de projetos open source. Como dois
-deles são GPL (MVerb, GPLv3; ZamComp, GPLv2 ou posterior), **o dx7fm como um
+O Mare Tranquillitatis inclui código e algoritmos portados de projetos open source. Como dois
+deles são GPL (MVerb, GPLv3; ZamComp, GPLv2 ou posterior), **o Mare Tranquillitatis como um
 todo é distribuído sob a GNU GPL versão 3** (texto completo em `LICENSE`).
 Quem distribuir o programa (binário ou fonte) precisa oferecer o código-fonte
 completo sob a GPLv3.
@@ -155,7 +155,7 @@ qualquer versão posterior" — usado aqui sob a GPLv3. Texto da GPLv2 em
 
 ### CHOW Tape Model, Surge XT, sst-effects, ZetaCarinaeModules, Dragonfly Reverb — GNU GPL v3
 
-O código portado desses projetos é GPLv3, a mesma licença do dx7fm (texto
+O código portado desses projetos é GPLv3, a mesma licença do Mare Tranquillitatis (texto
 completo em `LICENSE`). Avisos de copyright: CHOW Tape Model © Jatin
 Chowdhury; Surge XT © 2018-2024 Surge Synth Team e autores (originalmente
 © Claes Johanson / Vember Audio 2004-2018); sst-effects © Surge Synth Team;

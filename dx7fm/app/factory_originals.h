@@ -3,7 +3,7 @@
 #include "factory_sy.h"
 
 // [ADICIONADO em 2026-10-29] Patches originais: cada um mostra um recurso do
-// dx7fm que os FM classicos nao tinham (MPE, LFO sincronizado no filtro,
+// Mare Tranquillitatis que os FM classicos nao tinham (MPE, LFO sincronizado no filtro,
 // gate global, ring mod, frequency shifter, bitcrusher, matriz com lacos,
 // aditiva inarmonica com morph, arpejador aleatorio com S&H, ruido num comb).
 namespace dx7fm_app::factory {

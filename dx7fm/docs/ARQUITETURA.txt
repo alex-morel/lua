@@ -1,3 +1,10 @@
+NOME DO PROJETO [2026-10-30]: o projeto agora se chama Mare Tranquillitatis
+(antes dx7fm). Executavel: mare_tranquillitatis; configuracao:
+~/.config/mare-tranquillitatis/ (a pasta antiga ~/.config/dx7fm e copiada na
+primeira execucao, migrateLegacyConfig). Continuam com o nome antigo, por
+serem so internos: a pasta dx7fm/ do repositorio, os namespaces dx7fm e
+dx7fm_app, o prefixo dx7_ dos arquivos e as variaveis DX7FM_*.
+
 ================================================================================
  DX7-FM ENGINE — DOCUMENTACAO DE ARQUITETURA
  Synth FM de 8 operadores, 64 vozes, 4 partes (A/B/C/D), estilo DX7 + extensoes
@@ -185,7 +192,7 @@ dx7fm/
                       foram removidos pra nao inflar o repo a toa).
   CMakeLists.txt    - [ADICIONADO em 2026-09-21] Builda os DOIS targets:
                       `demo` (motor + testes, so precisa de -pthread, sem
-                      dependencia externa) e `dx7fm_standalone` (precisa de
+                      dependencia externa) e `mare_tranquillitatis` (precisa de
                       SDL2 e ALSA via pkg-config; se algum dos dois faltar,
                       o CMake pula esse target com um aviso em vez de falhar
                       a configuracao inteira -- `demo` sempre builda).
@@ -228,15 +235,15 @@ ausencia de data race formalmente):
 [ADICIONADO em 2026-09-21] Pra compilar o APP STANDALONE tambem (precisa de
 SDL2 e ALSA -- em distros Arch/derivadas: `pacman -S sdl2-compat alsa-lib`,
 em Debian/Ubuntu: `apt install libsdl2-dev libasound2-dev`), use o CMake
-(builda os dois targets, `demo` e `dx7fm_standalone`, numa tacada so):
+(builda os dois targets, `demo` e `mare_tranquillitatis`, numa tacada so):
 
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
     cmake --build build -j$(nproc)
     ./build/demo               # roda os 33 testes, igual ao g++ direto
-    ./build/dx7fm_standalone   # abre a janela do synth
+    ./build/mare_tranquillitatis   # abre a janela do synth
 
 Se SDL2 e/ou ALSA nao forem encontrados via pkg-config, o CMake AVISA e
-pula so o target dx7fm_standalone -- `demo` continua buildando normalmente
+pula so o target mare_tranquillitatis -- `demo` continua buildando normalmente
 (nao trava o desenvolvimento do motor em quem nao tem/nao quer as libs de
 audio/UI instaladas).
 
@@ -258,7 +265,7 @@ app/factory_bank.h (o mesmo banco "Fabrica" que o app mostra).
                            coarse/fine, algoritmos 1-32) -> bytes VCED ->
                            sysex::toPart, o mesmo caminho da importacao de .syx
   app/factory_sy.h         Estilo SY77 (ondas AFM, serra em wavetable, filtros)
-  app/factory_originals.h  Originais (um recurso do dx7fm por patch)
+  app/factory_originals.h  Originais (um recurso do Mare Tranquillitatis por patch)
 O volume de cada um e VoiceParams::volumeDb (vai com o patch; o nivel da parte
 e do mix e fica ao trocar de patch). No app: botao Fabrica no card PATCH.
 Ferramentas de design: ./build/audition [pasta] [filtro] (previa + envelope em
@@ -1944,7 +1951,7 @@ simulador de fita aberto. Plano em 7 passos, um commit cada (19cec00,
   POR NOME; efeito desconhecido vira slot vazio, parametro desconhecido e
   ignorado, ausentes ficam no padrao. Presets do usuario em fxpresets/
   (relativo ao diretorio do app, como patches/); 28 presets de fabrica em
-  app/fx_factory.h; ultimo estado em $XDG_CONFIG_HOME/dx7fm/fxrack.json
+  app/fx_factory.h; ultimo estado em $XDG_CONFIG_HOME/mare-tranquillitatis/fxrack.json
   (salvo 1 s depois da ultima mudanca e na saida). O rack NAO vai no patch.
 
   UI: app/fx_rack_ui.h (desenho) + app/fx_rack_logic.h (sem ImGui, testada
@@ -2530,7 +2537,7 @@ snd_pcm_recover() (contabilizado em underruns(), mostrado na UI).
 
 13.3 BACKEND DE MIDI (app/alsa_midi.h -- AlsaMidiIn)
 
-Cria uma porta ALSA sequencer de ENTRADA ("dx7fm":"input") que aparece
+Cria uma porta ALSA sequencer de ENTRADA ("Mare Tranquillitatis":"input") que aparece
 pra outros apps/hardware se conectarem (via `aconnect`, `qjackctl`,
 `aconnectgui`, ou automaticamente em hosts que fazem isso). Usa poll()
 com timeout de 200ms em vez de snd_seq_event_input() bloqueante -- e
@@ -2635,7 +2642,7 @@ harnesses de teste/screenshot).
       Harmonicos (barras de PartialBars com razoes inteiras, presets
       harmonicos) e WAV (WavBrowser de file_browser.h -- extraido do
       dialogo de ressintese --; frame de wavetable ou periodo de um som).
-  app/settings.h - [ADICIONADO em 2026-10-24] ~/.config/dx7fm/settings.json
+  app/settings.h - [ADICIONADO em 2026-10-24] ~/.config/mare-tranquillitatis/settings.json
       (XDG_CONFIG_HOME respeitado): oversampling, seguir clock MIDI, CCs
       aprendidos (um por alvo, um alvo por CC) e caminhos de afinacao.
       O popup "Configuracoes" (topo) troca o oversampling reiniciando o
@@ -2747,7 +2754,7 @@ documentado na secao 7 pra quem usa a API C++ direto.
     dois pacotes e um servidor X11/XWayland, mas "deveria" nao e "foi
     testado".
   - Sem instalador/pacote (.deb/.AppImage/PKGBUILD) -- roda so a partir
-    da arvore de build (./build/dx7fm_standalone).
+    da arvore de build (./build/mare_tranquillitatis).
 
 
 --------------------------------------------------------------------------------

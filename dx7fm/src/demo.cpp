@@ -4934,6 +4934,23 @@ static void testFxRackUiLogic() {
     check(choiceCount("A|B|C") == 3 && choiceAt("A|B|C", 1) == "B" && choiceAt("A|B|C", 2) == "C", "pedaleira: escolhas 'A|B|C'");
 }
 
+// [2026-10-30] renomeacao: a configuracao do nome antigo e copiada uma vez, sem apagar a original
+static void testLegacyConfigMigration() {
+    namespace fs = std::filesystem;
+    const fs::path base = fs::temp_directory_path() / "mare_migracao_teste";
+    fs::remove_all(base);
+    fs::create_directories(base / "dx7fm");
+    std::ofstream(base / "dx7fm" / "fxrack.json") << "antigo";
+    const bool first = dx7fm_app::migrateLegacyConfig(base);
+    auto read = [](const fs::path& f) { std::ifstream i(f); std::string x; i >> x; return x; };
+    check(first && read(base / "mare-tranquillitatis" / "fxrack.json") == "antigo" && fs::exists(base / "dx7fm" / "fxrack.json"),
+          "renomeacao: a configuracao antiga e copiada e a original fica");
+    std::ofstream(base / "mare-tranquillitatis" / "fxrack.json") << "novo";
+    check(!dx7fm_app::migrateLegacyConfig(base) && read(base / "mare-tranquillitatis" / "fxrack.json") == "novo",
+          "renomeacao: nao sobrescreve a configuracao nova");
+    fs::remove_all(base);
+}
+
 static void testMicroGranular() {
     auto tone = [](float hz, int len) { return [hz, len](int i) { return i < len ? 0.4f * std::sin(2.0f * kPi * hz * i / 48000.0f) : 0.0f; }; };
     // Hold: a entrada acaba em 1 s; sem Hold o Mosaic some, com Hold continua
@@ -5388,6 +5405,7 @@ int main() {
     testFxExpressionPedal();
     testFxFactoryPresets();
     testFxRackUiLogic();
+    testLegacyConfigMigration();
     testGlobalFxOrder();
     testGlobalFxCost();
     testDeadOperatorRevivedByLiveEdit();

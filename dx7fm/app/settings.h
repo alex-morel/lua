@@ -11,7 +11,7 @@
 #include <vector>
 
 // [ADICIONADO em 2026-10-24] Configuracoes do APP (nao do patch), em
-// $XDG_CONFIG_HOME/dx7fm/settings.json (ou ~/.config/dx7fm/settings.json):
+// $XDG_CONFIG_HOME/mare-tranquillitatis/settings.json (ou ~/.config/mare-tranquillitatis/settings.json):
 // oversampling, modo do clock, mapeamentos de CC (MIDI learn) e os ultimos
 // arquivos de afinacao de cada parte. Usa o JSON de dx7_patch_io.h.
 namespace dx7fm_app {
@@ -59,11 +59,27 @@ struct AppSettings {
     }
 };
 
-inline std::filesystem::path settingsPath() {
+inline std::filesystem::path configBaseDir() {
     const char* xdg = std::getenv("XDG_CONFIG_HOME");
     const char* home = std::getenv("HOME");
-    std::filesystem::path base = xdg && *xdg ? std::filesystem::path(xdg) : std::filesystem::path(home ? home : ".") / ".config";
-    return base / "dx7fm" / "settings.json";
+    return xdg && *xdg ? std::filesystem::path(xdg) : std::filesystem::path(home ? home : ".") / ".config";
+}
+
+inline std::filesystem::path settingsPath() { return configBaseDir() / "mare-tranquillitatis" / "settings.json"; }
+
+// [2026-10-30] o projeto se chamava dx7fm: na primeira execucao com o nome novo,
+// copia a pasta de configuracao antiga (a original fica intacta). Copia numa
+// pasta temporaria e renomeia, pra uma copia pela metade nao valer como migrada.
+inline bool migrateLegacyConfig(const std::filesystem::path& base = configBaseDir()) {
+    namespace fs = std::filesystem;
+    const fs::path oldDir = base / "dx7fm", newDir = base / "mare-tranquillitatis", tmp = base / "mare-tranquillitatis.tmp";
+    std::error_code ec;
+    if (fs::exists(newDir, ec) || !fs::is_directory(oldDir, ec)) return false;
+    fs::remove_all(tmp, ec);
+    fs::copy(oldDir, tmp, fs::copy_options::recursive, ec);
+    if (!ec) fs::rename(tmp, newDir, ec);
+    if (ec) { std::error_code ignore; fs::remove_all(tmp, ignore); return false; }
+    return true;
 }
 
 // [2026-10-29] ultimo estado do rack de efeitos (ao lado do settings.json)

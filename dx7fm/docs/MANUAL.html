@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Manual do dx7fm</title>
-<meta name="description" content="Guia de uso do dx7fm standalone: instalação, tocar notas, entender a interface e desenhar patches FM.">
+<title>Manual do Mare Tranquillitatis</title>
+<meta name="description" content="Guia de uso do Mare Tranquillitatis: instalação, tocar notas, entender a interface e desenhar patches FM.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,700;0,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
@@ -418,10 +418,10 @@
 
 <div class="layout">
   <nav class="toc" id="tocNav">
-    <div class="brand"><span class="mark"></span><span>dx7fm</span></div>
+    <div class="brand"><span class="mark"></span><span>Mare Tranquillitatis</span></div>
     <button class="toggle" id="tocToggle">Índice ▾</button>
     <ol>
-      <li><a href="#intro">O que é o dx7fm</a></li>
+      <li><a href="#intro">O que é o Mare Tranquillitatis</a></li>
       <li><a href="#instalacao">Instalação</a></li>
       <li><a href="#primeira-execucao">Primeira execução</a></li>
       <li><a href="#tocando">Tocando notas</a></li>
@@ -439,7 +439,7 @@
   <main>
     <header class="hero">
       <p class="eyebrow">Manual do usuário</p>
-      <h1>dx7fm standalone</h1>
+      <h1>Mare Tranquillitatis</h1>
       <p>Synth de síntese FM/PM de 8 operadores, com áudio e MIDI em tempo real via ALSA e uma interface leve que roda sem GPU — pensado pra funcionar numa distro Linux minimal. Este manual cobre o aplicativo standalone: instalar, tocar, entender a interface e montar um patch do zero.</p>
       <div class="tagrow">
         <span class="tag">8 operadores</span>
@@ -451,7 +451,7 @@
     </header>
 
     <section id="intro">
-      <h2><span class="num">01</span>O que é o dx7fm</h2>
+      <h2><span class="num">01</span>O que é o Mare Tranquillitatis</h2>
       <p class="lede">Um motor de síntese FM inspirado no Yamaha DX7, mas deliberadamente estendido.</p>
       <p>Cada voz tem <strong>8 operadores</strong> (o DX7 original tinha 6) ligados numa matriz de roteamento livre — não os 32 algoritmos fixos do hardware original, mas conexões que você desenha (ou monta a partir de um preset). Cada operador pode usar uma entre 12 formas de onda, ter seu próprio filtro/distorção, e o motor inteiro toca 64 vozes ao mesmo tempo, divididas em até 4 "partes" com timbres independentes — como ter 4 DX7 tocando juntos, cada um num canal MIDI.</p>
       <p>O aplicativo standalone que este manual descreve é a parte "tocável": ele abre um dispositivo de áudio de verdade, aceita um teclado MIDI ou o teclado do seu computador, e mostra uma interface gráfica leve o bastante pra rodar sem placa de vídeo dedicada.</p>
@@ -475,17 +475,17 @@
       <h3>Build</h3>
       <pre><code>cmake -S dx7fm -B dx7fm/build -DCMAKE_BUILD_TYPE=Release
 cmake --build dx7fm/build -j$(nproc)</code></pre>
-      <p>Isso gera dois executáveis em <code>dx7fm/build/</code>: <code>demo</code> (roda a suíte de testes do motor) e <code>dx7fm_standalone</code> (o aplicativo).</p>
+      <p>Isso gera dois executáveis em <code>dx7fm/build/</code>: <code>demo</code> (roda a suíte de testes do motor) e <code>mare_tranquillitatis</code> (o aplicativo).</p>
 
       <div class="callout">
         <strong>Sem SDL2/ALSA instalados?</strong>
-        <p>O CMake ainda builda o motor e os testes normalmente — só avisa e pula o <code>dx7fm_standalone</code>. Você pode desenvolver/testar o motor sem instalar nada de áudio.</p>
+        <p>O CMake ainda builda o motor e os testes normalmente — só avisa e pula o <code>mare_tranquillitatis</code>. Você pode desenvolver/testar o motor sem instalar nada de áudio.</p>
       </div>
     </section>
 
     <section id="primeira-execucao">
       <h2><span class="num">03</span>Primeira execução</h2>
-      <pre><code>./dx7fm/build/dx7fm_standalone</code></pre>
+      <pre><code>./dx7fm/build/mare_tranquillitatis</code></pre>
       <p>Uma janela abre com um cabeçalho no topo:</p>
       <div class="panel">
         <div class="panel-label">Cabeçalho</div>
@@ -511,9 +511,9 @@ cmake --build dx7fm/build -j$(nproc)</code></pre>
       <p class="lede">Duas formas de tocar, simultâneas: um controlador MIDI de verdade, ou o teclado do computador.</p>
 
       <h3>MIDI</h3>
-      <p>O app cria uma porta ALSA sequencer de entrada chamada <span class="kbd">dx7fm:input</span>. Conecte seu controlador com:</p>
+      <p>O app cria uma porta ALSA sequencer de entrada chamada <span class="kbd">Mare Tranquillitatis:input</span>. Conecte seu controlador com:</p>
       <pre><code>aconnect -l                 # lista as portas disponíveis
-aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
+aconnect '&lt;seu controlador&gt;' 'Mare Tranquillitatis'</code></pre>
       <p>Por padrão <strong>só a Parte A vem habilitada</strong>. B, C e D começam desligadas: marque <strong>Habilitada</strong> na aba delas pra empilhar camadas (layer) ou, com faixas de teclas diferentes, dividir o teclado (split).</p>
       <p>Depois de conectado, cada parte habilitada recebe as notas de acordo com o <strong>canal MIDI</strong> configurado nela (0 = omni, recebe de qualquer canal; 1–16 = só daquele canal). CC1 (mod wheel), CC64 (sustain), CC66 (sostenuto), CC120/CC123 (all sound/notes off), CC121 (reset controllers), pitch bend, aftertouch de canal e aftertouch polifônico também são traduzidos automaticamente.</p>
 
@@ -613,12 +613,12 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
       <p><strong>Reverbs</strong> — 12 "máquinas", no espírito das pedaleiras de reverb: <strong>Hall</strong>, <strong>Room</strong>, <strong>Plate</strong> e <strong>Reflections</strong> (primeiras reflexões de 8 salas; base: Dragonfly Reverb), <strong>Cloud</strong> (cauda longa e modulada; Cloud Seed), <strong>Spring</strong> (mola; Surge), <strong>Swell</strong> (o volume sobe sozinho a cada nota), <strong>Bloom</strong> (a cauda "floresce" depois do ataque), <strong>Chorale</strong> (a cauda canta uma vogal), <strong>Shimmer</strong> (a cauda sobe uma oitava, ou o intervalo escolhido, a cada volta), <strong>Magneto</strong> (eco de várias cabeças de fita difuso) e <strong>Nonlinear</strong> (Reverse, Swoosh, Ramp e Gate). O reverb antigo (Room/Hall/Plate com freeze) continua como <em>Reverb clássico</em>.</p>
       <p><strong>Micro (granular)</strong> — grava continuamente os últimos segundos e toca pedaços: <em>Mosaic</em>, <em>Seq</em> e <em>Glide</em> (micro-loops em camadas, em sequência no tempo, deslizando de altura), <em>Haze</em>, <em>Tunnel</em> e <em>Strum</em> (nuvem de grãos, drone que segue a entrada, grãos disparados por ataques), <em>Blocks</em>, <em>Interrupt</em> e <em>Arp</em> (cortes, interrupções, grãos em arpejo) e <em>Pattern</em>/<em>Warp</em> (delays múltiplos em padrão rítmico ou entortando a altura). <strong>Hold</strong> congela o que foi gravado.</p>
       <p><strong>Fita</strong> — <em>Simulador de fita</em> (CHOW Tape: saturação magnética, bias, velocidade, perdas da cabeça, wow, flutter, fita amassada e degradação) e <em>Fita leve</em> (Airwindows ToTape, mais barato de CPU). Delays e efeitos com <strong>Sync</strong> seguem o BPM do topo (1/4, 1/8 pontuada, tercinas…).</p>
-      <p><strong>Presets</strong> (barra no topo da aba) — o menu traz os 28 presets de fábrica (básicos, delays e fita, reverbs, granular, roteamento por parte e algoritmos) e os seus, salvos em <code>fxpresets/</code> (um JSON por preset, como os patches). <strong>Salvar</strong> grava o rack inteiro com o nome ao lado; <strong>Init</strong> esvazia o rack; <strong>Desfazer/Refazer</strong> (Ctrl+Z / Ctrl+Y) valem pra tudo na aba. O estado do rack volta sozinho quando o app reabre (fica em <code>~/.config/dx7fm/fxrack.json</code>). Os efeitos não vão no patch: os patches guardam o som das partes.</p>
+      <p><strong>Presets</strong> (barra no topo da aba) — o menu traz os 28 presets de fábrica (básicos, delays e fita, reverbs, granular, roteamento por parte e algoritmos) e os seus, salvos em <code>fxpresets/</code> (um JSON por preset, como os patches). <strong>Salvar</strong> grava o rack inteiro com o nome ao lado; <strong>Init</strong> esvazia o rack; <strong>Desfazer/Refazer</strong> (Ctrl+Z / Ctrl+Y) valem pra tudo na aba. O estado do rack volta sozinho quando o app reabre (fica em <code>~/.config/mare-tranquillitatis/fxrack.json</code>). Os efeitos não vão no patch: os patches guardam o som das partes.</p>
       <p><strong>Pedal de expressão</strong> — o botão <strong>EXP</strong> de um pedal escolhe o parâmetro que o pedal controla (ex.: a posição do wah, a velocidade do rotary, o Hold do Micro). No card <strong>Pedal de expressão</strong> ficam a faixa (<em>Calcanhar</em> → <em>Ponta</em>), o botão de MIDI learn do CC do pedal e um controle pra testar pela tela.</p>
       <p>Depois dos efeitos vem o <strong>Volume geral</strong> e o limitador de saída.</p>
       <div class="callout">
         <strong>Licença</strong>
-        <p>Vários efeitos vêm de projetos GPL (MVerb, ZamComp, CHOW Tape, Dragonfly/freeverb3, Surge), então o dx7fm é distribuído sob a <strong>GNU GPL v3</strong>. Origem e licença de cada componente em <code>THIRD_PARTY_NOTICES.md</code>.</p>
+        <p>Vários efeitos vêm de projetos GPL (MVerb, ZamComp, CHOW Tape, Dragonfly/freeverb3, Surge), então o Mare Tranquillitatis é distribuído sob a <strong>GNU GPL v3</strong>. Origem e licença de cada componente em <code>THIRD_PARTY_NOTICES.md</code>.</p>
       </div>
     </section>
 
@@ -680,7 +680,7 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
         </figure>
       </div>
 
-      <p>O <strong>feedback</strong> é um caso especial: um operador modulando a si mesmo (com o valor da amostra anterior, já que não dá pra usar "o próprio valor de agora"). Em quantidade pequena, dá mais brilho/harmônicos; em quantidade alta, vira ruído caótico. No dx7fm cada operador tem seu próprio feedback (0 a 1) — o DX7 original restringia isso a um único operador por algoritmo.</p>
+      <p>O <strong>feedback</strong> é um caso especial: um operador modulando a si mesmo (com o valor da amostra anterior, já que não dá pra usar "o próprio valor de agora"). Em quantidade pequena, dá mais brilho/harmônicos; em quantidade alta, vira ruído caótico. No Mare Tranquillitatis cada operador tem seu próprio feedback (0 a 1) — o DX7 original restringia isso a um único operador por algoritmo.</p>
     </section>
 
     <section id="tutorial">
@@ -801,13 +801,13 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
       <p>Só a zona inferior é suportada (a superior, com mestre no canal 16, não).</p>
 
       <h3>BPM, clock MIDI e LFO global</h3>
-      <p>O knob <strong>BPM</strong> (topo) é o tempo dos LFOs e envelopes com Sync e do arpejador. Se um teclado, sequenciador ou DAW mandar <strong>clock MIDI</strong> pra porta do dx7fm, o BPM passa a seguir o clock (o knob mostra “BPM (MIDI)”); dá pra desligar isso em Configurações. Cada LFO tem a opção <strong>Global</strong>: em vez de um LFO por nota, a parte inteira usa um só — num acorde, todas as notas ondulam juntas. Um LFO global com Sync fica alinhado ao compasso (e ao Start do clock). A velocidade de um LFO global pode ser modulada na matriz (destino “LFO rate”) pelo mod wheel, aftertouch, pitch bend, macros ou outro LFO global — fontes que mudam de nota pra nota (velocity, nota, envelopes) não valem pra ele, já que ele é um só pra parte.</p>
+      <p>O knob <strong>BPM</strong> (topo) é o tempo dos LFOs e envelopes com Sync e do arpejador. Se um teclado, sequenciador ou DAW mandar <strong>clock MIDI</strong> pra porta do Mare Tranquillitatis, o BPM passa a seguir o clock (o knob mostra “BPM (MIDI)”); dá pra desligar isso em Configurações. Cada LFO tem a opção <strong>Global</strong>: em vez de um LFO por nota, a parte inteira usa um só — num acorde, todas as notas ondulam juntas. Um LFO global com Sync fica alinhado ao compasso (e ao Start do clock). A velocidade de um LFO global pode ser modulada na matriz (destino “LFO rate”) pelo mod wheel, aftertouch, pitch bend, macros ou outro LFO global — fontes que mudam de nota pra nota (velocity, nota, envelopes) não valem pra ele, já que ele é um só pra parte.</p>
 
       <h3>Microafinação (Scala)</h3>
       <p>No card <strong>PARTE</strong>, a linha <strong>Afinação</strong> carrega uma escala no formato Scala (<span class="mono">.scl</span>, milhares de escalas disponíveis gratuitamente) e, opcionalmente, um mapeamento de teclado (<span class="mono">.kbm</span>: quais teclas tocam quais graus, a nota e a frequência de referência, e teclas sem som). Sem <span class="mono">.kbm</span>, cada tecla é um grau da escala a partir do C4 e o lá (nota 69) fica no <strong>A4</strong> escolhido (380–500 Hz). <strong>12-TET</strong> volta ao temperamento igual. A afinação é da parte (trocar de patch não muda) e o app lembra os arquivos no próximo início.</p>
 
       <h3>Configurações</h3>
-      <p>O botão <strong>Configurações</strong> (embaixo do logo) abre: <strong>oversampling</strong> 1×/2×/4× (menos aliasing em FM agressiva e notas agudas, ao custo de ~2×/~4× de CPU nas vozes; trocar corta as notas que estiverem soando), <strong>seguir o clock MIDI</strong> e a lista do <strong>MIDI learn</strong>. Ficam salvas em <span class="mono">~/.config/dx7fm/settings.json</span>.</p>
+      <p>O botão <strong>Configurações</strong> (embaixo do logo) abre: <strong>oversampling</strong> 1×/2×/4× (menos aliasing em FM agressiva e notas agudas, ao custo de ~2×/~4× de CPU nas vozes; trocar corta as notas que estiverem soando), <strong>seguir o clock MIDI</strong> e a lista do <strong>MIDI learn</strong>. Ficam salvas em <span class="mono">~/.config/mare-tranquillitatis/settings.json</span>.</p>
 
       <h3>Morph entre algoritmos</h3>
       <p>No card <strong>Algoritmo</strong>, a fileira <strong>Algoritmos 1 2 …</strong> guarda até <strong>8 algoritmos</strong> no mesmo patch. Clique num número pra editar aquele algoritmo (o combo de algoritmos e a matriz avançada passam a valer pra ele); <strong>+</strong> cria um novo, copiando o que está em edição, e <strong>−</strong> remove o que está em edição. Com dois ou mais, aparece a <strong>régua do morph</strong>: arraste o marcador laranja pra escolher a posição — ela passa pelos algoritmos em ordem, e no meio do caminho as conexões são misturadas (uma modulação que só existe num deles vai sumindo aos poucos, como um índice de FM diminuindo). <strong>Saltar</strong> pula de algoritmo em algoritmo em vez de passar pelo meio. <strong>Ver posição</strong> faz o diagrama mostrar o ponto do morph, com as setas mais grossas onde a conexão é mais forte. Pra mover o morph durante a nota, use o destino <strong>AlgoMorph</strong> na matriz de modulação (com um LFO, um envelope com loop, a mod wheel…).</p>
@@ -843,11 +843,11 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
       <p>Confira a barra de status: se aparecer "Audio: PARADO" com uma mensagem de erro, o ALSA não conseguiu abrir o dispositivo <code>default</code>. Rode <code>aplay -l</code> num terminal pra ver os dispositivos disponíveis — se o seu não for o default do sistema, isso ainda não é configurável direto na interface nesta versão (ver seção 11).</p>
 
       <h3>MIDI não conecta</h3>
-      <p>Confirme que a porta apareceu: <code>aconnect -l</code> deve listar um cliente chamado <span class="kbd">dx7fm</span>. Se não aparecer, o ALSA sequencer pode não ter permissão — verifique se seu usuário está no grupo <code>audio</code>.</p>
+      <p>Confirme que a porta apareceu: <code>aconnect -l</code> deve listar um cliente chamado <span class="kbd">Mare Tranquillitatis</span>. Se não aparecer, o ALSA sequencer pode não ter permissão — verifique se seu usuário está no grupo <code>audio</code>.</p>
 
       <h3>Estalos ou cortes no áudio (xruns)</h3>
       <p>O contador de <strong>xruns</strong> na barra de status sobe quando o buffer de áudio não é preenchido a tempo. Costuma indicar CPU sobrecarregada — feche outros programas pesados, ou reduza o número de vozes/partes ativas simultaneamente.</p>
-      <p>O áudio usa vários núcleos: as vozes são divididas entre algumas threads (cerca de uma por núcleo físico, até 7 além da thread de áudio). Pra mudar isso, abra o app com a variável <span class="mono">DX7FM_THREADS</span> (ex.: <span class="mono">DX7FM_THREADS=0 ./dx7fm_standalone</span> pra usar uma thread só). As threads de áudio tentam prioridade de tempo real; se o seu usuário não tiver permissão (<span class="mono">rtprio</span> em <span class="mono">/etc/security/limits.conf</span>, ou o grupo <span class="mono">audio</span>/<span class="mono">realtime</span>), elas rodam com prioridade normal — funciona, só fica mais sujeito a xruns com o PC carregado.</p>
+      <p>O áudio usa vários núcleos: as vozes são divididas entre algumas threads (cerca de uma por núcleo físico, até 7 além da thread de áudio). Pra mudar isso, abra o app com a variável <span class="mono">DX7FM_THREADS</span> (ex.: <span class="mono">DX7FM_THREADS=0 ./mare_tranquillitatis</span> pra usar uma thread só). As threads de áudio tentam prioridade de tempo real; se o seu usuário não tiver permissão (<span class="mono">rtprio</span> em <span class="mono">/etc/security/limits.conf</span>, ou o grupo <span class="mono">audio</span>/<span class="mono">realtime</span>), elas rodam com prioridade normal — funciona, só fica mais sujeito a xruns com o PC carregado.</p>
 
       <h3>Nenhum som ao tocar uma nota</h3>
       <p>Confira: a parte está <strong>Habilitada</strong>? O <strong>output mix</strong> de pelo menos um operador está acima de zero (ele precisa ser uma portadora)? O <strong>nível</strong> da parte não está em zero?</p>
@@ -865,7 +865,7 @@ aconnect '&lt;seu controlador&gt;' 'dx7fm'</code></pre>
     </section>
 
     <footer>
-      dx7fm — motor de síntese FM de 8 operadores e app standalone para Linux. Manual gerado em 2026-09-21.
+      Mare Tranquillitatis — motor de síntese FM de 8 operadores e app standalone para Linux. Manual gerado em 2026-09-21.
     </footer>
   </main>
 </div>

@@ -1,4 +1,4 @@
-// dx7fm standalone: app de audio real-time (ALSA) com UI leve (Dear ImGui +
+// Mare Tranquillitatis: app de audio real-time (ALSA) com UI leve (Dear ImGui +
 // SDL2/SDLRenderer2, sem exigir GPU/OpenGL) e entrada de notas via MIDI
 // (ALSA sequencer) e/ou teclado do computador. Ver ARQUITETURA.txt secao 13.
 #include "dx7_params.h"
@@ -1527,7 +1527,7 @@ void DrawFactoryBank(AppState& app, int part) {
         ImGui::TextDisabled("Clique num patch pra carregar nesta parte e ouvir.\n"
                             "Da pra ir trocando enquanto toca; Ctrl+Z volta ao som anterior.\n\n"
                             "Familias:\n"
-                            "  Demonstracao  - um recurso do dx7fm por patch\n"
+                            "  Demonstracao  - um recurso do Mare Tranquillitatis por patch\n"
                             "  Estilo DX7    - programados em parametros do DX7 (algoritmos originais)\n"
                             "  Estilo SY77   - ondas AFM, filtros, camadas de ataque + sustain\n"
                             "  Originais     - MPE, LFO sincronizado, ring mod, shifter, crusher, lacos...");
@@ -2046,16 +2046,16 @@ void DrawTopBar(AppState& app) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::rgb(24, 27, 35));
     ImGui::BeginChild("##header", ImVec2(0, 92), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
     if (ImGui::BeginTable("##hdr", 3, ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("logo", ImGuiTableColumnFlags_WidthFixed, 150.0f);
+        ImGui::TableSetupColumn("logo", ImGuiTableColumnFlags_WidthFixed, 215.0f);
         ImGui::TableSetupColumn("status", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("saida", ImGuiTableColumnFlags_WidthFixed, 380.0f); // medidores (200) + knobs BPM e Volume
         ImGui::TableNextRow();
 
         // logo
         ImGui::TableSetColumnIndex(0);
-        ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 2.0f);
+        ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.35f);
         ImGui::PushStyleColor(ImGuiCol_Text, ui::col::kAccent);
-        ImGui::TextUnformatted("dx7fm");
+        ImGui::TextUnformatted("Mare Tranquillitatis");
         ImGui::PopStyleColor();
         ImGui::PopFont();
         ImGui::TextDisabled("8-OP FM SYNTH");
@@ -2073,7 +2073,7 @@ void DrawTopBar(AppState& app) {
             ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "(%s)", app.audioOut.lastError().c_str());
         }
         ImGui::SameLine(0, 18);
-        StatusChip(app.midiIn.isOpen(), app.midiIn.isOpen() ? "MIDI: porta ALSA dx7fm:input" : "MIDI indisponivel");
+        StatusChip(app.midiIn.isOpen(), app.midiIn.isOpen() ? "MIDI: porta ALSA Mare Tranquillitatis:input" : "MIDI indisponivel");
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Conecte seu controlador com 'aconnect' ou no seu patchbay");
         ImGui::TextDisabled("Teclado do PC: base nota %d (Z/X oitava)  canal", app.piano.baseNote());
         ImGui::SameLine();
@@ -2222,7 +2222,7 @@ void DrawMainUi(AppState& app, int forceTab = -1) {
     app.followClock.store(app.settings.midiClock, std::memory_order_relaxed);
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-    ImGui::Begin("dx7fm", nullptr,
+    ImGui::Begin("Mare Tranquillitatis", nullptr,
                   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
 
     DrawTopBar(app);
@@ -2263,6 +2263,7 @@ void DrawMainUi(AppState& app, int forceTab = -1) {
 // [2026-10-29] Estado inicial do app (configuracoes, banco de fabrica, synth,
 // partes). Separado do main() pra tools/ui_shot.cpp montar o mesmo estado.
 void initAppState(AppState& app) {
+    dx7fm_app::migrateLegacyConfig();
     app.settings = dx7fm_app::loadSettings();
     app.mpeWantOn.store(app.settings.mpe);
     app.mpeWantBend.store(app.settings.mpeBendRange);
@@ -2306,7 +2307,7 @@ int main(int, char**) {
         return 1;
     }
 
-    SDL_Window* window = SDL_CreateWindow("dx7fm standalone", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+    SDL_Window* window = SDL_CreateWindow("Mare Tranquillitatis", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                            1440, 900, SDL_WINDOW_RESIZABLE);
     if (!window) {
         std::fprintf(stderr, "SDL_CreateWindow falhou: %s\n", SDL_GetError());
@@ -2344,7 +2345,7 @@ int main(int, char**) {
         app.synth.init(actualRate, kMaxVoices, app.settings.oversample);
         app.audioOut.start("default", actualRate, kPeriodFrames, render);
     }
-    app.midiIn.start("dx7fm", "input", [&app](const MidiEvent& ev) { onMidiEvent(app, ev); });
+    app.midiIn.start("Mare Tranquillitatis", "input", [&app](const MidiEvent& ev) { onMidiEvent(app, ev); });
 
     bool running = true;
     while (running) {
