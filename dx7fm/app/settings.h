@@ -17,7 +17,8 @@
 namespace dx7fm_app {
 
 // Alvo de um CC aprendido
-enum class CcTarget : int { Macro1, Macro2, Macro3, Macro4, MasterVolume, Bpm };
+// [2026-10-29] Expression: pedal de expressao do rack de efeitos (FxRackParams::expr)
+enum class CcTarget : int { Macro1, Macro2, Macro3, Macro4, MasterVolume, Bpm, Expression };
 inline const char* ccTargetName(CcTarget t) {
     switch (t) {
         case CcTarget::Macro1: return "Macro1";
@@ -26,6 +27,7 @@ inline const char* ccTargetName(CcTarget t) {
         case CcTarget::Macro4: return "Macro4";
         case CcTarget::MasterVolume: return "Volume";
         case CcTarget::Bpm: return "BPM";
+        case CcTarget::Expression: return "Expressao";
     }
     return "Macro1";
 }
@@ -63,6 +65,9 @@ inline std::filesystem::path settingsPath() {
     std::filesystem::path base = xdg && *xdg ? std::filesystem::path(xdg) : std::filesystem::path(home ? home : ".") / ".config";
     return base / "dx7fm" / "settings.json";
 }
+
+// [2026-10-29] ultimo estado do rack de efeitos (ao lado do settings.json)
+inline std::filesystem::path fxRackStatePath() { return settingsPath().parent_path() / "fxrack.json"; }
 
 inline std::string settingsToJson(const AppSettings& s) {
     using dx7fm::JsonValue;
@@ -104,7 +109,7 @@ inline AppSettings settingsFromJson(const std::string& text) {
             const JsonValue& e = cc->at(i);
             int n = static_cast<int>(e.numberAt("cc", -1));
             std::string t = e.stringAt("target", "");
-            for (int k = 0; k <= static_cast<int>(CcTarget::Bpm); ++k)
+            for (int k = 0; k <= static_cast<int>(CcTarget::Expression); ++k)
                 if (t == ccTargetName(static_cast<CcTarget>(k)) && n >= 0 && n < 128) s.learn(static_cast<CcTarget>(k), n);
         }
     if (auto* tun = j.find("tuning"))

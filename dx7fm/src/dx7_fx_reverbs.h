@@ -749,11 +749,16 @@ public:
         float* io[2] = {L, R};
         for (int c = 0; c < 2; ++c)
             for (int k = 0; k < 3; ++k) f_[c][k].setParams(kF[v][k] * (c ? 1.02f : 1.0f), resonance);
+        // o passa-banda do SVF tem pico = Q: normaliza pra pico 1 (senao um tom
+        // em cima do formante sai Q vezes mais alto) e compensa so em parte a
+        // perda de banda larga (~10*log10(Q) dB): 1.5*Q^0.25
+        const float r = std::max(1.0f, resonance);
+        const float g = 1.5f * std::sqrt(std::sqrt(r)) / r;
         for (int i = 0; i < n; ++i)
             for (int c = 0; c < 2; ++c) {
                 float y = 0.0f;
                 for (int k = 0; k < 3; ++k) y += kG[k] * f_[c][k].process(io[c][i]).bp;
-                io[c][i] = (1.0f - amount) * io[c][i] + amount * 1.6f * y;
+                io[c][i] = (1.0f - amount) * io[c][i] + amount * g * y;
             }
     }
 
@@ -763,43 +768,69 @@ private:
     TPTStateVariableFilter f_[2][3];
 };
 
-// Shimmer: Hall com dois pitch shifters (Clouds) na realimentacao -- cada
-// volta pela cauda sobe (ou desce) os intervalos escolhidos.
+// Shimmer: dois pitch shifters (Clouds) num laco proprio de realimentacao
+// (atraso de 150 ms + difusores + amortecimento) que alimenta o Hall -- cada
+// volta pelo laco sobe (ou desce) os intervalos escolhidos e o Hall espalha.
+// O laco NAO passa pelo Hall: com a cauda inteira dentro do laco o ganho por
+// volta era amount x energia do Hall (> 1 com decay normal) e a cauda nunca
+// morria. Aqui o ganho por volta e <= 1 (deslocador: janelas que somam 1;
+// difusores passa-tudo; passa-baixa de 1 polo) vezes o ganho do laco,
+// que e < 1 e acompanha o decay do Hall -- a cauda sempre decai.
 class Shimmer {
 public:
     void configure(double sr, float sizeMeters) {
+        sr_ = sr;
         hall_.configure(sr, sizeMeters, 10.0f);
         for (auto& p : ps_) p.prepare(sr);
+        static const float kMs[3] = {11.3f, 17.9f, 26.1f};
+        for (int c = 0; c < 2; ++c) {
+            for (int k = 0; k < 3; ++k) diff_[c][k].allocate(static_cast<int>((kMs[k] + 2.3f * c) * 0.001 * sr));
+            loop_[c].allocate(static_cast<size_t>(sr * kLoopSec) + 8);
+        }
         reset();
     }
-    void reset() { hall_.mute(); for (auto& p : ps_) p.reset(); std::fill(&fb_[0][0], &fb_[0][0] + 2 * kBlock, 0.0f); }
+    void reset() {
+        hall_.mute();
+        for (auto& p : ps_) p.reset();
+        for (auto& c : diff_) for (auto& d : c) d.clear();
+        for (auto& l : loop_) l.clear();
+        lp_[0] = lp_[1] = 0.0f;
+    }
     void process(float decay, float semis1, float semis2, float amount, float tone, float* L, float* R, int n) {
         ps_[0].setRatio(std::exp2(std::round(semis1) / 12.0f));
         ps_[1].setRatio(std::exp2(std::round(semis2) / 12.0f));
-        for (int off = 0; off < n; off += kBlock) {
-            const int len = std::min(kBlock, n - off);
-            float* l = L + off;
-            float* r = R + off;
-            for (int i = 0; i < len; ++i) { // realimentacao do bloco anterior, deslocada
-                float a = fb_[0][i], b = fb_[1][i], c = a, d = b;
-                ps_[0].setSize(0.7f); ps_[0].processSample(a, b);
-                ps_[1].setSize(0.7f); ps_[1].processSample(c, d);
-                l[i] += amount * 0.5f * (a + c);
-                r[i] += amount * 0.5f * (b + d);
+        const float len = kLoopSec * static_cast<float>(sr_);
+        const float aLp = gfx::onePoleCoef(std::clamp(tone, 1000.0f, 16000.0f), sr_);
+        // o laco decai no mesmo RT60 do Hall (-60 dB em `decay` segundos), entao
+        // as vozes deslocadas duram tanto quanto a cauda; amount = quanto delas
+        // entra no Hall
+        const float gLoop = std::min(0.97f, std::pow(10.0f, -3.0f * kLoopSec / std::max(0.2f, decay)));
+        const float send = 2.0f * std::clamp(amount, 0.0f, 0.95f);
+        for (int i = 0; i < n; ++i) {
+            float a = loop_[0].read(len), b = loop_[1].read(len), c = a, d = b;
+            ps_[0].setSize(0.7f); ps_[0].processSample(a, b);
+            ps_[1].setSize(0.7f); ps_[1].processSample(c, d);
+            const float sh[2] = {0.5f * (a + c), 0.5f * (b + d)};
+            float* io[2] = {L + i, R + i};
+            for (int ch = 0; ch < 2; ++ch) {
+                lp_[ch] += (sh[ch] - lp_[ch]) * aLp;
+                float x = *io[ch] + gLoop * lp_[ch];
+                *io[ch] += send * lp_[ch]; // entrada do Hall: seco + vozes deslocadas
+                for (auto& df : diff_[ch]) x = df.process(x, 0.6f);
+                loop_[ch].write(std::isfinite(x) ? x : 0.0f);
             }
-            hall_.process(decay, tone, 0.9f, 0.3f, 0.3f, l, r, len);
-            for (int i = 0; i < len; ++i) {
-                fb_[0][i] = std::isfinite(l[i]) ? std::clamp(l[i], -4.0f, 4.0f) : 0.0f;
-                fb_[1][i] = std::isfinite(r[i]) ? std::clamp(r[i], -4.0f, 4.0f) : 0.0f;
-            }
-            for (int i = len; i < kBlock; ++i) fb_[0][i] = fb_[1][i] = 0.0f;
         }
+        hall_.process(decay, tone, 0.9f, 0.3f, 0.3f, L, R, n);
     }
 
 private:
+    static constexpr float kLoopSec = 0.15f;
+    double sr_ = 48000.0;
     DragonflyHall hall_;
     fxextra::PitchShifter ps_[2];
-    float fb_[2][kBlock];
+    Diffuser diff_[2][3];
+    gfx::DelayLine loop_[2];
+    float lp_[2] = {};
 };
 
 // Magneto: eco de 4 cabecas (1/4, 2/4, 3/4 e 4/4 do tempo) com wow e laco

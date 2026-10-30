@@ -6,6 +6,7 @@
 #include "dx7_engine.h"
 #include "dx7_alloc.h"
 #include "dx7_fxrack.h"
+#include "dx7_fxrack_io.h"
 #include "dx7_patch_io.h"
 #include "dx7_algorithms.h"
 #include "dx7_sysex.h"
@@ -24,6 +25,7 @@
 #include "mpe.h"
 #include "patch_mutate.h"
 #include "factory_bank.h"
+#include "fx_factory.h"
 #include <chrono>
 #include "viz.h"
 #include "patch_browser.h"
@@ -115,6 +117,14 @@ struct AppState {
     dx7fm_app::MpeInput mpe;
     float mutateAmount = 0.2f; // [2026-10-28] botao Mutar (so UI)
     GlobalFxParams legacyFx;   // [2026-10-29] painel antigo de efeitos (ate a pedaleira)
+    // [2026-10-29] rack de efeitos: estado da UI (fonte da verdade), publicado
+    // no synth por setAppFxRack; salvo em fxRackStatePath() 1 s depois da
+    // ultima mudanca (e na saida)
+    FxRackParams fxRack;
+    bool fxRackDirty = false;
+    double fxRackChangedAt = 0.0;
+    std::string legacyFxLast;  // painel antigo: so publica quando muda
+    std::vector<dx7fm_app::fxfactory::FxFactoryPreset> fxFactory;
     // [2026-10-29] banco de fabrica (montado 1x na partida) e o estado do dialogo
     std::vector<dx7fm_app::factory::FactoryPreset> factory;
     int factorySelected = -1, factoryFamily = 0, factoryCategory = 0;
@@ -170,6 +180,7 @@ struct AppState {
 };
 
 const std::filesystem::path kPatchDir = "patches";
+const std::filesystem::path kFxPresetDir = "fxpresets"; // [2026-10-29] presets do rack de efeitos (usuario)
 
 void syncRoutingCache(AppState& app, int part) {
     auto& pp = app.synth.part(part);
@@ -318,6 +329,10 @@ void onMidiEvent(AppState& app, const MidiEvent& ev) {
                 app.synth.setMasterVolume(gainFromVolumeDb(-60.0f + 66.0f * v)); // atomico
             } else if (target == static_cast<int>(CcTarget::Bpm)) {
                 app.synth.setTempoBpm(std::round(20.0f + 280.0f * v)); // atomico
+            } else if (target == static_cast<int>(CcTarget::Expression)) {
+                ae.kind = AppEvent::Kind::FxExpression; // vale pra qualquer canal
+                ae.floatValue = v;
+                app.eventQueue.push(ae);
             }
             return;
         }
@@ -2045,12 +2060,40 @@ void DrawGlobalFxParams(AppState& app, GlobalFxParams& fx, GlobalFxType t) {
         }
     }
 }
+// [2026-10-29] troca o rack inteiro: sanitiza, publica e agenda o salvamento
+void setAppFxRack(AppState& app, const FxRackParams& r) {
+    app.fxRack = r;
+    sanitize(app.fxRack);
+    app.synth.setFxRack(app.fxRack);
+    app.fxRackDirty = true;
+    app.fxRackChangedAt = ImGui::GetCurrentContext() ? ImGui::GetTime() : 0.0;
+}
+
+// salva o ultimo estado do rack (debounce de 1 s; force = na saida)
+void saveFxRackStateIfDirty(AppState& app, bool force) {
+    if (!app.fxRackDirty || (!force && ImGui::GetTime() - app.fxRackChangedAt < 1.0)) return;
+    app.fxRackDirty = false;
+    if (!saveFxRackFile(dx7fm_app::fxRackStatePath(), app.fxRack))
+        std::fprintf(stderr, "[fx] nao consegui salvar %s\n", dx7fm_app::fxRackStatePath().string().c_str());
+}
+
 void DrawGlobalFxPanel(AppState& app) {
     // [2026-10-29] painel antigo (7 blocos) sobre o rack novo: edita
     // app.legacyFx e publica convertido (fxRackFromLegacy) a cada quadro
     // ate o painel da pedaleira substituir este
     auto& fx = app.legacyFx;
-    struct Publish { AppState& a; ~Publish() { a.synth.setFxRack(fxRackFromLegacy(a.legacyFx)); } } publish{app};
+    struct Publish {
+        AppState& a;
+        ~Publish() { // so quando o painel mudou algo (senao sobrescreveria o rack carregado do arquivo)
+            FxRackParams r = fxRackFromLegacy(a.legacyFx);
+            sanitize(r);
+            std::string now = fxRackToString(r);
+            if (now != a.legacyFxLast) {
+                if (!a.legacyFxLast.empty()) setAppFxRack(a, r);
+                a.legacyFxLast = std::move(now);
+            }
+        }
+    } publish{app};
     if (!ImGui::BeginTable("##fxcols", 2, ImGuiTableFlags_SizingStretchProp)) return;
     ImGui::TableSetupColumn("cadeia", ImGuiTableColumnFlags_WidthFixed, 270.0f);
     ImGui::TableSetupColumn("efeitos", ImGuiTableColumnFlags_WidthStretch);
@@ -2220,8 +2263,9 @@ void DrawSettingsPopup(AppState& app) {
     }
     ImGui::Separator();
     ImGui::TextUnformatted("MIDI learn (CC -> controle)");
-    ImGui::TextDisabled("As macros valem pra parte que recebe o canal do CC; volume e BPM sao globais.");
-    for (int t = 0; t <= static_cast<int>(dx7fm_app::CcTarget::Bpm); ++t) {
+    ImGui::TextDisabled("As macros valem pra parte que recebe o canal do CC; volume, BPM e expressao sao globais.\n"
+                        "Expressao: o parametro alvo e escolhido no pedal (aba Efeitos).");
+    for (int t = 0; t <= static_cast<int>(dx7fm_app::CcTarget::Expression); ++t) {
         const auto target = static_cast<dx7fm_app::CcTarget>(t);
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(dx7fm_app::ccTargetName(target));
@@ -2453,6 +2497,7 @@ void initAppState(AppState& app) {
     app.tuningBrowser.exts = {".scl", ".kbm"};
     app.dx7Browser.exts = {".syx"};
     app.factory = dx7fm_app::factory::factoryBank();
+    app.fxFactory = dx7fm_app::fxfactory::fxFactoryBank();
     app.synth.init(kSampleRate, kMaxVoices, app.settings.oversample);
     app.synth.setWorkerThreads(audioWorkerThreads());
     // Por padrao so a parte A toca; B-D comecam desligadas (senao cada nota,
@@ -2461,6 +2506,11 @@ void initAppState(AppState& app) {
     for (int p = 0; p < kNumParts; ++p) { // afinacoes salvas (settings.json) de volta nas partes
         if (!app.settings.sclPath[p].empty()) loadTuningFile(app, p, app.settings.sclPath[p]);
         if (!app.settings.kbmPath[p].empty()) loadTuningFile(app, p, app.settings.kbmPath[p]);
+    }
+    { // [2026-10-29] ultimo estado do rack de efeitos
+        FxRackParams r;
+        if (loadFxRackFile(dx7fm_app::fxRackStatePath(), r)) setAppFxRack(app, r);
+        app.fxRackDirty = false;
     }
     for (int p = 0; p < kNumParts; ++p) {
         app.synth.part(p).enabled = (p == 0);
@@ -2544,6 +2594,7 @@ int main(int, char**) {
         ImGui::NewFrame();
 
         DrawMainUi(app);
+        saveFxRackStateIfDirty(app, false);
 
         ImGui::Render();
         SDL_SetRenderDrawColor(renderer, 18, 20, 26, 255);
@@ -2552,6 +2603,7 @@ int main(int, char**) {
         SDL_RenderPresent(renderer);
     }
 
+    saveFxRackStateIfDirty(app, true);
     app.midiIn.stop();
     app.audioOut.stop();
 

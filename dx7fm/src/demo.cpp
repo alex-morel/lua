@@ -22,6 +22,8 @@
 #include "../app/mpe.h"
 #include "../app/patch_mutate.h"
 #include "../app/factory_bank.h"
+#include "../app/fx_factory.h"
+#include "dx7_fxrack_io.h"
 
 #include <algorithm>
 #include <atomic>
@@ -4529,6 +4531,13 @@ static float bandRms(const std::vector<float>& x, double f, size_t from, size_t 
     std::vector<float> seg(x.begin() + static_cast<long>(from), x.begin() + static_cast<long>(from + len));
     return goertzelMagnitude(seg, f, 48000.0);
 }
+// energia na regiao +-7% em volta de f (o deslocador granular espalha um seno
+// deslocado em bandas laterais na taxa dos graos, com um vale bem em cima de f)
+static float regionRms(const std::vector<float>& x, double f, size_t from, size_t len) {
+    double e = 0.0;
+    for (double h = f * 0.93; h <= f * 1.07; h += 5.0) { const float m = bandRms(x, h, from, len); e += m * m; }
+    return static_cast<float>(std::sqrt(e));
+}
 
 static void testFxBehaviour() {
     auto sine = [](float hz, float a) { return [hz, a](int i) { return a * std::sin(2.0f * kPi * hz * static_cast<float>(i) / 48000.0f); }; };
@@ -4671,12 +4680,23 @@ static void testReverbMachines() {
     {
         auto L = runSlot(FxKind::Shimmer, [](FxSlotParams& s) { s.p[1] = 12.0f; s.p[2] = 12.0f; s.p[3] = 0.8f; s.p[4] = 16000.0f; },
                          [](int i) { return i < 9600 ? 0.4f * std::sin(2.0f * kPi * 440.0f * i / 48000.0f) : 0.0f; }, 48000 * 3).first;
-        const float oct = bandRms(L, 880.0, 48000 * 2, 9600), fund = bandRms(L, 440.0, 48000 * 2, 9600);
+        const float oct = regionRms(L, 880.0, 48000 * 2, 9600), fund = regionRms(L, 440.0, 48000 * 2, 9600);
         auto plainHall = runSlot(FxKind::Hall, [](FxSlotParams& s) { s.p[0] = 4.0f; s.p[3] = 16000.0f; },
                                  [](int i) { return i < 9600 ? 0.4f * std::sin(2.0f * kPi * 440.0f * i / 48000.0f) : 0.0f; }, 48000 * 3).first;
-        const float hOct = bandRms(plainHall, 880.0, 48000 * 2, 9600), hFund = bandRms(plainHall, 440.0, 48000 * 2, 9600);
+        const float hOct = regionRms(plainHall, 880.0, 48000 * 2, 9600), hFund = regionRms(plainHall, 440.0, 48000 * 2, 9600);
         std::printf("  (2 s depois: oitava/fundamental no Shimmer %.2f, no Hall puro %.3f)\n", oct / fund, hOct / hFund);
         check(oct / fund > 10.0f * (hOct / hFund), "Shimmer: a cauda sobe uma oitava (pitch shifter do Clouds na realimentacao)");
+        // a cauda morre: antes o Hall inteiro ficava dentro do laco e com amount
+        // 0.5 a cauda crescia pra sempre depois da nota
+        float worst = 0.0f;
+        for (float decay : {2.0f, 10.0f})
+            for (float amount : {0.5f, 0.9f}) {
+                auto T = runSlot(FxKind::Shimmer, [=](FxSlotParams& sl) { sl.p[0] = decay; sl.p[3] = amount; },
+                                 [](int i) { return i < 48000 ? 0.3f * std::sin(0.0571f * i) : 0.0f; }, 48000 * 12).first;
+                worst = std::max(worst, computeRms(T, 48000 * 11, 48000) / computeRms(T, 0, 48000));
+            }
+        std::printf("  (Shimmer: cauda 10 s depois da nota, pior caso %.1f dB)\n", 20.0f * std::log10(std::max(worst, 1e-9f)));
+        check(worst < 0.01f, "Shimmer: a cauda decai (laco de realimentacao com ganho < 1) mesmo com decay 10 s e amount 0.9");
     }
     // nonlinear: Reverse cresce ate o fim do tempo e corta; Gate fica plano e corta
     {
@@ -4725,6 +4745,103 @@ static void testReverbMachines() {
 }
 
 // --- [ADICIONADO em 2026-10-29] Micro (granular) ---
+// [2026-10-29] rack <-> JSON: ida e volta exata; arquivo com efeito/parametro
+// desconhecido carrega o resto; lixo nao vira rack.
+static void testFxRackJson() {
+    FxRackParams r;
+    r.serial = true;
+    r.dry[2] = 0.7f; r.send[1][1] = 0.4f;
+    r.chain[1].level = 1.3f; r.chain[1].pan = -0.25f;
+    r.chain[0].slot[0].setKind(FxKind::Hall); r.chain[0].slot[0].p[0] = 3.5f; r.chain[0].slot[0].mix = 0.42f;
+    r.chain[0].slot[2].setKind(FxKind::Micro); r.chain[0].slot[2].on = false; r.chain[0].slot[2].p[0] = 6;
+    r.chain[1].slot[3].setKind(FxKind::DigitalDelay); r.chain[1].slot[3].p[1] = 4;
+    r.expr = {1, 3, 2, 0.1f, 0.8f}; // feedback do delay
+    sanitize(r);
+    const std::string text = fxRackToString(r);
+    FxRackParams b = fxRackFromString(text);
+    check(fxRackToString(b) == text, "rack JSON: ida e volta identica");
+    check(b.serial && b.chain[0].slot[2].kind == FxKind::Micro && !b.chain[0].slot[2].on && b.chain[0].slot[2].p[0] == 6.0f,
+          "rack JSON: tipo, on e parametro de escolha voltam");
+    check(b.expr.chain == 1 && b.expr.slot == 3 && b.expr.param == 2 && b.expr.max == 0.8f, "rack JSON: pedal de expressao volta");
+
+    // parametro desconhecido ignorado, ausente fica no padrao; efeito desconhecido vira vazio
+    const std::string odd = R"({"chains":[{"slots":[{"kind":"Hall","mix":0.5,"params":{"decay":4,"naoExiste":9}},
+                                           {"kind":"EfeitoDoFuturo","params":{"x":1}}]}],
+                                "expression":{"chain":0,"slot":0,"param":"inexistente"}})";
+    FxRackParams o = fxRackFromString(odd);
+    const FxInfo& hall = fxInfo(FxKind::Hall);
+    check(o.chain[0].slot[0].kind == FxKind::Hall && o.chain[0].slot[0].p[0] == 4.0f && o.chain[0].slot[0].p[1] == hall.params[1].def,
+          "rack JSON: parametro desconhecido ignorado, ausentes no padrao");
+    check(o.chain[0].slot[1].kind == FxKind::Off && o.expr.chain == -1, "rack JSON: efeito/parametro de expressao desconhecido nao quebra");
+    FxRackParams junk;
+    check(!loadFxRackFile("/nao/existe/fxrack.json", junk), "rack JSON: arquivo ausente nao carrega");
+}
+
+// pedal de expressao: o parametro alvo vai de min a max; sem valor do pedal, vale o do slot
+static void testFxExpressionPedal() {
+    auto level = [](float pedal) {
+        FxRack rack;
+        rack.prepare(48000.0);
+        FxRackParams p;
+        p.chain[0].slot[0].setKind(FxKind::Eq3);
+        p.chain[0].slot[0].p[6] = 0.0f; // highGain
+        p.expr = {0, 0, 6, -18.0f, 18.0f};
+        sanitize(p);
+        rack.setParams(p);
+        if (pedal >= 0.0f) rack.setExpression(pedal);
+        auto out = runRack(rack, [](int i) { return sineAt(i, 12000.0f, 0.25f); }, 9600);
+        return rmsTail(out, 4800);
+    };
+    const float none = level(-1.0f), lo = level(0.0f), hi = level(1.0f);
+    check(std::fabs(none / (0.25f / std::sqrt(2.0f)) - 1.0f) < 0.1f, "expressao: sem pedal o parametro do slot vale (0 dB)");
+    check(hi / lo > 30.0f, "expressao: pedal 0..1 leva o agudo de -18 a +18 dB");
+    FxRackParams bad;
+    bad.chain[0].slot[0].setKind(FxKind::Hall);
+    bad.expr = {0, 0, 2, 10, 60}; // size e "rebuild": nao pode ser alvo
+    sanitize(bad);
+    check(bad.expr.chain == -1, "expressao: parametro rebuild nao pode ser alvo");
+}
+
+// presets de fabrica do rack: nomes de parametros validos, estaveis e com som
+static void testFxFactoryPresets() {
+    using namespace dx7fm_app::fxfactory;
+    fxFactoryErrors() = 0;
+    auto bank = fxFactoryBank();
+    check(fxFactoryErrors() == 0, "presets de efeitos de fabrica: todos os parametros existem");
+    check(bank.size() >= 10, "presets de efeitos de fabrica: pelo menos 10");
+    bool allOk = true;
+    float maxPeak = 0.0f;
+    for (const auto& pr : bank) {
+        FxRackParams p = pr.rack;
+        FxRackParams q = fxRackFromString(fxRackToString(p));
+        if (fxRackToString(q) != fxRackToString(p)) { std::printf("  JSON diverge: %s\n", pr.name.c_str()); allOk = false; }
+        // seno sustentado (pode cair num formante/modo: so estabilidade) e ruido (nivel)
+        std::mt19937 rng(7);
+        std::normal_distribution<float> nd(0.0f, 0.15f);
+        std::vector<float> noise(48000);
+        for (float& x : noise) x = nd(rng);
+        float peak = 0.0f, gainDb = 0.0f;
+        bool finite = true;
+        for (int sig = 0; sig < 2; ++sig) {
+            FxRack rack;
+            rack.prepare(48000.0);
+            rack.setParams(p);
+            rack.setExpression(0.7f);
+            auto out = sig == 0 ? runRack(rack, [](int i) { return i < 24000 ? 0.4f * std::sin(0.0571f * i) * (1.0f + 0.5f * std::sin(0.0003f * i)) : 0.0f; }, 48000)
+                                : runRack(rack, [&](int i) { return noise[static_cast<size_t>(i)]; }, 48000);
+            for (float x : out) { finite = finite && std::isfinite(x); if (sig == 0) peak = std::max(peak, std::fabs(x)); }
+            if (sig == 1) gainDb = 20.0f * std::log10(std::max(1e-9f, computeRms(out, 12000, 36000) / computeRms(noise, 12000, 36000)));
+        }
+        maxPeak = std::max(maxPeak, peak);
+        if (!finite || peak > 3.0f || gainDb < -24.0f || gainDb > 8.0f) {
+            std::printf("  preset %s: finito=%d pico(seno)=%.2f ganho(ruido)=%+.1f dB\n", pr.name.c_str(), finite, peak, gainDb);
+            allOk = false;
+        }
+    }
+    std::printf("  %zu presets de efeitos, maior pico %.2f (entrada 0.6)\n", bank.size(), maxPeak);
+    check(allOk, "presets de efeitos de fabrica: JSON ida e volta, sem NaN, pico do seno < 3, ganho em ruido -24..+8 dB");
+}
+
 static void testMicroGranular() {
     auto tone = [](float hz, int len) { return [hz, len](int i) { return i < len ? 0.4f * std::sin(2.0f * kPi * hz * i / 48000.0f) : 0.0f; }; };
     // Hold: a entrada acaba em 1 s; sem Hold o Mosaic some, com Hold continua
@@ -5175,6 +5292,9 @@ int main() {
     testFxKindsCost();
     testReverbMachines();
     testMicroGranular();
+    testFxRackJson();
+    testFxExpressionPedal();
+    testFxFactoryPresets();
     testGlobalFxOrder();
     testGlobalFxCost();
     testDeadOperatorRevivedByLiveEdit();

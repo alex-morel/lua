@@ -265,7 +265,7 @@ inline const FxInfo& fxInfo(FxKind k) {
           {"amount", "Coro", 0.0f, 1.0f, 0.7f},
           {"tone", "Tom", 1000.0f, 16000.0f, 7000.0f, "Hz", true},
           {"size", "Tamanho", 10.0f, 60.0f, 30.0f, "m", false, nullptr, true}}},
-        {FxKind::Shimmer, "Shimmer", "Shimmer", "Reverb", "Proprio: Dragonfly Hall (GPLv3) com 2 pitch shifters do Clouds (MIT) na realimentacao", 0.4f, 6,
+        {FxKind::Shimmer, "Shimmer", "Shimmer", "Reverb", "Proprio: Dragonfly Hall (GPLv3) alimentado por um laco com 2 pitch shifters do Clouds (MIT)", 0.4f, 6,
          {{"decay", "Decay", 0.2f, 10.0f, 4.0f, "s", true},
           {"interval1", "Voz 1", -24.0f, 24.0f, 12.0f, "st"},
           {"interval2", "Voz 2", -24.0f, 24.0f, 7.0f, "st"},
@@ -335,8 +335,18 @@ struct FxChainParams {
     float pan = 0.0f;          // -1..1 (balanco)
 };
 
+// Pedal de expressao: um parametro de um slot vai de min a max conforme o
+// pedal (0..1, vindo de um CC). Parametros "rebuild" nao podem ser alvo (mexer
+// neles recria o DSP).
+struct FxExpression {
+    int chain = -1;            // -1 = sem alvo
+    int slot = 0, param = 0;
+    float min = 0.0f, max = 1.0f; // em unidades do parametro
+};
+
 struct FxRackParams {
     FxChainParams chain[kFxChains];
+    FxExpression expr;
     bool serial = false;       // true: cadeia 1 -> cadeia 2 (so a 2 sai)
     // por parte (A-D): nivel seco direto pra saida e envios pras cadeias.
     // Padrao: tudo entra na cadeia 1 (o rack vazio e identidade, como os
@@ -360,6 +370,18 @@ inline void sanitize(FxRackParams& r) {
                 s.p[i] = f(s.p[i], pi.min, pi.max, pi.def);
                 if (pi.choices) s.p[i] = std::round(s.p[i]);
             }
+        }
+    }
+    // pedal de expressao: alvo valido, parametro existente e nao "rebuild"
+    auto& e = r.expr;
+    if (e.chain < 0 || e.chain >= kFxChains || e.slot < 0 || e.slot >= kFxSlots) e.chain = -1;
+    if (e.chain >= 0) {
+        const FxInfo& info = fxInfo(r.chain[e.chain].slot[e.slot].kind);
+        if (e.param < 0 || e.param >= info.nParams || info.params[e.param].rebuild) e.chain = -1;
+        else {
+            const FxParamInfo& pi = info.params[e.param];
+            e.min = f(e.min, pi.min, pi.max, pi.min);
+            e.max = f(e.max, pi.min, pi.max, pi.max);
         }
     }
     for (int p = 0; p < kFxParts; ++p) {
@@ -879,14 +901,28 @@ public:
         blocks_.fetch_add(1, std::memory_order_acq_rel);
     }
 
+    // Thread de audio: posicao do pedal de expressao (0..1). Vale pro alvo de
+    // FxRackParams::expr a partir do proximo bloco; -1 = pedal sem valor ainda
+    // (o parametro fica como esta no slot).
+    void setExpression(float v01) { expression_ = std::clamp(v01, 0.0f, 1.0f); }
+    float expression() const { return expression_; }
+
     // pra UI (outra thread)
     float chainPeak(int c) const { return chainPeak_[c].load(std::memory_order_relaxed); }
     float slotMeter(int c, int s) const { return slotMeter_[c][s].load(std::memory_order_relaxed); }
 
 private:
     void runChain(int c, const FxChainParams& ch, float* L, float* R, int n, const FxContext& ctx) {
+        const FxExpression& ex = cur_->expr;
         for (int s = 0; s < kFxSlots; ++s) {
-            const FxSlotParams& sp = ch.slot[s];
+            FxSlotParams exprSlot;
+            const FxSlotParams* spp = &ch.slot[s];
+            if (ex.chain == c && ex.slot == s && expression_ >= 0.0f) { // pedal: o parametro alvo segue o pedal
+                exprSlot = ch.slot[s];
+                exprSlot.p[ex.param] = ex.min + (ex.max - ex.min) * expression_;
+                spp = &exprSlot;
+            }
+            const FxSlotParams& sp = *spp;
             FxProcessor* proc = proc_[c][s].load(std::memory_order_acquire);
             const bool on = sp.active() && proc;
             if (!on) { wasOn_[c][s] = false; continue; }
@@ -948,6 +984,7 @@ private:
     FxProcessor* audioProc_[kFxChains][kFxSlots] = {};
     bool wasOn_[kFxChains][kFxSlots] = {};
     float dryL_[kMaxBlock], dryR_[kMaxBlock];
+    float expression_ = -1.0f;
     std::atomic<float> chainPeak_[kFxChains] = {};
     std::atomic<float> slotMeter_[kFxChains][kFxSlots] = {};
 };

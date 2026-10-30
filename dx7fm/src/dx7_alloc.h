@@ -152,6 +152,9 @@ public:
     const FxRackParams& fxRack() const { return fxRack_.params(); }
     float fxChainPeak(int chain) const { return fxRack_.chainPeak(chain); }
     float fxSlotMeter(int chain, int slot) const { return fxRack_.slotMeter(chain, slot); } // ex.: reducao de ganho (dB)
+    // pedal de expressao do rack (0..1) -- chamar da thread de audio (evento)
+    void setFxExpression(float v01) { fxRack_.setExpression(v01); }
+    float fxExpression() const { return fxRack_.expression(); }
 
     // [ADICIONADO em 2026-09-23] Volume geral (master), ganho linear 0..2
     // (1.0 = 0dB). Atomico de proposito: a UI chama setMasterVolume() de
