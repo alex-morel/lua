@@ -105,12 +105,35 @@ dx7fm/
                       voiceParamsToJson/FromJson, partParamsToJson/FromJson
                       e os helpers de arquivo savePatchFile/loadPatchFile,
                       savePartFile/loadPartFile. Ver secao 6B.
-    dx7_globalfx.h  - Efeitos globais POS-MIX ([REESCRITO em 2026-10-18]
-                      a partir de efeitos open source): chorus ensemble,
-                      phaser, flanger, delay de fita, reverb Room/Hall/
-                      Plate, EQ 3 bandas, compressor, numa cadeia de ordem
-                      configuravel. Operam em pares de amostra ESTEREO (a
-                      soma das 4 partes), nao por operador. Ver secao 7D.
+    dx7_globalfx.h  - DSP dos 7 efeitos globais de 2026-10-18 (chorus
+                      ensemble, phaser, flanger, delay de fita, reverb
+                      Room/Hall/Plate, EQ 3 bandas, compressor). Desde
+                      2026-10-29 sao 7 dos tipos do rack (a cadeia fixa
+                      GlobalFxChain saiu). Ver secao 7D.
+    dx7_fxrack.h    - [ADICIONADO em 2026-10-29] RACK DE EFEITOS POS-MIX:
+                      2 cadeias x 4 slots, qualquer efeito em qualquer
+                      slot, envios seco/1/2 por parte, paralelo ou serie,
+                      pedal de expressao; tabela fxInfo() de todos os
+                      efeitos. Ver secao 7E.
+    dx7_fxrack_io.h - [ADICIONADO em 2026-10-29] rack <-> JSON (presets de
+                      efeitos e ultimo estado), efeitos/parametros POR NOME.
+    dx7_fx_extra.h  - [ADICIONADO em 2026-10-29] wah (Faust), filtro com
+                      LFO, pitch shifter (Clouds), rotary (sst-effects),
+                      delay digital e reverso.
+    dx7_fx_reverbs.h- [ADICIONADO em 2026-10-29] as 12 maquinas de reverb
+                      (Dragonfly/freeverb3, Cloud Seed, Spring do Surge e
+                      compostos Swell/Bloom/Chorale/Shimmer/Magneto/
+                      Nonlinear).
+    dx7_fx_micro.h  - [ADICIONADO em 2026-10-29] granular "Micro" (graos e
+                      difusor do Clouds + 11 variacoes proprias).
+    airwindows/     - [ADICIONADO em 2026-10-29] 12 efeitos do Airwindows
+                      GERADOS por tools/ports/airwindows_port.py.
+    chowtape/       - [ADICIONADO em 2026-10-29] porta do CHOW Tape.
+    ../third_party/freeverb3/, ../third_party/cloudseed/ - vendorizados
+                      (mudancas mecanicas em README.dx7fm de cada um); os
+                      .cpp entram por #include nos headers (unity build:
+                      o motor precisa estar em 1 unidade de traducao por
+                      executavel).
     ../third_party/mverb/ - MVerb (GPLv3), vendorizado sem mudancas.
     ../LICENSE, ../THIRD_PARTY_NOTICES.md - o projeto e GPLv3 (por causa do
                       MVerb e da porta do ZamComp); origem e licenca de
@@ -122,7 +145,7 @@ dx7fm/
                       do FM-X do Yamaha Montage/MODX (8 operadores, mas
                       lista proprietaria da Yamaha que eu nao tenho
                       memorizada com confianca bit-exata). Ver secao 14.
-    demo.cpp        - 279 checagens de sanidade em 138 funcoes de teste (nao
+    demo.cpp        - 356 checagens de sanidade (nao
                       e um framework de teste "de verdade", e um main()
                       com asserts impressos) + gera 4 arquivos .wav de
                       demonstracao.
@@ -1318,7 +1341,7 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           num buffer proprio (amostra + loudness por amostra; voiceBuf_/
           loudBuf_, alocados no init); (2) a mixagem soma as vozes NA ORDEM
           DOS SLOTS, amostra por amostra, e aplica o mesmo pos-mix de
-          sempre (mixSample: polifonia, FX globais, volume, limitador).
+          sempre (mixSample: polifonia, rack de efeitos, volume, limitador).
           Como a ordem das somas nao muda, a saida e BIT A BIT igual a
           chamar renderStereo n vezes, com qualquer numero de threads
           (testRenderBlockMatchesPerSample/ThreadsAreDeterministic). Unica
@@ -1335,7 +1358,7 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           proprio RNG), so leem o snapshot do patch. Custo medido com 7
           threads extras (16 threads de hardware): 64 vozes x 8 ops Sine
           39% -> 7%; 64 vozes x 8 ops Additive (64 parciais) 163% -> 27%.
-          So o pos-mix (FX globais) continua serial.
+          So o pos-mix (rack de efeitos) continua serial.
 
       renderStereo(outL&, outR&)
           [2026-10-20: agora = renderBlock(&outL, &outR, 1); a descricao
@@ -1359,9 +1382,10 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           ela desce. Ver testPolyphonyGainIsPerPart()]
           -- evita que a soma de varias vozes cresca sem controle,
           mantendo a POTENCIA total aproximadamente constante entre 1 nota
-          e um acorde. So depois disso passa o par (outL, outR) pela
-          cadeia de efeitos globais pos-mix: chorus_ -> delay_ -> reverb_
-          (ver globalFx() abaixo e secao 7D). Depois dos FX aplica o
+          e um acorde. [ALTERADO em 2026-10-29] Depois disso cada parte
+          entra em 3 somas estereo -- seco (dry[p]), envio 1 e envio 2
+          (send[p][c]) -- que vao pro rack de efeitos (fxRack_.process,
+          secao 7E). Depois do rack aplica o
           VOLUME GERAL ([ADICIONADO em 2026-09-23] setMasterVolume(0..2),
           std::atomic<float> escrito pela UI, suavizado ~20ms num membro
           masterGain_, com encaixe exato no alvo pra volume 0 ser
@@ -1372,12 +1396,11 @@ VoiceParams/PartParams pra JSON e de volta, sem depender de lib externa.
           filtro ressonante, etc.). Ver bug corrigido na secao 7B, item 5
           (as duas camadas).
 
-      globalFx() -> GlobalFxParams& - [ADICIONADO em 2026-09-21] acesso
-          direto (NAO passa pelo triple-buffer do timbre) aos parametros
-          de chorus/delay/reverb globais. Editar isso enquanto
-          renderStereo() roda noutra thread tem a MESMA ressalva que os
-          campos de PartParams fora do timbre (ver secao 7C) — nao esta
-          coberto pela garantia de thread safety.
+      setFxRack(const FxRackParams&) / fxRack() - [2026-10-29, substitui
+          globalFx()] publica o rack inteiro por triple buffer (thread da
+          UI); o audio sempre le um snapshot completo. fxChainPeak(c),
+          fxSlotMeter(c, s) (reducao de ganho do compressor) pra UI;
+          setFxExpression(0..1) na thread de audio (evento FxExpression).
 
       activeVoiceCount() / activeVoiceCount(part) - contagem de vozes
           ativas (uteis pra depuracao/telemetria)
@@ -1825,6 +1848,105 @@ mudancas de cada porta estao no comentario de cabecalho do bloco.
   continuam: GlobalFxParams e editado pela UI e lido pela audio thread sem
   sincronizacao (floats; mesma ressalva da secao 7C), e nao e salvo em
   arquivo (os patches guardam so o som das partes).
+
+
+  [2026-10-29] A cadeia GlobalFxChain/GlobalFxParams saiu: as classes
+  acima viraram os tipos Chorus, Phaser, Flanger, TapeDelay, ReverbClassic,
+  Eq3 e Compressor do rack (secao 7E). fxRackFromLegacy() converte um
+  GlobalFxParams antigo em slots em serie (usado pelos testes antigos).
+
+
+--------------------------------------------------------------------------------
+7E. dx7_fxrack.h — RACK DE EFEITOS (estilo pedaleira) [ADICIONADO em 2026-10-29]
+--------------------------------------------------------------------------------
+
+Pedido do usuario: refazer os efeitos "similar em funcoes com pedais multi
+efeitos", com 2 cadeias de 4 efeitos em paralelo e niveis diferentes por
+parte; "efeitos de codigo aberto o maximo possivel", maquinas no estilo do
+Strymon BigSky e do Hologram Microcosm (sem os nomes comerciais na UI) e um
+simulador de fita aberto. Plano em 7 passos, um commit cada (19cec00,
+5a7b080, 583aff9, 43088f1, 4329cf9, de653cc, docs).
+
+  ROTEAMENTO (Synth::renderChunk): por parte p, x_p (ja com nivel/pan e
+  compensacao de polifonia) soma em seco += dry[p]*x_p, in1 +=
+  send[p][0]*x_p, in2 += send[p][1]*x_p. Paralelo: saida = seco +
+  cadeia1(in1) + cadeia2(in2). Serie: in2 += cadeia1(in1) e so a cadeia 2
+  sai. Cada cadeia tem nivel (0..2) e balanco. Padrao: dry 0, send1 1 --
+  rack vazio = identidade EXATA (golden). Depois: volume geral e limitador.
+
+  PARAMETROS: FxSlotParams{kind, on, mix, p[12]} generico; o significado de
+  p[i] vem de fxInfo(kind) (FxInfo: id estavel, nome, categoria, origem e
+  licenca, mix padrao, ate 12 FxParamInfo com id, rotulo, faixa, padrao,
+  unidade, log, escolhas "A|B|C" e a flag rebuild). A tabela alimenta a UI
+  (knobs gerados), o JSON (por nome), sanitize() e os testes. FxKind: novos
+  tipos SEMPRE no fim (o numero nao vai pro arquivo, mas os testes e o
+  golden iteram na ordem).
+
+  THREADS / MEMORIA: FxRack::setParams (UI) publica por triple buffer.
+  O DSP de cada slot (FxProcessor) e criado NA THREAD DA UI quando o tipo
+  muda (ou um parametro "rebuild" -- tamanho/pre-delay dos reverbs do
+  freeverb3, cujos setters alocam) e trocado por ponteiro atomico; o velho
+  vai pra um "cemiterio" e e apagado 2 blocos de audio depois (estilo RCU).
+  Nada aloca na thread de audio. A UI so publica os parametros rebuild ao
+  soltar o knob (fxui::withLiveRebuild).
+
+  EFEITOS (43 tipos; origem completa em THIRD_PARTY_NOTICES.md):
+    Dinamica: Compressor (ZamComp), Gate (Airwindows Gatelope), Limiter/
+      SoftClip (ClipSoftly). Drive: Overdrive (Drive), Tube (Tube2),
+      Distortion, Density (Density2), LoFi (Pockey2). Fita: TapeSim (CHOW
+      Tape: histerese Jiles-Atherton RK4 2x, perdas da cabeca, wow/flutter,
+      chew, degrade), TapeLite (ToTape6). Filtro: Eq3, Wah (Faust crybaby +
+      autowah/LFO), FilterLfo (SVF + LFO sincronizavel). Modulacao: Chorus,
+      Phaser, Flanger, Tremolo, AutoPan, Vibrato, RingMod (Airwindows),
+      Rotary (sst-effects + inercia). Pitch: PitchShift (Clouds). Delay:
+      TapeDelay, DigitalDelay (ping-pong, sync), ReverseDelay.
+    Reverbs estilo BigSky (dx7_fx_reverbs.h): Hall/Room/Plate/Reflections
+      (Dragonfly sobre freeverb3), Cloud (Cloud Seed), Spring (Surge),
+      Swell (envelope + Cloud Seed), Bloom (Cloud Seed -> laco de
+      difusores), Chorale (Hall -> formantes de vogal, passa-bandas
+      normalizados pra pico 1), Shimmer (laco proprio de 150 ms com 2 pitch
+      shifters + difusores, ganho por volta = 10^(-3*0.15/decay) -- NAO o
+      Hall dentro do laco: assim a cauda crescia pra sempre, +40 dB),
+      Magneto (eco de 4 cabecas + difusao + Hall), Nonlinear (Reverse/
+      Swoosh/Ramp/Gate).
+    Granular estilo Microcosm (dx7_fx_micro.h): Micro, buffer de captura
+      de 6 s + graos do Clouds; variacoes Mosaic, Seq, Glide, Haze, Tunnel,
+      Strum, Blocks, Interrupt, Arp, Pattern, Warp; Hold congela o buffer.
+    Sync no BPM: lista "Livre|1/1|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16"
+      (syncBeats), com o BPM/posicao de batida do Synth (FxContext).
+  Custo medido: maquinas sobre Cloud Seed ~9% de um nucleo por slot,
+  TapeSim 4.5%, o resto menos (testFxKindsCost: < 10% por slot).
+
+  PEDAL DE EXPRESSAO: FxRackParams::expr = {cadeia, slot, parametro, min,
+  max}; o CC aprendido (CcTarget::Expression) vira AppEvent FxExpression e
+  FxRack::setExpression(v) na thread de audio; o parametro alvo vale
+  min + (max-min)*v a partir do proximo bloco. Antes do primeiro valor vale
+  o do slot. Parametro rebuild nao pode ser alvo (sanitize tira).
+
+  PERSISTENCIA (dx7_fxrack_io.h): JSON versao 1 com efeito e parametros
+  POR NOME; efeito desconhecido vira slot vazio, parametro desconhecido e
+  ignorado, ausentes ficam no padrao. Presets do usuario em fxpresets/
+  (relativo ao diretorio do app, como patches/); 23 presets de fabrica em
+  app/fx_factory.h; ultimo estado em $XDG_CONFIG_HOME/dx7fm/fxrack.json
+  (salvo 1 s depois da ultima mudanca e na saida). O rack NAO vai no patch.
+
+  UI: app/fx_rack_ui.h (desenho) + app/fx_rack_logic.h (sem ImGui, testada
+  no demo: mover/copiar pedais com o alvo da expressao junto, rebuild so ao
+  soltar, desfazer). Ver 13.5.
+
+  TESTES: rack vazio identidade exata; envios por parte; serie x paralelo;
+  troca de tipo com o audio rodando (200 trocas, threads); todos os tipos
+  estaveis com ruido/seno em niveis extremos e parametros nos extremos, e
+  com som no padrao; comportamento medido (tremolo/auto-pan na taxa,
+  delay no tempo e na divisao, reverso, pitch +-12 st, gate, wah, rotary
+  com inercia, RT60 do Hall acompanhando o knob, pre-delay, Shimmer com a
+  oitava na cauda e cauda que morre, Reflections, Micro Hold/Seq/Glide/
+  Tunnel); JSON ida e volta; presets de fabrica (nivel em ruido -24..+8
+  dB); golden com um cenario rack_<id> por tipo (tools/golden).
+  Licoes: medir nivel de reverb em REGIME (ruido longo), nao so no ataque;
+  o pitch shifter granular espalha o seno deslocado em bandas laterais na
+  taxa dos graos (com um vale bem em cima da frequencia alvo) -- medir a
+  regiao, nao um bin.
 
 
 --------------------------------------------------------------------------------
@@ -2554,10 +2676,13 @@ key scaling, editor da Additive, FX EG), PITCH EG e MATRIZ DE ALGORITMO
 (navegador, secao 13.6), PARTE (habilitada, canal, modo de voz, panico,
 knobs de nivel/pan/transpose/bend/glide/unison, key range, vozes
 reservadas), ALGORITMO (preset + diagrama colorido e clicavel), LFOs (os
-dois lado a lado) e MATRIZ DE MODULACAO. Aba FX Globais: card da cadeia
-(ordem com setas, liga/desliga) + um card por efeito com knobs, em 2
-colunas empilhadas independentemente; efeito desligado fica esmaecido mas
-editavel.
+dois lado a lado) e MATRIZ DE MODULACAO. [ALTERADO em 2026-10-29] Aba Efeitos (pedaleira,
+app/fx_rack_ui.h): barra de presets (fabrica + usuario, salvar, init,
+desfazer/refazer); a esquerda o mixer (grade seco/->1/->2 por parte,
+nivel/pan/medidor por cadeia, paralelo/serie) e o card do pedal de
+expressao; a direita 2 fileiras de 4 pedais (combo do tipo por categoria,
+knobs da fxInfo, footswitch com LED, EXP, medidor de reducao de ganho no
+compressor; arrastar a alca "::" troca pedais, Ctrl ao soltar copia).
 
 QUALQUER edicao marca `changed=true`; ao fim do frame, se `changed`,
 chama synth.recompile() UMA vez (nao por widget) e sincroniza o

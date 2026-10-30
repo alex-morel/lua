@@ -32,7 +32,8 @@ completo sob a GPLv3.
 | Roboto Medium | fonte da interface (`third_party/imgui/misc/fonts/Roboto-Medium.ttf`) | Google (Christian Robertson) | Apache 2.0 | arquivo distribuído com o Dear ImGui, carregado em tempo de execução |
 
 As mudanças feitas em cada porta estão descritas no comentário de cabeçalho
-do bloco correspondente em `src/dx7_globalfx.h`.
+do bloco correspondente (`src/dx7_globalfx.h`, `src/dx7_fx_extra.h`,
+`src/dx7_fx_reverbs.h`, `src/dx7_fx_micro.h`, `src/chowtape/ChowTape.h`).
 
 ## Origem dos arquivos (baixados em 2026-10-18)
 
