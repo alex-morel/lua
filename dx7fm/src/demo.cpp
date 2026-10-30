@@ -23,6 +23,7 @@
 #include "../app/patch_mutate.h"
 #include "../app/factory_bank.h"
 #include "../app/fx_factory.h"
+#include "../app/fx_rack_logic.h"
 #include "dx7_fxrack_io.h"
 
 #include <algorithm>
@@ -4842,6 +4843,42 @@ static void testFxFactoryPresets() {
     check(allOk, "presets de efeitos de fabrica: JSON ida e volta, sem NaN, pico do seno < 3, ganho em ruido -24..+8 dB");
 }
 
+// pedaleira (app/fx_rack_logic.h): arrastar pedais, knobs "rebuild" e desfazer
+static void testFxRackUiLogic() {
+    using namespace dx7fm_app::fxui;
+    FxRackParams r;
+    r.chain[0].slot[0].setKind(FxKind::Tremolo);
+    r.chain[1].slot[2].setKind(FxKind::Hall);
+    r.expr = {0, 0, 1, 0.0f, 1.0f};
+    moveSlot(r, 0, 0, 1, 2, false);
+    check(r.chain[1].slot[2].kind == FxKind::Tremolo && r.chain[0].slot[0].kind == FxKind::Hall && r.expr.chain == 1 && r.expr.slot == 2,
+          "pedaleira: arrastar troca os pedais e o pedal de expressao vai junto");
+    moveSlot(r, 1, 2, 0, 0, true);
+    check(r.chain[0].slot[0].kind == FxKind::Tremolo && r.chain[1].slot[2].kind == FxKind::Tremolo && r.expr.chain == 1,
+          "pedaleira: Ctrl+arrastar copia por cima");
+
+    // arrastando o knob de tamanho do Hall: publica o resto, segura o tamanho
+    struct FakeSynth { int publishes = 0; FxRackParams last; void setFxRack(const FxRackParams& p) { ++publishes; last = p; } } synth;
+    FxRackUi ui;
+    FxRackParams h;
+    h.chain[0].slot[0].setKind(FxKind::Hall);
+    setRack(ui, synth, h, 0.0);
+    ui.committed = ui.edit;
+    ui.edit.chain[0].slot[0].p[2] = 50.0f; // size (rebuild)
+    ui.edit.chain[0].slot[0].mix = 0.6f;
+    syncRack(ui, synth, true, true, 0.1);
+    check(synth.last.chain[0].slot[0].mix == 0.6f && synth.last.chain[0].slot[0].p[2] == h.chain[0].slot[0].p[2],
+          "pedaleira: durante o arraste o parametro rebuild nao e publicado (o resto e)");
+    syncRack(ui, synth, false, false, 0.2);
+    check(synth.last.chain[0].slot[0].p[2] == 50.0f && ui.undo.size() == 1, "pedaleira: ao soltar publica o tamanho e vira 1 passo de desfazer");
+    undoRack(ui, synth, 0.3);
+    check(ui.edit.chain[0].slot[0].p[2] == h.chain[0].slot[0].p[2] && synth.last.chain[0].slot[0].mix == h.chain[0].slot[0].mix && ui.redo.size() == 1,
+          "pedaleira: desfazer volta e publica");
+    redoRack(ui, synth, 0.4);
+    check(ui.edit.chain[0].slot[0].p[2] == 50.0f, "pedaleira: refazer");
+    check(choiceCount("A|B|C") == 3 && choiceAt("A|B|C", 1) == "B" && choiceAt("A|B|C", 2) == "C", "pedaleira: escolhas 'A|B|C'");
+}
+
 static void testMicroGranular() {
     auto tone = [](float hz, int len) { return [hz, len](int i) { return i < len ? 0.4f * std::sin(2.0f * kPi * hz * i / 48000.0f) : 0.0f; }; };
     // Hold: a entrada acaba em 1 s; sem Hold o Mosaic some, com Hold continua
@@ -5295,6 +5332,7 @@ int main() {
     testFxRackJson();
     testFxExpressionPedal();
     testFxFactoryPresets();
+    testFxRackUiLogic();
     testGlobalFxOrder();
     testGlobalFxCost();
     testDeadOperatorRevivedByLiveEdit();

@@ -26,6 +26,7 @@
 #include "patch_mutate.h"
 #include "factory_bank.h"
 #include "fx_factory.h"
+#include "fx_rack_ui.h"
 #include <chrono>
 #include "viz.h"
 #include "patch_browser.h"
@@ -116,14 +117,9 @@ struct AppState {
     // tambem muda) por mpeOn/mpeMembers/mpeBend
     dx7fm_app::MpeInput mpe;
     float mutateAmount = 0.2f; // [2026-10-28] botao Mutar (so UI)
-    GlobalFxParams legacyFx;   // [2026-10-29] painel antigo de efeitos (ate a pedaleira)
-    // [2026-10-29] rack de efeitos: estado da UI (fonte da verdade), publicado
-    // no synth por setAppFxRack; salvo em fxRackStatePath() 1 s depois da
-    // ultima mudanca (e na saida)
-    FxRackParams fxRack;
-    bool fxRackDirty = false;
-    double fxRackChangedAt = 0.0;
-    std::string legacyFxLast;  // painel antigo: so publica quando muda
+    // [2026-10-29] rack de efeitos (aba Efeitos, app/fx_rack_ui.h): edicao,
+    // publicado, desfazer; ultimo estado salvo em fxRackStatePath()
+    dx7fm_app::fxui::FxRackUi fxUi;
     std::vector<dx7fm_app::fxfactory::FxFactoryPreset> fxFactory;
     // [2026-10-29] banco de fabrica (montado 1x na partida) e o estado do dialogo
     std::vector<dx7fm_app::factory::FactoryPreset> factory;
@@ -1913,254 +1909,16 @@ void DrawPartPanel(AppState& app, int partIndex) {
         else if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) redoPart(app, partIndex);
     }
 }
-// [REESCRITO em 2026-10-18] Efeitos globais: cadeia reordenavel + painel
-// por efeito (ver src/dx7_globalfx.h para a origem/licenca de cada um).
-struct GlobalFxInfo { GlobalFxType type; const char* name; const char* origin; };
-const GlobalFxInfo kGlobalFxInfo[kNumGlobalFx] = {
-    {GlobalFxType::Chorus, "Chorus (ensemble)", "Base: Ensemble do Mutable Instruments Rings (Emilie Gillet, MIT)"},
-    {GlobalFxType::Phaser, "Phaser", "Base: phaser2_stereo da phaflangers.lib do Faust (Julius O. Smith III, STK-4.3)"},
-    {GlobalFxType::Flanger, "Flanger", "Base: flanger_stereo da phaflangers.lib do Faust (Julius O. Smith III, STK-4.3)"},
-    {GlobalFxType::Delay, "Delay (fita)", "Implementacao propria: filtros e saturacao no loop, wow & flutter"},
-    {GlobalFxType::Reverb, "Reverb", "Room: Freeverb (Jezar, dominio publico)\nHall: reverb do Mutable Instruments Clouds (MIT)\nPlate: MVerb (Martin Eastwood, GPLv3)"},
-    {GlobalFxType::Eq, "EQ 3 bandas", "Biquads do Audio EQ Cookbook (Robert Bristow-Johnson)"},
-    {GlobalFxType::Compressor, "Compressor", "Base: ZamComp (Damien Zammit, GPLv2+), com knee suave corrigido"},
-};
-
-const GlobalFxInfo& globalFxInfo(GlobalFxType t) { return kGlobalFxInfo[static_cast<int>(t)]; }
-
-bool& globalFxEnabled(GlobalFxParams& fx, GlobalFxType t) {
-    switch (t) {
-        case GlobalFxType::Chorus:     return fx.chorus.enabled;
-        case GlobalFxType::Phaser:     return fx.phaser.enabled;
-        case GlobalFxType::Flanger:    return fx.flanger.enabled;
-        case GlobalFxType::Delay:      return fx.delay.enabled;
-        case GlobalFxType::Reverb:     return fx.reverb.enabled;
-        case GlobalFxType::Eq:         return fx.eq.enabled;
-        case GlobalFxType::Compressor: return fx.compressor.enabled;
-    }
-    return fx.chorus.enabled;
-}
-
-constexpr ImGuiSliderFlags kClamp = ImGuiSliderFlags_AlwaysClamp;
-constexpr ImGuiSliderFlags kLog = ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic;
-
-void DrawGlobalFxParams(AppState& app, GlobalFxParams& fx, GlobalFxType t) {
-    static const GlobalFxParams kDef; // valores padrao (duplo clique no knob)
-    ui::KnobStyle ks;
-    ks.cellWidth = 58.0f;
-    ui::KnobStyle ksLog = ks;
-    ksLog.logarithmic = true;
-    bool first = true;
-    auto K = [&](const char* label, float* v, float lo, float hi, float def, const char* fmt, bool log = false) {
-        if (!first) flowSameLine(58.0f);
-        first = false;
-        ui::Knob(label, v, lo, hi, def, fmt, log ? ksLog : ks);
-    };
-    auto KI = [&](const char* label, int* v, int lo, int hi, int def, const char* fmt) {
-        if (!first) flowSameLine(58.0f);
-        first = false;
-        ui::KnobInt(label, v, lo, hi, def, fmt, ks);
-    };
-    switch (t) {
-        case GlobalFxType::Chorus: {
-            auto& c = fx.chorus;
-            K("Rate", &c.rateHz, 0.05f, 5.0f, kDef.chorus.rateHz, "%.2f Hz", true);
-            K("Profund.", &c.depth, 0.0f, 1.0f, kDef.chorus.depth, "%.2f");
-            K("Mix", &c.mix, 0.0f, 1.0f, kDef.chorus.mix, "%.2f");
-            break;
-        }
-        case GlobalFxType::Phaser: {
-            auto& ph = fx.phaser;
-            KI("Notches", &ph.notches, 1, 8, kDef.phaser.notches, "%d");
-            K("Rate", &ph.rateHz, 0.0f, 5.0f, kDef.phaser.rateHz, "%.2f Hz");
-            K("Freq min", &ph.freqMinHz, 20.0f, 5000.0f, kDef.phaser.freqMinHz, "%.0f Hz", true);
-            K("Freq max", &ph.freqMaxHz, 20.0f, 10000.0f, kDef.phaser.freqMaxHz, "%.0f Hz", true);
-            K("Razao", &ph.freqRatio, 1.0f, 4.0f, kDef.phaser.freqRatio, "%.2f");
-            K("Largura", &ph.notchWidthHz, 10.0f, 5000.0f, kDef.phaser.notchWidthHz, "%.0f Hz", true);
-            K("Profund.", &ph.depth, 0.0f, 2.0f, kDef.phaser.depth, "%.2f");
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = seco, 1 = phaser, 2 = vibrato (so a cadeia all-pass)");
-            K("Feedback", &ph.feedback, -0.99f, 0.99f, kDef.phaser.feedback, "%.2f");
-            ImGui::Checkbox("Inverter", &ph.invert);
-            break;
-        }
-        case GlobalFxType::Flanger: {
-            auto& f = fx.flanger;
-            K("Rate", &f.rateHz, 0.0f, 5.0f, kDef.flanger.rateHz, "%.2f Hz");
-            K("Atraso", &f.delayMs, 0.05f, 10.0f, kDef.flanger.delayMs, "%.2f ms");
-            K("Varredura", &f.sweepMs, 0.0f, 10.0f, kDef.flanger.sweepMs, "%.2f ms");
-            K("Profund.", &f.depth, 0.0f, 1.0f, kDef.flanger.depth, "%.2f");
-            K("Feedback", &f.feedback, -0.95f, 0.95f, kDef.flanger.feedback, "%.2f");
-            ImGui::Checkbox("Inverter", &f.invert);
-            break;
-        }
-        case GlobalFxType::Delay: {
-            auto& d = fx.delay;
-            K("Tempo L", &d.timeLeftSec, 0.01f, 2.0f, kDef.delay.timeLeftSec, "%.3f s", true);
-            K("Tempo R", &d.timeRightSec, 0.01f, 2.0f, kDef.delay.timeRightSec, "%.3f s", true);
-            K("Feedback", &d.feedback, 0.0f, 0.95f, kDef.delay.feedback, "%.2f");
-            K("Ping-pong", &d.crossFeed, 0.0f, 1.0f, kDef.delay.crossFeed, "%.2f");
-            K("Mix", &d.mix, 0.0f, 1.0f, kDef.delay.mix, "%.2f");
-            K("Low cut", &d.lowCutHz, 10.0f, 2000.0f, kDef.delay.lowCutHz, "%.0f Hz", true);
-            K("High cut", &d.highCutHz, 200.0f, 20000.0f, kDef.delay.highCutHz, "%.0f Hz", true);
-            K("Drive", &d.drive, 0.0f, 1.0f, kDef.delay.drive, "%.2f");
-            K("Wow", &d.wow, 0.0f, 1.0f, kDef.delay.wow, "%.2f");
-            break;
-        }
-        case GlobalFxType::Reverb: {
-            auto& r = fx.reverb;
-            static const char* kTypes[] = {"Room (Freeverb)", "Hall (Clouds)", "Plate (MVerb)"};
-            int type = static_cast<int>(r.type);
-            ImGui::SetNextItemWidth(170);
-            if (ImGui::Combo("Algoritmo", &type, kTypes, IM_ARRAYSIZE(kTypes))) r.type = static_cast<ReverbType>(type);
-            ImGui::SameLine();
-            ImGui::BeginDisabled(r.type != ReverbType::Room);
-            ImGui::Checkbox("Freeze", &r.freeze);
-            ImGui::EndDisabled();
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip(r.type == ReverbType::Room ? "Cauda infinita (modo freeze do Freeverb)" : "So no algoritmo Room");
-            K("Tamanho", &r.roomSize, 0.0f, 1.0f, kDef.reverb.roomSize, "%.2f");
-            K("Amortec.", &r.damping, 0.0f, 1.0f, kDef.reverb.damping, "%.2f");
-            K("Mix", &r.mix, 0.0f, 1.0f, kDef.reverb.mix, "%.2f");
-            K("Largura", &r.width, 0.0f, 1.0f, kDef.reverb.width, "%.2f");
-            K("Pre-delay", &r.predelayMs, 0.0f, 250.0f, kDef.reverb.predelayMs, "%.0f ms");
-            break;
-        }
-        case GlobalFxType::Eq: {
-            auto& e = fx.eq;
-            K("Grave Hz", &e.lowFreqHz, 20.0f, 1000.0f, kDef.eq.lowFreqHz, "%.0f", true);
-            K("Grave dB", &e.lowGainDb, -18.0f, 18.0f, 0.0f, "%+.1f");
-            K("Medio Hz", &e.midFreqHz, 100.0f, 10000.0f, kDef.eq.midFreqHz, "%.0f", true);
-            K("Medio dB", &e.midGainDb, -18.0f, 18.0f, 0.0f, "%+.1f");
-            K("Medio Q", &e.midQ, 0.1f, 10.0f, kDef.eq.midQ, "%.2f", true);
-            K("Agudo Hz", &e.highFreqHz, 1000.0f, 20000.0f, kDef.eq.highFreqHz, "%.0f", true);
-            K("Agudo dB", &e.highGainDb, -18.0f, 18.0f, 0.0f, "%+.1f");
-            if (ImGui::SmallButton("Zerar ganhos")) e.lowGainDb = e.midGainDb = e.highGainDb = 0.0f;
-            break;
-        }
-        case GlobalFxType::Compressor: {
-            auto& c = fx.compressor;
-            K("Threshold", &c.thresholdDb, -60.0f, 0.0f, kDef.compressor.thresholdDb, "%.1f dB");
-            K("Ratio", &c.ratio, 1.0f, 20.0f, kDef.compressor.ratio, "%.1f:1", true);
-            K("Attack", &c.attackMs, 0.1f, 100.0f, kDef.compressor.attackMs, "%.1f ms", true);
-            K("Release", &c.releaseMs, 1.0f, 500.0f, kDef.compressor.releaseMs, "%.0f ms", true);
-            K("Knee", &c.kneeDb, 0.0f, 8.0f, kDef.compressor.kneeDb, "%.1f dB");
-            K("Makeup", &c.makeupDb, 0.0f, 30.0f, kDef.compressor.makeupDb, "%.1f dB");
-            float gr = 0.0f; // [2026-10-29] medidor do slot do rack onde o compressor caiu
-            for (int ch = 0; ch < kFxChains; ++ch)
-                for (int sl = 0; sl < kFxSlots; ++sl)
-                    if (app.synth.fxRack().chain[ch].slot[sl].kind == FxKind::Compressor) gr = app.synth.fxSlotMeter(ch, sl);
-            char text[32];
-            std::snprintf(text, sizeof text, "-%.1f dB", gr);
-            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ui::col::kAccent2);
-            ImGui::ProgressBar(std::clamp(gr / 24.0f, 0.0f, 1.0f), ImVec2(200, 0), text);
-            ImGui::PopStyleColor();
-            ImGui::SameLine();
-            ImGui::TextDisabled("reducao de ganho");
-            break;
-        }
-    }
-}
-// [2026-10-29] troca o rack inteiro: sanitiza, publica e agenda o salvamento
-void setAppFxRack(AppState& app, const FxRackParams& r) {
-    app.fxRack = r;
-    sanitize(app.fxRack);
-    app.synth.setFxRack(app.fxRack);
-    app.fxRackDirty = true;
-    app.fxRackChangedAt = ImGui::GetCurrentContext() ? ImGui::GetTime() : 0.0;
-}
-
-// salva o ultimo estado do rack (debounce de 1 s; force = na saida)
+// [2026-10-29] salva o ultimo estado do rack (debounce de 1 s; force = na saida)
 void saveFxRackStateIfDirty(AppState& app, bool force) {
-    if (!app.fxRackDirty || (!force && ImGui::GetTime() - app.fxRackChangedAt < 1.0)) return;
-    app.fxRackDirty = false;
-    if (!saveFxRackFile(dx7fm_app::fxRackStatePath(), app.fxRack))
+    auto& ui = app.fxUi;
+    if (!ui.saveDirty || (!force && ImGui::GetTime() - ui.changedAt < 1.0)) return;
+    ui.saveDirty = false;
+    if (!saveFxRackFile(dx7fm_app::fxRackStatePath(), ui.edit))
         std::fprintf(stderr, "[fx] nao consegui salvar %s\n", dx7fm_app::fxRackStatePath().string().c_str());
 }
 
-void DrawGlobalFxPanel(AppState& app) {
-    // [2026-10-29] painel antigo (7 blocos) sobre o rack novo: edita
-    // app.legacyFx e publica convertido (fxRackFromLegacy) a cada quadro
-    // ate o painel da pedaleira substituir este
-    auto& fx = app.legacyFx;
-    struct Publish {
-        AppState& a;
-        ~Publish() { // so quando o painel mudou algo (senao sobrescreveria o rack carregado do arquivo)
-            FxRackParams r = fxRackFromLegacy(a.legacyFx);
-            sanitize(r);
-            std::string now = fxRackToString(r);
-            if (now != a.legacyFxLast) {
-                if (!a.legacyFxLast.empty()) setAppFxRack(a, r);
-                a.legacyFxLast = std::move(now);
-            }
-        }
-    } publish{app};
-    if (!ImGui::BeginTable("##fxcols", 2, ImGuiTableFlags_SizingStretchProp)) return;
-    ImGui::TableSetupColumn("cadeia", ImGuiTableColumnFlags_WidthFixed, 270.0f);
-    ImGui::TableSetupColumn("efeitos", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableNextRow();
 
-    // cadeia: ordem + liga/desliga
-    ImGui::TableSetColumnIndex(0);
-    if (ui::BeginCard("##card_chain", "CADEIA DE EFEITOS")) {
-        ImGui::TextDisabled("O sinal passa de cima pra baixo.");
-        for (int i = 0; i < kNumGlobalFx; ++i) {
-            GlobalFxType t = fx.order[i];
-            const auto& info = globalFxInfo(t);
-            ImGui::PushID(i);
-            ImGui::TextDisabled("%d", i + 1);
-            ImGui::SameLine();
-            ImGui::BeginDisabled(i == 0);
-            if (ImGui::ArrowButton("##up", ImGuiDir_Up)) std::swap(fx.order[i], fx.order[i - 1]);
-            ImGui::EndDisabled();
-            ImGui::SameLine(0, 2);
-            ImGui::BeginDisabled(i == kNumGlobalFx - 1);
-            if (ImGui::ArrowButton("##down", ImGuiDir_Down)) std::swap(fx.order[i], fx.order[i + 1]);
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            ImGui::Checkbox(info.name, &globalFxEnabled(fx, t));
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", info.origin);
-            ImGui::PopID();
-        }
-        if (ImGui::SmallButton("Ordem padrao")) std::copy(std::begin(kDefaultGlobalFxOrder), std::end(kDefaultGlobalFxOrder), fx.order);
-        ImGui::Spacing();
-        ImGui::TextDisabled("Depois da cadeia: volume geral\ne limitador de saida.");
-    }
-    ui::EndCard();
-
-    // um card por efeito, na ordem da cadeia, em 2 colunas empilhadas de
-    // forma independente (1,3,5,7 | 2,4,6): sem buracos entre cards de
-    // alturas diferentes
-    ImGui::TableSetColumnIndex(1);
-    if (ImGui::BeginTable("##fxgrid", 2, ImGuiTableFlags_SizingStretchSame)) {
-        ImGui::TableNextRow();
-        // coluna 0 inteira (1,3,5,7) e depois a 1 (2,4,6): voltar pra uma
-        // celula ja usada com TableSetColumnIndex poe o cursor no topo dela
-        for (int k = 0; k < kNumGlobalFx; ++k) {
-            int i = k < (kNumGlobalFx + 1) / 2 ? k * 2 : (k - (kNumGlobalFx + 1) / 2) * 2 + 1;
-            if (k == 0 || k == (kNumGlobalFx + 1) / 2) ImGui::TableSetColumnIndex(i % 2);
-            GlobalFxType t = fx.order[i];
-            const auto& info = globalFxInfo(t);
-            bool on = globalFxEnabled(fx, t);
-            char id[24], title[64];
-            std::snprintf(id, sizeof id, "##fxcard%d", static_cast<int>(t));
-            std::snprintf(title, sizeof title, "%d. %s", i + 1, info.name);
-            ImGui::PushID(static_cast<int>(t) + 100);
-            if (ui::BeginCard(id, title, 0.0f, on ? ui::col::kAccent : ui::col::kTextDim)) {
-                ImGui::Checkbox("Ligado", &globalFxEnabled(fx, t));
-                ImGui::SameLine();
-                ImGui::TextDisabled("(?)");
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", info.origin);
-                if (!on) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.55f); // desligado: esmaecido, mas editavel
-                DrawGlobalFxParams(app, fx, t);
-                if (!on) ImGui::PopStyleVar();
-            }
-            ui::EndCard();
-            ImGui::PopID();
-        }
-        ImGui::EndTable();
-    }
-    ImGui::EndTable();
-}
 // Ponto colorido + texto (status do audio/MIDI na barra superior)
 void StatusChip(bool ok, const char* text) {
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -2472,8 +2230,18 @@ void DrawMainUi(AppState& app, int forceTab = -1) {
                 ImGui::EndTabItem();
             }
         }
-        if (ImGui::BeginTabItem("FX Globais", nullptr, forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0)) {
-            DrawGlobalFxPanel(app);
+        if (ImGui::BeginTabItem("Efeitos", nullptr, forceTab == 4 ? ImGuiTabItemFlags_SetSelected : 0)) {
+            dx7fm_app::fxui::FxRackHooks hooks;
+            hooks.presetDir = kFxPresetDir;
+            hooks.factory = &app.fxFactory;
+            hooks.learnExpression = [&app](float w) { LearnButton(app, dx7fm_app::CcTarget::Expression, w); };
+            hooks.sendExpression = [&app](float v) {
+                AppEvent e;
+                e.kind = AppEvent::Kind::FxExpression;
+                e.floatValue = v;
+                app.eventQueue.push(e);
+            };
+            dx7fm_app::fxui::DrawFxRackPanel(app.fxUi, app.synth, hooks);
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -2509,8 +2277,12 @@ void initAppState(AppState& app) {
     }
     { // [2026-10-29] ultimo estado do rack de efeitos
         FxRackParams r;
-        if (loadFxRackFile(dx7fm_app::fxRackStatePath(), r)) setAppFxRack(app, r);
-        app.fxRackDirty = false;
+        if (loadFxRackFile(dx7fm_app::fxRackStatePath(), r)) {
+            dx7fm_app::fxui::setRack(app.fxUi, app.synth, r, 0.0);
+            app.fxUi.current = "(ultima sessao)";
+        }
+        app.fxUi.committed = app.fxUi.edit;
+        app.fxUi.saveDirty = false;
     }
     for (int p = 0; p < kNumParts; ++p) {
         app.synth.part(p).enabled = (p == 0);

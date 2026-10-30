@@ -11,11 +11,15 @@
 //   text:TEXTO     digita texto no campo com foco
 //   frames:N       roda N quadros
 //   load:NOME      carrega o patch de fabrica NOME na parte A
+//   fx:NOME        carrega o preset de efeitos de fabrica NOME e abre a aba Efeitos
+//   tab:N          abre a aba N (0-3 = partes, 4 = Efeitos)
 #define main dx7fm_app_main
 #include "../app/main.cpp"
 #undef main
 
 namespace {
+
+int gForceTab = -1; // um quadro so
 
 void frame(AppState& app, SDL_Renderer* renderer) {
     SDL_Event e;
@@ -23,7 +27,8 @@ void frame(AppState& app, SDL_Renderer* renderer) {
     ImGui_ImplSDLRenderer2_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
-    DrawMainUi(app);
+    DrawMainUi(app, gForceTab);
+    gForceTab = -1;
     ImGui::Render();
     SDL_SetRenderDrawColor(renderer, 18, 20, 26, 255);
     SDL_RenderClear(renderer);
@@ -85,6 +90,12 @@ int main(int argc, char** argv) {
         } else if (kind == "load") {
             for (int i = 0; i < static_cast<int>(app.factory.size()); ++i)
                 if (app.factory[static_cast<size_t>(i)].part.name == arg) loadFactoryPreset(app, 0, i);
+        } else if (kind == "fx") {
+            for (const auto& pr : app.fxFactory)
+                if (pr.name == arg) dx7fm_app::fxui::loadPresetInto(app.fxUi, app.synth, pr.rack, pr.name, 0.0);
+            gForceTab = 4;
+        } else if (kind == "tab") {
+            gForceTab = std::stoi(arg);
         }
         for (int i = 0; i < 3; ++i) frame(app, renderer);
     }
