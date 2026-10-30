@@ -4492,6 +4492,15 @@ static void testAllFxKindsStable() {
             }
         }
     }
+    // [2026-10-29] e todos SOAM com os valores padrao (um bug deixou o Micro
+    // mudo com a forma em exatamente 0.5 e os testes de estabilidade passavam)
+    std::string mute;
+    for (int k = 1; k < static_cast<int>(FxKind::Count); ++k) {
+        auto [L, R] = runSlot(static_cast<FxKind>(k), nullptr, [](int i) { return 0.5f * std::sin(0.0571f * i); }, 48000);
+        if (computeRms(L, 24000, 24000) + computeRms(R, 24000, 24000) < 0.002f) { mute += " "; mute += fxInfo(static_cast<FxKind>(k)).id; }
+    }
+    const std::string muteMsg = "todos os efeitos do rack produzem som com os valores padrao" + (mute.empty() ? std::string() : " -- mudos:" + mute);
+    check(mute.empty(), muteMsg.c_str());
     std::printf("  (%d tipos x 5 ajustes x 3 niveis x ruido/seno = %d rodadas)\n", static_cast<int>(FxKind::Count) - 1, runs);
     const std::string msg = "todos os efeitos do rack: estaveis e finitos com parametros nos extremos e sinais de -40 a +6 dB" + (bad.empty() ? std::string() : " --" + bad);
     check(bad.empty(), msg.c_str());
@@ -4712,6 +4721,65 @@ static void testReverbMachines() {
         bool fin = true;
         for (float x : b) fin &= std::isfinite(x);
         check(fin && computeRms(b, 12000, 9600) > 0.01f, "reverbs: mudar o tamanho recria o DSP na thread da UI e segue soando");
+    }
+}
+
+// --- [ADICIONADO em 2026-10-29] Micro (granular) ---
+static void testMicroGranular() {
+    auto tone = [](float hz, int len) { return [hz, len](int i) { return i < len ? 0.4f * std::sin(2.0f * kPi * hz * i / 48000.0f) : 0.0f; }; };
+    // Hold: a entrada acaba em 1 s; sem Hold o Mosaic some, com Hold continua
+    {
+        auto setup = [](float hold) { return [hold](FxSlotParams& s) { s.p[0] = 0.0f; s.p[3] = 0.0f; s.p[4] = 200.0f; s.p[9] = 0.0f; s.p[10] = hold; }; };
+        auto off = runSlot(FxKind::Micro, setup(0.0f), tone(330.0f, 48000), 48000 * 3).first;
+        // o Hold e ligado so depois que a nota entrou (congela o que foi gravado)
+        FxRack rack;
+        rack.prepare(48000.0);
+        FxRackParams p;
+        p.chain[0].slot[0].setKind(FxKind::Micro);
+        p.chain[0].slot[0].mix = 1.0f;
+        setup(0.0f)(p.chain[0].slot[0]);
+        rack.setParams(p);
+        auto first = runRack(rack, tone(330.0f, 48000), 40000);
+        p.chain[0].slot[0].p[10] = 1.0f;
+        rack.setParams(p);
+        auto held = runRack(rack, [](int) { return 0.0f; }, 48000 * 2);
+        const float offLate = computeRms(off, 48000 * 2, 24000), heldLate = computeRms(held, 48000, 24000);
+        std::printf("  (Micro Mosaic 1 s depois da nota: sem Hold RMS %.5f, com Hold %.4f)\n", offLate, heldLate);
+        check(offLate < 0.002f && heldLate > 0.02f, "Micro: Hold congela o buffer (continua soando depois que a entrada para)");
+    }
+    // Seq: os passos caem na grade (atividade 0.5 -> 1/8 = 0.25 s a 120 BPM)
+    {
+        auto L = runSlot(FxKind::Micro, [](FxSlotParams& s) { s.p[0] = 1.0f; s.p[1] = 0.5f; s.p[3] = 0.0f; s.p[9] = 0.0f; }, tone(330.0f, 48000 * 4), 48000 * 4).first;
+        auto e = envDb(L, 480); // janelas de 10 ms
+        int best = 0;
+        double bestC = -1e30;
+        std::vector<float> lin(e.size());
+        for (size_t i = 0; i < e.size(); ++i) lin[i] = std::pow(10.0f, e[i] / 20.0f);
+        float m = 0; for (float x : lin) m += x; m /= lin.size();
+        for (int lag = 10; lag < 60; ++lag) {
+            double c = 0; for (size_t i = 100; i + static_cast<size_t>(lag) < lin.size(); ++i) c += (lin[i] - m) * (lin[i + static_cast<size_t>(lag)] - m);
+            if (c > bestC) { bestC = c; best = lag; }
+        }
+        std::printf("  (Micro Seq a 120 BPM: periodo do envelope %.2f s)\n", best * 0.01);
+        check(std::abs(best * 0.01 - 0.25) < 0.03 || std::abs(best * 0.01 - 0.5) < 0.03, "Micro Seq: os passos caem na grade do BPM");
+    }
+    // Glide: a altura desliza (energia sai da nota original)
+    {
+        auto g = runSlot(FxKind::Micro, [](FxSlotParams& s) { s.p[0] = 2.0f; s.p[11] = 1.0f; s.p[3] = 0.0f; s.p[9] = 0.0f; }, tone(440.0f, 48000 * 6), 48000 * 6).first;
+        auto fixed = runSlot(FxKind::Micro, [](FxSlotParams& s) { s.p[0] = 2.0f; s.p[11] = 0.0f; s.p[3] = 0.0f; s.p[9] = 0.0f; }, tone(440.0f, 48000 * 6), 48000 * 6).first;
+        const float gOn = bandRms(g, 440.0, 48000 * 3, 48000) / (computeRms(g, 48000 * 3, 48000) + 1e-9f);
+        const float fOn = bandRms(fixed, 440.0, 48000 * 3, 48000) / (computeRms(fixed, 48000 * 3, 48000) + 1e-9f);
+        std::printf("  (Micro Glide: energia em 440 Hz relativa -- sem deslize %.1f, com deslize %.1f)\n", fOn, gOn);
+        check(gOn < 0.6f * fOn, "Micro Glide: a altura dos loops desliza");
+    }
+    // Tunnel: drone uma oitava abaixo que acompanha a entrada (300 -> 500 Hz)
+    {
+        auto T = runSlot(FxKind::Micro, [](FxSlotParams& s) { s.p[0] = 4.0f; s.p[11] = 1.0f; s.p[3] = 0.0f; s.p[9] = 0.0f; },
+                         [](int i) { const float hz = i < 72000 ? 300.0f : 500.0f; return 0.4f * std::sin(2.0f * kPi * hz * i / 48000.0f); }, 48000 * 3).first;
+        const float before = bandRms(T, 150.0, 48000, 9600) / (bandRms(T, 250.0, 48000, 9600) + 1e-9f);
+        const float after = bandRms(T, 250.0, 120000, 9600) / (bandRms(T, 150.0, 120000, 9600) + 1e-9f);
+        std::printf("  (Micro Tunnel: oitava abaixo de 300 Hz domina antes (%.1fx), de 500 Hz depois (%.1fx))\n", before, after);
+        check(before > 3.0f && after > 3.0f, "Micro Tunnel: drone uma oitava abaixo que acompanha a entrada");
     }
 }
 
@@ -5106,6 +5174,7 @@ int main() {
     testFxBehaviour();
     testFxKindsCost();
     testReverbMachines();
+    testMicroGranular();
     testGlobalFxOrder();
     testGlobalFxCost();
     testDeadOperatorRevivedByLiveEdit();

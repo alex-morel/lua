@@ -23,6 +23,7 @@ completo sob a GPLv3.
 | ZetaCarinaeModules (processo de Ornstein-Uhlenbeck, via CHOW Tape) | variação do wow (`chowtape::WowFlutter`) | Michael Hampton | GPLv3 | porta |
 | sst-effects — RotarySpeaker | rotary/Leslie do rack (`fxextra::Rotary`, `src/dx7_fx_extra.h`) | Surge Synth Team | GPLv3 | porta do algoritmo, com infraestrutura própria e chave lento/rápido com inércia |
 | Faust vaeffects.lib (crybaby, autowah) | wah do rack (`fxextra::Wah`) | Julius O. Smith III | STK-4.3 (estilo MIT) | porta |
+| Clouds — Grain, GranularSamplePlayer, Diffuser e tabelas | efeito granular "Micro" (`src/dx7_fx_micro.h`) | Emilie Gillet (Mutable Instruments) | MIT | porta, com mudanças (buffer float, qualquer taxa); as 11 variações por cima são próprias |
 | Clouds — PitchShifter | pitch shifter do rack (`fxextra::PitchShifter`) | Emilie Gillet (Mutable Instruments) | MIT | porta, com mudanças |
 | freeverb3 | base dos reverbs Hall, Room, Plate e Reflections (`third_party/freeverb3`) | Teru Kamogashira (e Fons Adriaensen em zrev) | GPLv2 ou posterior | vendorizado (a cópia do Dragonfly), com 2 mudanças mecânicas descritas em `third_party/freeverb3/README.dx7fm` |
 | Dragonfly Reverb | Hall, Room, Plate e Reflections do rack (`src/dx7_fx_reverbs.h`) | Michael Willis | GPLv3 | porta da configuração e dos laços (classes NRev/NRevB), com valores dos presets do plugin; os laços do Plate são chamados direto (no plugin distribuído eles não entram) |
@@ -53,7 +54,8 @@ do bloco correspondente em `src/dx7_globalfx.h`.
     `chowdsp/shared/Shelf.h`, `BilinearUtils.h`, `chowdsp/TapeEffect.cpp`)
   - sst-effects: <https://github.com/surge-synthesizer/sst-effects> (`include/sst/effects/RotarySpeaker.h`)
   - Faust: `vaeffects.lib` (crybaby, autowah) do mesmo repositório de cima
-  - Clouds: `clouds/dsp/fx/pitch_shifter.h` do mesmo repositório da Mutable de cima
+  - Clouds: `clouds/dsp/fx/pitch_shifter.h` do mesmo repositório da Mutable de cima; e `clouds/dsp/grain.h`,
+    `granular_sample_player.h`, `fx/diffuser.h`, `clouds/resources/lookup_tables.py` (efeito Micro)
   - Dragonfly Reverb: <https://github.com/michaelwillis/dragonfly-reverb> (`common/freeverb/*`,
     `common/fv3_config.h`, `plugins/dragonfly-*/DSP.cpp`, `DistrhoPluginInfo.h`)
   - Cloud Seed Core: <https://github.com/GhostNoteAudio/CloudSeedCore> (`DSP/*`, `Parameters.*`, `LICENSE`)

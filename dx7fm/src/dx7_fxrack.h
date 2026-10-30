@@ -2,6 +2,7 @@
 #include "dx7_globalfx.h"
 #include "dx7_fx_extra.h"
 #include "dx7_fx_reverbs.h"
+#include "dx7_fx_micro.h"
 #include "dx7_params.h"
 #include "chowtape/ChowTape.h"
 #include "airwindows/AutoPan.h"
@@ -59,6 +60,7 @@ enum class FxKind : uint8_t {
     Tremolo, AutoPan, Vibrato, RingMod, Wah, FilterLfo, PitchShift, Rotary,         //   modulacao, filtros, pitch
     DigitalDelay, ReverseDelay,                                                      //   delays
     Hall, Room, Plate, Reflections, Cloud, Spring, Swell, Bloom, Chorale, Shimmer, Magneto, Nonlinear, // reverbs estilo BigSky
+    Micro,                                                                                              // granular estilo Microcosm
     Count
 };
 
@@ -284,6 +286,20 @@ inline const FxInfo& fxInfo(FxKind k) {
           {"time", "Tempo", 50.0f, 1000.0f, 300.0f, "ms", true},
           {"diffusion", "Difusao", 0.0f, 1.0f, 0.6f},
           {"tone", "Tom", 0.0f, 1.0f, 0.7f}}},
+        {FxKind::Micro, "Micro", "Micro (granular)", "Granular",
+         "Motor granular e difusor do Mutable Instruments Clouds (Emilie Gillet, MIT); variacoes proprias no estilo do Microcosm", 0.5f, 12,
+         {{"variation", "Variacao", 0.0f, 10.0f, 0.0f, "", false, "Mosaic|Seq|Glide|Haze|Tunnel|Strum|Blocks|Interrupt|Arp|Pattern|Warp"},
+          {"activity", "Atividade", 0.0f, 1.0f, 0.5f},
+          {"shape", "Forma", 0.0f, 1.0f, 0.5f},
+          {"repeats", "Repeticoes", 0.0f, 0.95f, 0.3f},
+          {"time", "Tempo", 20.0f, 2000.0f, 250.0f, "ms", true},
+          {"sync", "Sync", 0.0f, 9.0f, 0.0f, "", false, "Livre|1/1|1/2|1/4|1/4.|1/4T|1/8|1/8.|1/8T|1/16"},
+          {"pitch", "Altura", -12.0f, 12.0f, 0.0f, "st"},
+          {"spread", "Abertura", 0.0f, 1.0f, 0.6f},
+          {"filter", "Filtro", -1.0f, 1.0f, 0.0f},
+          {"space", "Espaco", 0.0f, 1.0f, 0.25f},
+          {"hold", "Hold", 0.0f, 1.0f, 0.0f, "", false, "Nao|Sim"},
+          {"amount", "Variar", 0.0f, 1.0f, 0.5f}}},
     };
     static_assert(sizeof(table) / sizeof(table[0]) == static_cast<size_t>(FxKind::Count), "fxInfo: um item por FxKind, na ordem");
     const int i = static_cast<int>(k);
@@ -627,6 +643,24 @@ private:
     Process process_;
 };
 
+class MicroFx : public FxProcessor {
+public:
+    void prepare(double sr) override { fx_.prepare(sr); }
+    void reset() override { fx_.reset(); }
+    void process(const FxSlotParams& s, float* L, float* R, int n, const FxContext& ctx) override {
+        micro::MicroParams p;
+        p.variation = static_cast<int>(std::lround(s.p[0]));
+        p.activity = s.p[1]; p.shape = s.p[2]; p.repeats = s.p[3];
+        const double beats = syncBeats(s.p[5]);
+        p.seconds = beats > 0.0 ? static_cast<float>(beats * 60.0 / std::max(1.0f, ctx.bpm)) : s.p[4] * 0.001f;
+        p.semitones = std::round(s.p[6]); p.spread = s.p[7]; p.filter = s.p[8]; p.space = s.p[9];
+        p.hold = s.p[10] >= 0.5f; p.variationAmt = s.p[11];
+        fx_.process(p, L, R, n, ctx.beatPos, ctx.bpm);
+    }
+private:
+    micro::Micro fx_;
+};
+
 // os da familia Dragonfly tem mute() em vez de reset()
 template <typename T> struct WithReset : T { void reset() { this->mute(); } };
 
@@ -748,6 +782,7 @@ inline std::unique_ptr<FxProcessor> makeFxProcessor(FxKind k, double sampleRate)
                     r.process(static_cast<int>(std::lround(s.p[0])), s.p[1], s.p[2], s.p[3], L, R, n);
                 });
             break;
+        case FxKind::Micro: p = std::make_unique<MicroFx>(); break;
         case FxKind::Off: case FxKind::Count: return nullptr;
     }
     if (p) p->prepare(sampleRate);
