@@ -382,6 +382,16 @@ inline const char* modSourceName(ModSource s) {
         case ModSource::Macro3:    return "Macro3";
         case ModSource::Macro4:    return "Macro4";
         case ModSource::Slide:     return "Slide";
+        case ModSource::Breath:    return "Breath";
+        case ModSource::Foot:      return "Foot";
+        case ModSource::Expression: return "Expression";
+        case ModSource::SustainPedal: return "SustainPedal";
+        case ModSource::RandomNote: return "RandomNote";
+        case ModSource::Alternate: return "Alternate";
+        case ModSource::NoteAge:   return "NoteAge";
+        case ModSource::AmpEnv:    return "AmpEnv";
+        case ModSource::PegEnv:    return "PegEnv";
+        case ModSource::Constant:  return "Constant";
     }
     return "None";
 }
@@ -404,6 +414,8 @@ inline ModSource modSourceFromName(const std::string& s) {
     if (s == "Macro3")    return ModSource::Macro3;
     if (s == "Macro4")    return ModSource::Macro4;
     if (s == "Slide")     return ModSource::Slide;
+    for (int k = static_cast<int>(ModSource::Breath); k <= static_cast<int>(ModSource::Constant); ++k)
+        if (s == modSourceName(static_cast<ModSource>(k))) return static_cast<ModSource>(k);
     return ModSource::None;
 }
 
@@ -422,6 +434,14 @@ inline const char* modDestName(ModDest d) {
         case ModDest::LfoRate:          return "LfoRate";
         case ModDest::LfoDepth:         return "LfoDepth";
         case ModDest::AlgoMorph:        return "AlgoMorph";
+        case ModDest::OperatorFmIn:     return "OperatorFmIn";
+        case ModDest::OperatorPhaseDist: return "OperatorPhaseDist";
+        case ModDest::OperatorEgSpeed:  return "OperatorEgSpeed";
+        case ModDest::VoiceFmIn:        return "VoiceFmIn";
+        case ModDest::VoiceFx1:         return "VoiceFx1";
+        case ModDest::VoiceFx2:         return "VoiceFx2";
+        case ModDest::PegDepth:         return "PegDepth";
+        case ModDest::ModEnvSpeed:      return "ModEnvSpeed";
     }
     return "None";
 }
@@ -438,6 +458,8 @@ inline ModDest modDestFromName(const std::string& s) {
     if (s == "LfoRate")          return ModDest::LfoRate;
     if (s == "LfoDepth")         return ModDest::LfoDepth;
     if (s == "AlgoMorph")        return ModDest::AlgoMorph;
+    for (int k = static_cast<int>(ModDest::OperatorFmIn); k <= static_cast<int>(ModDest::ModEnvSpeed); ++k)
+        if (s == modDestName(static_cast<ModDest>(k))) return static_cast<ModDest>(k);
     return ModDest::None;
 }
 

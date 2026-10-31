@@ -185,7 +185,13 @@ struct OperatorParams {
 enum class ModSource : uint8_t { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, PitchBend, KeyNote, Velocity,
                                  LFO3, LFO4, Env1, Env2, Env3,
                                  Macro1, Macro2, Macro3, Macro4, // [2026-10-24] macros da parte, 0..1
-                                 Slide }; // [2026-10-28] MPE: CC74 por nota ("slide"/timbre), 0..1
+                                 Slide, // [2026-10-28] MPE: CC74 por nota ("slide"/timbre), 0..1
+                                 // [2026-10-30] controladores (0..1): CC2, CC4, CC11, pedal de sustain (CC64)
+                                 Breath, Foot, Expression, SustainPedal,
+                                 // [2026-10-30] por nota: RandomNote -1..1 sorteado no note on; Alternate +1/-1 a
+                                 // cada nota; NoteAge 0..1 em 5 s desde o note on; AmpEnv 0..1 = maior envelope de
+                                 // amplitude das portadoras; PegEnv -1..1 = envelope de pitch; Constant = 1
+                                 RandomNote, Alternate, NoteAge, AmpEnv, PegEnv, Constant };
 // OperatorMorph: [ADICIONADO em 2026-10-18], soma na posicao do morph A->B (Additive/Wavetable).
 // [ADICIONADOS em 2026-10-22, no fim]:
 //   VoicePan      soma no pan da voz (-1..1; +1 = toda pra direita)
@@ -198,12 +204,23 @@ enum class ModSource : uint8_t { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, 
 // proprio rate sem ciclo dentro da mesma amostra).
 enum class ModDest : uint8_t { None, OperatorLevel, OperatorFx1, OperatorFeedback, VoicePitch,
                                OperatorMorph, VoicePan, VoiceLevel, OperatorPitch, OperatorFx2, LfoRate, LfoDepth,
-                               AlgoMorph }; // [2026-10-24] soma na posicao do morph entre algoritmos (0..1)
+                               AlgoMorph, // [2026-10-24] soma na posicao do morph entre algoritmos (0..1)
+                               // [2026-10-30]
+                               //   OperatorFmIn      FM recebida pelo operador x max(0, 1 + quantidade) (sem o auto-feedback)
+                               //   OperatorPhaseDist phase distortion do operador + quantidade
+                               //   OperatorEgSpeed   velocidade dos envelopes amp/FX do operador x 2^(3 x quantidade)
+                               //   VoiceFmIn         OperatorFmIn em todos os operadores
+                               //   VoiceFx1/VoiceFx2 OperatorFx1/OperatorFx2 em todos os operadores
+                               //   PegDepth          envelope de pitch x max(0, 1 + quantidade)
+                               //   ModEnvSpeed       velocidade do envelope de modulacao opIndex x 2^(3 x quantidade)
+                               OperatorFmIn, OperatorPhaseDist, OperatorEgSpeed, VoiceFmIn, VoiceFx1, VoiceFx2, PegDepth, ModEnvSpeed };
 inline bool modDestPerOperator(ModDest d) {
     return d == ModDest::OperatorLevel || d == ModDest::OperatorFx1 || d == ModDest::OperatorFeedback || d == ModDest::OperatorMorph ||
-           d == ModDest::OperatorPitch || d == ModDest::OperatorFx2;
+           d == ModDest::OperatorPitch || d == ModDest::OperatorFx2 || d == ModDest::OperatorFmIn ||
+           d == ModDest::OperatorPhaseDist || d == ModDest::OperatorEgSpeed;
 }
 inline bool modDestPerLfo(ModDest d) { return d == ModDest::LfoRate || d == ModDest::LfoDepth; }
+inline bool modDestPerEnv(ModDest d) { return d == ModDest::ModEnvSpeed; }
 
 struct ModRoute {
     ModSource src = ModSource::None;
@@ -602,8 +619,8 @@ inline void sanitize(VoiceParams& v) {
         e.division = static_cast<uint8_t>(std::min<int>(e.division, kNumLfoDivisions - 1));
     }
     for (auto& r : v.modMatrix) {
-        r.src = sanEnum(r.src, ModSource::Slide);
-        r.dest = sanEnum(r.dest, ModDest::AlgoMorph);
+        r.src = sanEnum(r.src, ModSource::Constant);
+        r.dest = sanEnum(r.dest, ModDest::ModEnvSpeed);
         r.opIndex = std::clamp(r.opIndex, 0, modDestPerLfo(r.dest) ? kNumLfos - 1 : kNumOps - 1);
         r.depth = sanF(r.depth, -1.0f, 1.0f, 0.0f);
     }

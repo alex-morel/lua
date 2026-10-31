@@ -13,6 +13,7 @@
 //   load:NOME      carrega o patch de fabrica NOME na parte A
 //   fx:NOME        carrega o preset de efeitos de fabrica NOME e abre a aba Efeitos
 //   tab:N          abre a aba N (0-3 = partes, 4 = Efeitos)
+//   wheel:N        roda do mouse N passos pra baixo, com o mouse na lateral direita
 #define main dx7fm_app_main
 #include "../app/main.cpp"
 #undef main
@@ -94,6 +95,10 @@ int main(int argc, char** argv) {
             for (const auto& pr : app.fxFactory)
                 if (pr.name == arg) dx7fm_app::fxui::loadPresetInto(app.fxUi, app.synth, pr.rack, pr.name, 0.0);
             gForceTab = 4;
+        } else if (kind == "wheel") {
+            io.AddMousePosEvent(1400.0f, 500.0f);
+            frame(app, renderer);
+            for (int i = 0; i < std::stoi(arg); ++i) { io.AddMouseWheelEvent(0.0f, -1.0f); frame(app, renderer); }
         } else if (kind == "tab") {
             gForceTab = std::stoi(arg);
         }

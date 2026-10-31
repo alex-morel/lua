@@ -360,7 +360,18 @@ void onMidiEvent(AppState& app, const MidiEvent& ev) {
             if (ev.data1 == 1) { // mod wheel
                 ae.kind = AppEvent::Kind::ModWheel;
                 ae.floatValue = std::clamp(ev.data2 / 127.0f, 0.0f, 1.0f);
+            } else if (ev.data1 == 2 || ev.data1 == 4 || ev.data1 == 11) { // [2026-10-30] sopro, pe, expressao: fontes da matriz
+                ae.kind = AppEvent::Kind::Controller;
+                ae.note = ev.data1 == 2 ? 0 : ev.data1 == 4 ? 1 : 2;
+                ae.floatValue = std::clamp(ev.data2 / 127.0f, 0.0f, 1.0f);
             } else if (ev.data1 == 64) { // sustain
+                { // tambem como fonte da matriz (SustainPedal)
+                    AppEvent pedal = ae;
+                    pedal.kind = AppEvent::Kind::Controller;
+                    pedal.note = 3;
+                    pedal.floatValue = ev.data2 >= 64 ? 1.0f : 0.0f;
+                    app.eventQueue.push(pedal);
+                }
                 ae.kind = AppEvent::Kind::Sustain;
                 ae.boolValue = ev.data2 >= 64;
             } else if (ev.data1 == 66) { // sostenuto
@@ -1070,9 +1081,16 @@ bool DrawModEnvelopes(VoiceParams& v) {
 bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
     bool changed = false;
     static const char* kSrc[] = {"None", "LFO1", "LFO2", "ModWheel", "ChannelAT", "PolyAT", "PitchBend", "Nota", "Velocity",
-                                 "LFO3", "LFO4", "Env1", "Env2", "Env3", "Macro1", "Macro2", "Macro3", "Macro4", "Slide (MPE)"};
+                                 "LFO3", "LFO4", "Env1", "Env2", "Env3", "Macro1", "Macro2", "Macro3", "Macro4", "Slide (MPE)",
+                                 "Sopro (CC2)", "Pe (CC4)", "Expressao (CC11)", "Pedal sustain", "Aleatorio/nota", "Alternado", "Tempo da nota",
+                                 "Env amplitude", "Env pitch", "Constante"};
+    static const char* kSrcTip[] = {"Sopro: CC2, 0..1", "Pe: CC4, 0..1", "Expressao: CC11, 0..1", "Pedal de sustain: 0 solto, 1 apertado",
+                                    "Sorteia -1..1 no note on e fica fixo durante a nota", "+1 e -1 a cada nota da parte",
+                                    "Sobe de 0 a 1 nos 5 s depois do note on", "Maior envelope de amplitude das portadoras, 0..1",
+                                    "Envelope de pitch da voz, -1..1 (centro 50)", "Sempre 1: um ajuste fixo do destino (combine com a profundidade)"};
     static const char* kDst[] = {"None", "OperatorLevel", "OperatorFx1", "OperatorFeedback", "VoicePitch", "OperatorMorph",
-                                 "VoicePan", "VoiceLevel", "OperatorPitch", "OperatorFx2", "LfoRate", "LfoDepth", "AlgoMorph"};
+                                 "VoicePan", "VoiceLevel", "OperatorPitch", "OperatorFx2", "LfoRate", "LfoDepth", "AlgoMorph",
+                                 "OperatorFmIn", "OperatorPhaseDist", "OperatorEgSpeed", "VoiceFmIn", "VoiceFx1", "VoiceFx2", "PegDepth", "ModEnvSpeed"};
     static const char* kDstTip[] = {"", "nivel do operador x (1 + quantidade)", "FX1 do operador x (1 + quantidade): corte, taxa, afinacao, drive",
                                     "feedback do operador + quantidade", "afinacao da voz inteira, quantidade x 12 semitons",
                                     "morph A->B da Additive/Wavetable + quantidade", "pan da voz + quantidade (-1 esquerda, +1 direita)",
@@ -1080,14 +1098,21 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
                                     "FX2 do operador x (1 + quantidade): Q, drive, bits, feedback, simetria",
                                     "velocidade do LFO escolhido x 2^(3 x quantidade): +-3 oitavas",
                                     "saida do LFO escolhido x (1 + quantidade): -1 desliga",
-                                    "posicao do morph entre algoritmos (card Algoritmo) + quantidade"};
+                                    "posicao do morph entre algoritmos (card Algoritmo) + quantidade",
+                                    "FM recebida pelo operador x (1 + quantidade): -1 tira a FM (o auto-feedback fica)",
+                                    "phase distortion do operador + quantidade",
+                                    "velocidade dos envelopes de amplitude e FX do operador x 2^(3 x quantidade): +-3 oitavas de velocidade",
+                                    "FM recebida por TODOS os operadores x (1 + quantidade): o brilho geral do patch",
+                                    "FX1 de TODOS os operadores x (1 + quantidade)", "FX2 de TODOS os operadores x (1 + quantidade)",
+                                    "profundidade do envelope de pitch x (1 + quantidade)",
+                                    "velocidade do envelope de modulacao escolhido x 2^(3 x quantidade)"};
     // so as rotas em uso + 1 vazia (as 16 com o checkbox)
     static bool showAll = false;
     int lastUsed = -1;
     for (int i = 0; i < kNumModRoutes; ++i)
         if (routes[i].src != ModSource::None || routes[i].dest != ModDest::None) lastUsed = i;
     const int visible = showAll ? kNumModRoutes : std::min(kNumModRoutes, std::max(lastUsed + 2, 4));
-    ImGui::TextDisabled("LFOs/envelopes/controladores/nota/velocity -> parametros");
+    ImGui::TextDisabled("LFOs/envelopes/controladores/nota -> parametros");
     ImGui::SameLine();
     ImGui::Checkbox("Mostrar as 16", &showAll);
     if (ImGui::BeginTable("modmatrix", 5, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
@@ -1110,12 +1135,15 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
             if (ImGui::IsItemHovered() && (r.src == ModSource::KeyNote || r.src == ModSource::Velocity))
                 ImGui::SetTooltip(r.src == ModSource::KeyNote ? "Nota: 0 no C4, +1 cinco oitavas acima (C9), -1 cinco abaixo"
                                                               : "Velocity: 0..1 (velocity / 127), fixa durante a nota");
+            if (ImGui::IsItemHovered() && r.src >= ModSource::Breath)
+                ImGui::SetTooltip("%s", kSrcTip[static_cast<int>(r.src) - static_cast<int>(ModSource::Breath)]);
             ImGui::TableSetColumnIndex(2);
             int dst = static_cast<int>(r.dest);
             ImGui::SetNextItemWidth(140);
             if (ImGui::Combo("##dst", &dst, kDst, IM_ARRAYSIZE(kDst), IM_ARRAYSIZE(kDst))) {
                 r.dest = static_cast<ModDest>(dst);
                 if (modDestPerLfo(r.dest)) r.opIndex = std::min(r.opIndex, kNumLfos - 1);
+                if (modDestPerEnv(r.dest)) r.opIndex = std::min(r.opIndex, kNumModEnvs - 1);
                 changed = true;
             }
             if (ImGui::IsItemHovered() && r.dest != ModDest::None) ImGui::SetTooltip("%s", kDstTip[static_cast<int>(r.dest)]);
@@ -1125,6 +1153,9 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
             ImGui::SetNextItemWidth(62);
             if (modDestPerLfo(r.dest)) { // o alvo e um LFO, nao um operador
                 if (ImGui::Combo("##lfo", &r.opIndex, kLfos, kNumLfos)) changed = true;
+            } else if (modDestPerEnv(r.dest)) { // o alvo e um envelope de modulacao
+                static const char* kEnvs[] = {"Env1", "Env2", "Env3"};
+                if (ImGui::Combo("##env", &r.opIndex, kEnvs, kNumModEnvs)) changed = true;
             } else {
                 ImGui::BeginDisabled(!modDestPerOperator(r.dest));
                 if (ImGui::Combo("##op", &r.opIndex, kOps, kNumOps)) changed = true;

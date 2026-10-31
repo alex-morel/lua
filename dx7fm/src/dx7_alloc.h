@@ -89,6 +89,8 @@ struct PartRuntime {
     bool sustainDown = false;
     float bend = 0.0f;
     float modWheel = 0.0f;
+    float cc01[4] = {};     // [2026-10-30] CC2, CC4, CC11, pedal de sustain (fontes da matriz)
+    bool alternate = false; // [2026-10-30] ModSource::Alternate
     // [2026-10-24] macros: a audio thread escreve (setMacro), a UI le pra mostrar
     std::atomic<float> macro[VoiceParams::kNumMacros] = {};
     // [2026-10-24] LFOs globais (LFOParams::global): um por parte, calculados
@@ -436,6 +438,15 @@ public:
     }
     float macroValue(int part, int k) const { return parts_[part].macro[k].load(std::memory_order_relaxed); }
 
+    // [2026-10-30] controladores pra matriz: 0 = CC2 (sopro), 1 = CC4 (pe),
+    // 2 = CC11 (expressao), 3 = pedal de sustain (como fonte, sem mudar a sustentacao)
+    void setController(int part, int index, float v01) {
+        if (index < 0 || index >= 4) return;
+        auto& pr = parts_[part];
+        pr.cc01[index] = v01;
+        for (auto& s : slots_) if (s.ownerPart == part) s.voice.controllers().cc01[index] = v01;
+    }
+
     void modWheel(int part, float v01) {
         auto& pr = parts_[part];
         pr.modWheel = v01;
@@ -653,6 +664,12 @@ private:
                        snap->generation);
         s.voice.controllers().pitchBendSemis = pr.bend;
         s.voice.controllers().modWheel01 = pr.modWheel;
+        for (int k = 0; k < 4; ++k) s.voice.controllers().cc01[k] = pr.cc01[k];
+        pr.alternate = !pr.alternate;
+        s.voice.controllers().alternate = pr.alternate ? 1.0f : -1.0f;
+        // sorteio proprio: nao consome o gerador do ruido nem newRandomSeed (reproduzivel no golden)
+        noteRandom_ ^= noteRandom_ << 13; noteRandom_ ^= noteRandom_ >> 17; noteRandom_ ^= noteRandom_ << 5;
+        s.voice.controllers().randomNote = static_cast<float>(noteRandom_ % 20001u) / 10000.0f - 1.0f;
         for (int k = 0; k < VoiceParams::kNumMacros; ++k) s.voice.controllers().macro01[k] = pr.macro[k].load(std::memory_order_relaxed);
         s.voice.controllers().channelAT01 = pr.channelAT;
         // [2026-10-28] expressao por nota nao passa de uma nota pra outra (antes
@@ -978,6 +995,10 @@ private:
             float val;
             switch (r.src) {
                 case ModSource::ModWheel:  val = pr.modWheel; break;
+                case ModSource::Breath: case ModSource::Foot: case ModSource::Expression: case ModSource::SustainPedal:
+                    val = pr.cc01[static_cast<int>(r.src) - static_cast<int>(ModSource::Breath)];
+                    break;
+                case ModSource::Constant:  val = 1.0f; break;
                 case ModSource::ChannelAT: val = pr.channelAT; break;
                 case ModSource::PitchBend: val = pr.bend / std::max(0.01f, pr.params.bendRangeSemis); break;
                 case ModSource::Macro1: case ModSource::Macro2: case ModSource::Macro3: case ModSource::Macro4:
@@ -1030,6 +1051,7 @@ private:
     std::minstd_rand arpRng_{12345};         // modo Random do arpejador (semente fixa: testes reproduziveis)
     NoteObserver arpObs_ = nullptr;
     void* arpObsCtx_ = nullptr;
+    uint32_t noteRandom_ = 0x9E3779B9u;     // ModSource::RandomNote
     float masterGain_ = 1.0f;               // valor suavizado, so a audio thread toca
 
     // renderBlock: buffers por voz (alocados em init, nunca na audio thread)

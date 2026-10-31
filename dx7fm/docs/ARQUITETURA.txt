@@ -117,6 +117,16 @@ dx7fm/
                       Room/Hall/Plate, EQ 3 bandas, compressor). Desde
                       2026-10-29 sao 7 dos tipos do rack (a cadeia fixa
                       GlobalFxChain saiu). Ver secao 7D.
+    (matriz)        - [ALTERADO em 2026-10-30] 29 fontes e 21 destinos: novas
+                      fontes Breath/Foot/Expression/SustainPedal
+                      (Synth::setController, AppEvent::Controller, CC2/4/11/64),
+                      RandomNote e Alternate (fixas por nota, com sorteio
+                      proprio pra nao mexer no ruido nem no golden), NoteAge,
+                      AmpEnv, PegEnv, Constant; novos destinos OperatorFmIn,
+                      OperatorPhaseDist, OperatorEgSpeed, VoiceFmIn, VoiceFx1/2,
+                      PegDepth, ModEnvSpeed. Comentarios em dx7_params.h;
+                      testModMatrixExpansion. LFO global aceita os CCs e
+                      Constant como fonte de LfoRate.
     dx7_filters.h   - [ADICIONADO em 2026-10-30] modelos de filtro do efeito
                       por operador (OperatorParams::fxModel): Svf24, Ladder,
                       Diode e Ms20, ZDF, implementacao propria a partir de

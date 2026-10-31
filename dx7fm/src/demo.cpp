@@ -3030,6 +3030,142 @@ static void testWaveshaper() {
     check(ok, "waveshaper: todas as curvas na voz soam, sem NaN e sem DC preso");
 }
 
+// [2026-10-30] fontes e destinos novos da matriz
+static void testModMatrixExpansion() {
+    auto render = [](const std::function<void(VoiceParams&)>& setup, int n = 24000, const std::function<void(Synth&)>& before = nullptr) {
+        Synth s;
+        s.init(48000.0, 8);
+        setup(s.part(0).voice);
+        s.recompile(0);
+        if (before) before(s);
+        s.noteOn(0, 57, 100);
+        std::vector<float> x;
+        for (int i = 0; i < n; ++i) { float l, r; s.renderStereo(l, r); x.push_back(l); }
+        return x;
+    };
+    auto route = [](VoiceParams& v, ModSource src, ModDest d, int op, float depth) { v.modMatrix[0] = ModRoute{src, d, op, depth}; };
+    auto levelBy = [&](ModSource src, float depth) { return [=](VoiceParams& v) { route(v, src, ModDest::VoiceLevel, 0, depth); }; };
+    const float base = computeRms(render([](VoiceParams&) {}), 12000, 12000);
+    // controladores: chegam nas vozes tocando e nas novas
+    bool ccOk = true;
+    for (int k = 0; k < 4; ++k) {
+        const ModSource src = static_cast<ModSource>(static_cast<int>(ModSource::Breath) + k);
+        const float rest = computeRms(render(levelBy(src, -1.0f)), 12000, 12000);
+        const float pressed = computeRms(render(levelBy(src, -1.0f), 24000, [k](Synth& s) { s.setController(0, k, 1.0f); }), 12000, 12000);
+        Synth s;
+        s.init(48000.0, 8);
+        levelBy(src, -1.0f)(s.part(0).voice);
+        s.recompile(0);
+        s.noteOn(0, 57, 100);
+        for (int i = 0; i < 4800; ++i) { float l, r; s.renderStereo(l, r); }
+        s.setController(0, k, 1.0f); // com a nota soando
+        std::vector<float> y;
+        for (int i = 0; i < 4800; ++i) { float l, r; s.renderStereo(l, r); y.push_back(l); }
+        if (std::fabs(rest / base - 1.0f) > 0.02f || pressed > 0.01f * base || computeRms(y, 2400, 2400) > 0.01f * base) ccOk = false;
+    }
+    check(ccOk, "matriz: Sopro, Pe, Expressao e Pedal modulam notas novas e notas soando");
+    check(std::fabs(computeRms(render(levelBy(ModSource::Constant, -0.5f)), 12000, 12000) / base - 0.5f) < 0.02f, "matriz: Constante = 1");
+    {
+        // aleatorio por nota: varia entre notas, fixo na nota; alternado: 2 valores
+        Synth s;
+        s.init(48000.0, 8);
+        auto& v = s.part(0).voice;
+        v.modMatrix[0] = ModRoute{ModSource::RandomNote, ModDest::VoiceLevel, 0, 0.5f};
+        v.modMatrix[1] = ModRoute{ModSource::Alternate, ModDest::VoicePan, 0, 1.0f};
+        s.recompile(0);
+        std::vector<float> levels;
+        bool steady = true, alternates = true;
+        float lastSide = 0.0f;
+        for (int n = 0; n < 8; ++n) {
+            s.noteOn(0, 57, 100);
+            std::vector<float> a, b;
+            for (int i = 0; i < 4800; ++i) { float l, r; s.renderStereo(l, r); (i < 2400 ? a : b).push_back(l + r); if (i >= 2400 && i < 2402 && false) lastSide = l; }
+            const float ra = computeRms(a, 600, 1800), rb = computeRms(b, 0, 2400);
+            if (std::fabs(ra / rb - 1.0f) > 0.03f) steady = false;
+            levels.push_back(rb);
+            float l = 0.0f, r = 0.0f;
+            s.renderStereo(l, r);
+            const float side = std::fabs(l) - std::fabs(r);
+            if (n > 0 && side * lastSide > 0.0f) alternates = false;
+            lastSide = side;
+            s.allNotesOff(0);
+            for (int i = 0; i < 48000 && s.activeVoiceCount() > 0; ++i) { float a2, b2; s.renderStereo(a2, b2); }
+        }
+        std::sort(levels.begin(), levels.end());
+        check(levels.back() > 1.3f * levels.front() && steady, "matriz: Aleatorio muda entre notas e fica fixo durante a nota");
+        check(alternates, "matriz: Alternado troca o lado a cada nota");
+    }
+    {
+        auto age = render(levelBy(ModSource::NoteAge, -1.0f), 48000 * 6);
+        check(computeRms(age, 0, 4800) > 0.8f * base && computeRms(age, 48000 * 5 + 2400, 24000) < 0.01f * base, "matriz: Tempo da nota vai de 0 a 1 em 5 s");
+        auto amp = render(levelBy(ModSource::AmpEnv, -1.0f), 24000); // sustain no nivel 99: 1 - 1 = silencio
+        check(computeRms(amp, 12000, 12000) < 0.01f * base, "matriz: Env amplitude acompanha a portadora");
+        auto peg = [&](ModSource src, ModDest d, float depth) {
+            return render([=](VoiceParams& v) {
+                v.op[0].pegDepth = 1.0f;
+                for (int k = 0; k < 4; ++k) v.peg.level[k] = 99;
+                if (src != ModSource::None) v.modMatrix[0] = ModRoute{src, d, 0, depth};
+            });
+        };
+        check(computeRms(peg(ModSource::PegEnv, ModDest::VoiceLevel, -1.0f), 12000, 12000) < 0.05f * base, "matriz: Env pitch vale ~+1 com o envelope no topo");
+        check(peg(ModSource::Constant, ModDest::PegDepth, -1.0f) == render([](VoiceParams& v) { v.op[0].pegDepth = 1.0f; }),
+              "matriz: PegDepth -1 desliga o envelope de pitch (igual a um patch sem ele)");
+    }
+    // destinos que somam num parametro fixo: rota constante = o mesmo patch com o valor editado, amostra por amostra
+    auto saw = [](VoiceParams& v) { v.op[0].waveform = Waveform::Saw; };
+    {
+        auto a = render([&](VoiceParams& v) { saw(v); route(v, ModSource::Constant, ModDest::OperatorPhaseDist, 0, 0.5f); });
+        auto b = render([&](VoiceParams& v) { saw(v); v.op[0].phaseDistortion = 0.5f; });
+        check(a == b && a != render(saw), "matriz: OperatorPhaseDist com constante = phase distortion fixa");
+        auto lp = [&](VoiceParams& v, float hz) { saw(v); v.op[0].fxType = FxType::LowPass; v.op[0].fxParam1 = hz; v.op[0].fxParam2 = 2.0f; };
+        auto c = render([&](VoiceParams& v) { lp(v, 2000.0f); route(v, ModSource::Constant, ModDest::VoiceFx1, 0, -0.5f); });
+        check(c == render([&](VoiceParams& v) { lp(v, 1000.0f); }), "matriz: VoiceFx1 multiplica o corte");
+        auto d = render([&](VoiceParams& v) { lp(v, 2000.0f); route(v, ModSource::Constant, ModDest::VoiceFx2, 0, 1.0f); });
+        auto e = render([&](VoiceParams& v) { lp(v, 2000.0f); v.op[0].fxParam2 = 4.0f; });
+        check(d == e, "matriz: VoiceFx2 multiplica o Q");
+    }
+    {
+        // FM: op2 modula op1; quantidade -1 tira a FM -> igual ao seno sem modulador
+        auto fm = [](VoiceParams& v) { v.matrix = AlgorithmMatrix{}; v.matrix.outputMix[0] = 1.0f; v.matrix.mod[0][1] = 2.0f; v.op[1].outputLevel = 99; };
+        for (ModDest d : {ModDest::OperatorFmIn, ModDest::VoiceFmIn}) {
+            auto off = render([&](VoiceParams& v) { fm(v); route(v, ModSource::Constant, d, 0, -1.0f); });
+            auto noFm = render([&](VoiceParams& v) { fm(v); v.matrix.mod[0][1] = 0.0f; });
+            auto on = render(fm);
+            float err = 0.0f;
+            for (size_t i = 0; i < off.size(); ++i) err = std::max(err, std::fabs(off[i] - noFm[i]));
+            check(err < 1e-4f && on != off, d == ModDest::OperatorFmIn ? "matriz: OperatorFmIn -1 tira a FM do operador" : "matriz: VoiceFmIn -1 tira toda a FM");
+        }
+    }
+    {
+        // velocidade dos envelopes: decay 8x mais rapido (+1) ou mais lento (-1) que o normal
+        auto dec = [](VoiceParams& v) { dx7fm_app::factory::eg(v.op[0].ampEG, {99, 45, 99, 50}, {99, 0, 0, 0}); };
+        auto rmsAt = [&](float depth) {
+            auto x = render([&](VoiceParams& v) { dec(v); if (depth != 0.0f) route(v, ModSource::Constant, ModDest::OperatorEgSpeed, 0, depth); }, 48000);
+            return computeRms(x, 12000, 2400);
+        };
+        const float slow = rmsAt(-1.0f), normal = rmsAt(0.0f), fast = rmsAt(1.0f);
+        std::printf("  (OperatorEgSpeed, RMS em 0.25 s: -1 %.4f, 0 %.4f, +1 %.4f)\n", slow, normal, fast);
+        check(slow > normal && normal > fast, "matriz: OperatorEgSpeed acelera e freia o envelope");
+        auto env = [&](float depth) {
+            auto x = render([&](VoiceParams& v) {
+                const int rt[4] = {99, 45, 99, 50}, lv[4] = {99, 0, 0, 0};
+                for (int k = 0; k < 4; ++k) { v.modEnv[1].rate[k] = static_cast<uint8_t>(rt[k]); v.modEnv[1].level[k] = static_cast<uint8_t>(lv[k]); }
+                v.modMatrix[0] = ModRoute{ModSource::Env2, ModDest::VoiceLevel, 0, -1.0f}; // envelope cai -> o som sobe
+                if (depth != 0.0f) v.modMatrix[1] = ModRoute{ModSource::Constant, ModDest::ModEnvSpeed, 1, depth};
+            }, 48000);
+            return computeRms(x, 12000, 2400);
+        };
+        check(env(1.0f) > env(0.0f) && env(0.0f) > env(-1.0f), "matriz: ModEnvSpeed acelera e freia o envelope escolhido");
+    }
+    {
+        // JSON: todos os nomes voltam; a rota sem efeito nao muda nada
+        bool ok = true;
+        for (int k = 0; k <= static_cast<int>(ModSource::Constant); ++k) ok = ok && modSourceFromName(modSourceName(static_cast<ModSource>(k))) == static_cast<ModSource>(k);
+        for (int k = 0; k <= static_cast<int>(ModDest::ModEnvSpeed); ++k) ok = ok && modDestFromName(modDestName(static_cast<ModDest>(k))) == static_cast<ModDest>(k);
+        check(ok, "matriz: nomes de todas as fontes e destinos sobrevivem ao JSON");
+    }
+}
+
 static void testOpFxCombCurveMatchesDsp() {
     using dx7fm_app::opfx::combMagnitudeDb;
     float worst = 0.0f;
@@ -5168,14 +5304,28 @@ static void testMicroGranular() {
         std::printf("  (Micro Seq a 120 BPM: periodo do envelope %.2f s)\n", best * 0.01);
         check(std::abs(best * 0.01 - 0.25) < 0.03 || std::abs(best * 0.01 - 0.5) < 0.03, "Micro Seq: os passos caem na grade do BPM");
     }
-    // Glide: a altura desliza (energia sai da nota original)
+    // Glide: o pico do espectro anda com o tempo; sem deslize fica na nota.
+    // (Semente fixa: medir a energia num bin so variava de 0.2 a 1.0 entre
+    // execucoes e o teste falhava de vez em quando.)
     {
-        auto g = runSlot(FxKind::Micro, [](FxSlotParams& s) { s.p[0] = 2.0f; s.p[11] = 1.0f; s.p[3] = 0.0f; s.p[9] = 0.0f; }, tone(440.0f, 48000 * 6), 48000 * 6).first;
-        auto fixed = runSlot(FxKind::Micro, [](FxSlotParams& s) { s.p[0] = 2.0f; s.p[11] = 0.0f; s.p[3] = 0.0f; s.p[9] = 0.0f; }, tone(440.0f, 48000 * 6), 48000 * 6).first;
-        const float gOn = bandRms(g, 440.0, 48000 * 3, 48000) / (computeRms(g, 48000 * 3, 48000) + 1e-9f);
-        const float fOn = bandRms(fixed, 440.0, 48000 * 3, 48000) / (computeRms(fixed, 48000 * 3, 48000) + 1e-9f);
-        std::printf("  (Micro Glide: energia em 440 Hz relativa -- sem deslize %.1f, com deslize %.1f)\n", fOn, gOn);
-        check(gOn < 0.6f * fOn, "Micro Glide: a altura dos loops desliza");
+        auto range = [&](float amount) {
+            fixRandomSeed(4242);
+            auto x = runSlot(FxKind::Micro, [=](FxSlotParams& s) { s.p[0] = 2.0f; s.p[11] = amount; s.p[3] = 0.0f; s.p[9] = 0.0f; }, tone(440.0f, 48000 * 6), 48000 * 6).first;
+            double lo = 1e9, hi = 0.0;
+            for (int k = 4; k < 16; ++k) {
+                double best = 0.0, bestHz = 0.0;
+                for (double h = 100.0; h < 3000.0; h *= 1.01) {
+                    const float m = bandRms(x, h, static_cast<size_t>(k) * 12000, 4800);
+                    if (m > best) { best = m; bestHz = h; }
+                }
+                lo = std::min(lo, bestHz);
+                hi = std::max(hi, bestHz);
+            }
+            return hi / lo;
+        };
+        const double on = range(1.0f), off = range(0.0f);
+        std::printf("  (Micro Glide: razao entre o pico mais alto e o mais baixo -- sem deslize %.2f, com deslize %.2f)\n", off, on);
+        check(on > 1.5 && off < 1.05, "Micro Glide: a altura dos loops desliza");
     }
     // Tunnel: drone uma oitava abaixo que acompanha a entrada (300 -> 500 Hz)
     {
@@ -5555,6 +5705,7 @@ int main() {
     testOpFxFilterCurveMatchesDsp();
     testFilterModels();
     testWaveshaper();
+    testModMatrixExpansion();
     testOpFxCombCurveMatchesDsp();
     testOpFxDefaultsAndSummary();
     testFxKeyTrackMovesFilterWithNote();

@@ -23,6 +23,7 @@ struct AppEvent {
                       TransportStart,  // [2026-10-24] Start do clock MIDI: zera a posicao de batida
                       NotePitchBend,   // [2026-10-28] MPE: note = nota, floatValue = semitons so dela
                       NoteSlide,       // [2026-10-28] MPE: note = nota, floatValue = CC74 0..1
+                      Controller,      // [2026-10-30] note = Synth::setController (0..3), floatValue = 0..1
                       FxExpression };  // [2026-10-29] pedal de expressao do rack, floatValue = 0..1
     Kind kind = Kind::NoteOn;
     int part = -1;        // >=0: destinado a UMA parte especifica (teclado do PC). -1: roteia por canal MIDI (ver channel1to16)
@@ -100,6 +101,7 @@ inline void applyAppEvent(dx7fm::Synth& synth, const AppEvent& e,
             break;
         case AppEvent::Kind::PitchBend:          route([&](int p) { synth.pitchBend(p, e.floatValue); }); break;
         case AppEvent::Kind::ModWheel:           route([&](int p) { synth.modWheel(p, e.floatValue); }); break;
+        case AppEvent::Kind::Controller:         route([&](int p) { synth.setController(p, e.note, e.floatValue); }); break;
         case AppEvent::Kind::Macro:              route([&](int p) { synth.setMacro(p, e.note, e.floatValue); }); break;
         case AppEvent::Kind::TransportStart:     synth.resetTransport(); break;
         case AppEvent::Kind::FxExpression:       synth.setFxExpression(e.floatValue); break;
@@ -114,6 +116,7 @@ inline void applyAppEvent(dx7fm::Synth& synth, const AppEvent& e,
             route([&](int p) {
                 synth.pitchBend(p, 0.0f);
                 synth.modWheel(p, 0.0f);
+                for (int k = 0; k < 4; ++k) synth.setController(p, k, 0.0f);
                 synth.channelAftertouch(p, 0.0f);
                 synth.sustainPedal(p, false);
                 synth.sostenutoPedal(p, false);
