@@ -286,6 +286,8 @@ inline const char* fxTypeName(FxType f) {
         case FxType::FreqShift: return "FreqShift";
         case FxType::Comb:      return "Comb";
         case FxType::Fold:      return "Fold";
+        case FxType::Waveshape: return "Waveshape";
+        case FxType::Notch:     return "Notch";
     }
     return "Bypass";
 }
@@ -299,7 +301,42 @@ inline FxType fxTypeFromName(const std::string& s) {
     if (s == "FreqShift") return FxType::FreqShift;
     if (s == "Comb")      return FxType::Comb;
     if (s == "Fold")      return FxType::Fold;
+    if (s == "Waveshape") return FxType::Waveshape;
+    if (s == "Notch")     return FxType::Notch;
     return FxType::Bypass;
+}
+
+// [2026-10-30] modelo de filtro e curva do waveshaper; ausente/desconhecido = o primeiro
+inline const char* filterModelName(FilterModel m) {
+    switch (m) {
+        case FilterModel::Svf: return "Svf";
+        case FilterModel::Svf24: return "Svf24";
+        case FilterModel::Ladder: return "Ladder";
+        case FilterModel::Diode: return "Diode";
+        case FilterModel::Ms20: return "Ms20";
+    }
+    return "Svf";
+}
+inline FilterModel filterModelFromName(const std::string& s) {
+    for (int i = 0; i <= static_cast<int>(FilterModel::Ms20); ++i)
+        if (s == filterModelName(static_cast<FilterModel>(i))) return static_cast<FilterModel>(i);
+    return FilterModel::Svf;
+}
+inline const char* waveshapeCurveName(WaveshapeCurve c) {
+    switch (c) {
+        case WaveshapeCurve::Soft: return "Soft";
+        case WaveshapeCurve::Hard: return "Hard";
+        case WaveshapeCurve::Sine: return "Sine";
+        case WaveshapeCurve::Tube: return "Tube";
+        case WaveshapeCurve::Cheby3: return "Cheby3";
+        case WaveshapeCurve::Rectify: return "Rectify";
+    }
+    return "Soft";
+}
+inline WaveshapeCurve waveshapeCurveFromName(const std::string& s) {
+    for (int i = 0; i <= static_cast<int>(WaveshapeCurve::Rectify); ++i)
+        if (s == waveshapeCurveName(static_cast<WaveshapeCurve>(i))) return static_cast<WaveshapeCurve>(i);
+    return WaveshapeCurve::Soft;
 }
 
 inline const char* lfoWaveName(LfoWave w) {
@@ -582,6 +619,8 @@ inline JsonValue operatorParamsToJson(const OperatorParams& o) {
     j.set("fxParam1", JsonValue::makeNumber(o.fxParam1));
     j.set("fxParam2", JsonValue::makeNumber(o.fxParam2));
     j.set("fxKeyTrack", JsonValue::makeNumber(o.fxKeyTrack));
+    j.set("fxModel", JsonValue::makeString(filterModelName(o.fxModel)));
+    j.set("fxShape", JsonValue::makeString(waveshapeCurveName(o.fxShape)));
     j.set("ringModSource", JsonValue::makeNumber(o.ringModSource));
     j.set("fxEGReleaseWithAmp", JsonValue::makeBool(o.fxEGReleaseWithAmp));
     j.set("pegDepth", JsonValue::makeNumber(o.pegDepth));
@@ -624,6 +663,8 @@ inline OperatorParams operatorParamsFromJson(const JsonValue* j) {
     o.fxParam1 = clampCast<float>(j->numberAt("fxParam1", o.fxParam1));
     o.fxParam2 = clampCast<float>(j->numberAt("fxParam2", o.fxParam2));
     o.fxKeyTrack = clampCast<float>(j->numberAt("fxKeyTrack", o.fxKeyTrack)); // ausente (patch antigo) = 0
+    o.fxModel = filterModelFromName(j->stringAt("fxModel", "Svf"));
+    o.fxShape = waveshapeCurveFromName(j->stringAt("fxShape", "Soft"));
     o.ringModSource = clampCast<int>(j->numberAt("ringModSource", o.ringModSource));
     o.fxEGReleaseWithAmp = j->boolAt("fxEGReleaseWithAmp", o.fxEGReleaseWithAmp);
     o.pegDepth = clampCast<float>(j->numberAt("pegDepth", o.pegDepth));

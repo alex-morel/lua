@@ -1,5 +1,6 @@
 #pragma once
 #include "dx7_dsp.h"
+#include "dx7_filters.h"
 #include "dx7_params.h"
 #include <algorithm>
 #include <cmath>
@@ -17,17 +18,43 @@
 //   FreqShift                  deslocamento (Hz)     --
 //   Comb                       afinacao (Hz)         feedback (0..0.99)
 //   Fold                       drive (1..16)         simetria (0..1)
+//   Waveshape                  drive (1..16)         bias (0..1); curva em fxShape
+//   Notch                      corte (Hz)            Q (0.1..16); sempre SVF
 // O fxEG so mexe nos filtros (corte de 20% a 100% de FX1) e no Fold (drive);
 // a mod matrix (OperatorFx1) multiplica FX1 por (1 + quantidade).
 namespace dx7fm_app::opfx {
 
 using dx7fm::FxType;
 
-inline bool isFilter(FxType t) { return t == FxType::LowPass || t == FxType::BandPass || t == FxType::HighPass; }
-inline bool egSweeps(FxType t) { return isFilter(t) || t == FxType::Fold; }
+inline bool isFilter(FxType t) { return t == FxType::LowPass || t == FxType::BandPass || t == FxType::HighPass || t == FxType::Notch; }
+// filtros que aceitam OperatorParams::fxModel
+inline bool hasModel(FxType t) { return t == FxType::LowPass || t == FxType::BandPass || t == FxType::HighPass; }
+inline bool egSweeps(FxType t) { return isFilter(t) || t == FxType::Fold || t == FxType::Waveshape; }
 // efeitos cujo FX1 e uma frequencia: os que o key tracking (fxKeyTrack) afeta
 inline bool keyTracks(FxType t) { return isFilter(t) || t == FxType::Crush || t == FxType::FreqShift || t == FxType::Comb; }
-inline bool usesParam1(FxType t) { return isFilter(t) || t == FxType::Crush || t == FxType::FreqShift || t == FxType::Comb || t == FxType::Fold; }
+inline bool usesParam1(FxType t) { return isFilter(t) || t == FxType::Crush || t == FxType::FreqShift || t == FxType::Comb || t == FxType::Fold || t == FxType::Waveshape; }
+
+inline const char* filterModelLabel(dx7fm::FilterModel m) {
+    switch (m) {
+        case dx7fm::FilterModel::Svf: return "SVF 12 dB";
+        case dx7fm::FilterModel::Svf24: return "SVF 24 dB";
+        case dx7fm::FilterModel::Ladder: return "Ladder 24 dB";
+        case dx7fm::FilterModel::Diode: return "Diodo (acid)";
+        case dx7fm::FilterModel::Ms20: return "Sallen-Key (MS)";
+    }
+    return "?";
+}
+inline const char* waveshapeLabel(dx7fm::WaveshapeCurve c) {
+    switch (c) {
+        case dx7fm::WaveshapeCurve::Soft: return "Suave";
+        case dx7fm::WaveshapeCurve::Hard: return "Clip";
+        case dx7fm::WaveshapeCurve::Sine: return "Seno";
+        case dx7fm::WaveshapeCurve::Tube: return "Valvula";
+        case dx7fm::WaveshapeCurve::Cheby3: return "Chebyshev 3";
+        case dx7fm::WaveshapeCurve::Rectify: return "Retificador";
+    }
+    return "?";
+}
 
 struct Info {
     const char* name;  // rotulo do botao
@@ -37,15 +64,17 @@ struct Info {
 inline Info info(FxType t) {
     switch (t) {
         case FxType::Bypass:    return {"Nenhum", "Sem efeito: o oscilador sai direto."};
-        case FxType::LowPass:   return {"Passa-baixa", "Filtro SVF de 12 dB/oit: corta os agudos acima do corte."};
-        case FxType::BandPass:  return {"Passa-banda", "Filtro SVF: deixa so uma faixa em volta do corte (Q estreita a faixa)."};
-        case FxType::HighPass:  return {"Passa-alta", "Filtro SVF de 12 dB/oit: corta os graves abaixo do corte."};
+        case FxType::LowPass:   return {"Passa-baixa", "Corta os agudos acima do corte; o carater vem do modelo."};
+        case FxType::BandPass:  return {"Passa-banda", "Deixa so uma faixa em volta do corte (Q estreita a faixa)."};
+        case FxType::HighPass:  return {"Passa-alta", "Corta os graves abaixo do corte; o carater vem do modelo."};
         case FxType::RingMod:   return {"Ring mod", "Multiplica pela saida de outro operador: soma e diferenca das frequencias."};
         case FxType::Saturate:  return {"Saturacao", "tanh: arredonda os picos, harmonicos impares, mais forte com o drive."};
         case FxType::Crush:     return {"Bitcrusher", "Reduz a taxa de amostragem (aliasing) e os bits (degraus)."};
         case FxType::FreqShift: return {"Freq shift", "Soma Hz fixos a todas as frequencias: harmonicos viram inarmonicos."};
         case FxType::Comb:      return {"Comb", "Delay curto com feedback: ressoa na afinacao e nos multiplos (metalico)."};
         case FxType::Fold:      return {"Wavefolder", "Dobra o sinal que passa do limite: harmonicos brilhantes (estilo Buchla)."};
+        case FxType::Waveshape: return {"Waveshaper", "Passa o sinal por uma curva: cada curva cria um conjunto de harmonicos."};
+        case FxType::Notch:     return {"Rejeita-faixa", "Filtro SVF: remove uma faixa em volta do corte (Q estreita o corte)."};
     }
     return {"?", ""};
 }
@@ -56,12 +85,13 @@ inline Info info(FxType t) {
 inline void applyDefaults(FxType from, FxType to, float& p1, float& p2) {
     if (isFilter(from) && isFilter(to)) return;
     switch (to) {
-        case FxType::LowPass: case FxType::BandPass: case FxType::HighPass: p1 = 2000.0f; p2 = 0.707f; break;
+        case FxType::LowPass: case FxType::BandPass: case FxType::HighPass: case FxType::Notch: p1 = 2000.0f; p2 = 0.707f; break;
         case FxType::Saturate:  p2 = 1.0f; break;
         case FxType::Crush:     p1 = 8000.0f; p2 = 0.5f; break; // 8 bits
         case FxType::FreqShift: p1 = 50.0f; break;
         case FxType::Comb:      p1 = 440.0f; p2 = 0.7f; break;
         case FxType::Fold:      p1 = 3.0f; p2 = 0.0f; break;
+        case FxType::Waveshape: p1 = 2.0f; p2 = 0.0f; break;
         default: break;
     }
 }
@@ -75,8 +105,16 @@ inline float svfMagnitudeDb(FxType t, float f, float fc, float q, float sr) {
     const float g = std::tan(static_cast<float>(M_PI) * fc / sr);
     const std::complex<float> s(0.0f, std::tan(static_cast<float>(M_PI) * std::min(f, sr * 0.4999f) / sr) / g);
     const std::complex<float> den = s * s + s / q + 1.0f;
-    std::complex<float> h = t == FxType::LowPass ? 1.0f / den : t == FxType::BandPass ? s / den : s * s / den;
+    std::complex<float> h = t == FxType::LowPass ? 1.0f / den : t == FxType::BandPass ? s / den
+                         : t == FxType::Notch ? (s * s + 1.0f) / den : s * s / den;
     return 20.0f * std::log10(std::max(std::abs(h), 1e-6f));
+}
+
+// Resposta do filtro com o modelo escolhido (Notch e sempre SVF)
+inline float filterMagnitudeDb(FxType t, dx7fm::FilterModel m, float f, float fc, float q, float sr) {
+    if (!hasModel(t) || m == dx7fm::FilterModel::Svf) return svfMagnitudeDb(t, f, fc, q, sr);
+    const int mode = t == FxType::LowPass ? dx7fm::kFilterLP : t == FxType::BandPass ? dx7fm::kFilterBP : dx7fm::kFilterHP;
+    return dx7fm::modelFilterMagnitudeDb(m, mode, f, fc, q, sr);
 }
 
 // Comb: y = atraso(x + g*y) => |H| = 1 / |1 - g e^{-j 2 pi f / fd}|
@@ -88,7 +126,7 @@ inline float combMagnitudeDb(float f, float fd, float fb) {
 
 // Curva de transferencia dos efeitos sem memoria (entrada -> saida, sem o
 // sample & hold do Crush). eg01 = nivel do fxEG (so o Fold usa).
-inline float shape(FxType t, float x, float p1, float p2, float eg01 = 1.0f) {
+inline float shape(FxType t, float x, float p1, float p2, float eg01 = 1.0f, dx7fm::WaveshapeCurve curve = dx7fm::WaveshapeCurve::Soft) {
     switch (t) {
         case FxType::Saturate: return dx7fm::softSaturate(x, p2);
         case FxType::Crush: {
@@ -99,6 +137,11 @@ inline float shape(FxType t, float x, float p1, float p2, float eg01 = 1.0f) {
             float maxDrive = std::clamp(p1, 1.0f, 16.0f);
             float drive = 1.0f + (maxDrive - 1.0f) * (0.2f + 0.8f * eg01);
             return dx7fm::triangleFold(x * drive + std::clamp(p2, 0.0f, 1.0f));
+        }
+        case FxType::Waveshape: {
+            float maxDrive = std::clamp(p1, 1.0f, 16.0f);
+            float drive = 1.0f + (maxDrive - 1.0f) * (0.2f + 0.8f * eg01);
+            return dx7fm::waveshapeCurve(curve, x * drive + std::clamp(p2, 0.0f, 1.0f));
         }
         default: return x;
     }
@@ -114,7 +157,12 @@ inline void summary(const dx7fm::OperatorParams& op, char* out, size_t n) {
     switch (op.fxType) {
         case FxType::Bypass: std::snprintf(out, n, "-"); break;
         case FxType::LowPass: case FxType::BandPass: case FxType::HighPass:
-            hz(op.fxParam1, h, sizeof h); std::snprintf(out, n, "%s  Q %.1f", h, op.fxParam2); break;
+            hz(op.fxParam1, h, sizeof h);
+            if (op.fxModel == dx7fm::FilterModel::Svf) std::snprintf(out, n, "%s  Q %.1f", h, op.fxParam2);
+            else std::snprintf(out, n, "%s  %s  Q %.1f", filterModelLabel(op.fxModel), h, op.fxParam2);
+            break;
+        case FxType::Notch: hz(op.fxParam1, h, sizeof h); std::snprintf(out, n, "%s  Q %.1f", h, op.fxParam2); break;
+        case FxType::Waveshape: std::snprintf(out, n, "%s  drive %.1f", waveshapeLabel(op.fxShape), op.fxParam1); break;
         case FxType::RingMod:
             if (op.ringModSource >= 0) std::snprintf(out, n, "x Op%d", op.ringModSource + 1);
             else std::snprintf(out, n, "sem fonte");

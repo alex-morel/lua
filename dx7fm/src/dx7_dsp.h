@@ -579,9 +579,43 @@ inline double tanhAntideriv(double x, double k) {
     return (z + std::log1p(std::exp(-2.0 * z)) - 0.69314718055994531) / k;
 }
 
+// [2026-10-30] Curvas do Waveshape (entrada ja com drive e bias) e antiderivadas
+inline float waveshapeCurve(WaveshapeCurve c, float x) {
+    const float cl = std::clamp(x, -1.0f, 1.0f);
+    switch (c) {
+        case WaveshapeCurve::Soft: return cl * (1.5f - 0.5f * cl * cl);
+        case WaveshapeCurve::Hard: return cl;
+        case WaveshapeCurve::Sine: return std::sin(0.5f * kPi * x);
+        case WaveshapeCurve::Tube: return x >= 0.0f ? std::tanh(x) : 0.5f * std::tanh(2.0f * x); // negativo clipa antes: pares
+        case WaveshapeCurve::Cheby3: return cl * (4.0f * cl * cl - 3.0f); // seno de pico 1 -> so o 3o harmonico
+        case WaveshapeCurve::Rectify: return std::fabs(cl);               // oitava acima; limitada como as outras
+    }
+    return x;
+}
+inline double waveshapeAntideriv(WaveshapeCurve c, double x) {
+    const double ax = std::fabs(x), x2 = x * x;
+    switch (c) {
+        case WaveshapeCurve::Soft: return ax <= 1.0 ? 0.75 * x2 - 0.125 * x2 * x2 : ax - 0.375;
+        case WaveshapeCurve::Hard: return ax <= 1.0 ? 0.5 * x2 : ax - 0.5;
+        case WaveshapeCurve::Sine: return -(2.0 / 3.14159265358979323846) * std::cos(0.5 * 3.14159265358979323846 * x);
+        case WaveshapeCurve::Tube: return x >= 0.0 ? tanhAntideriv(x, 1.0) : 0.5 * tanhAntideriv(x, 2.0);
+        case WaveshapeCurve::Cheby3: return ax <= 1.0 ? x2 * x2 - 1.5 * x2 : ax - 1.5;
+        case WaveshapeCurve::Rectify: return ax <= 1.0 ? 0.5 * x * ax : (x > 0.0 ? ax - 0.5 : 0.5 - ax);
+    }
+    return 0.0;
+}
+
 class AdaaState {
 public:
-    void reset() { x1_ = 0.0; f1_ = 0.0; k1_ = -1.0; }
+    void reset() { x1_ = 0.0; f1_ = 0.0; k1_ = -1.0; curve1_ = -1; }
+    float waveshape(float xf, WaveshapeCurve c) {
+        const double x = xf;
+        if (static_cast<int>(c) != curve1_) { f1_ = waveshapeAntideriv(c, x1_); curve1_ = static_cast<int>(c); }
+        const double F = waveshapeAntideriv(c, x), dx = x - x1_;
+        float y = std::fabs(dx) > 1e-6 ? static_cast<float>((F - f1_) / dx) : waveshapeCurve(c, static_cast<float>(0.5 * (x + x1_)));
+        x1_ = x; f1_ = F;
+        return y;
+    }
     // Fold: entrada ja com drive e bias
     float fold(float xf) {
         const double x = xf, F = triangleFoldAntideriv(x);
@@ -603,6 +637,7 @@ public:
 
 private:
     double x1_ = 0.0, f1_ = 0.0, k1_ = -1.0;
+    int curve1_ = -1;
 };
 
 // Passa-altas de 1 polo (~10Hz) pra tirar o DC que o wavefolder com

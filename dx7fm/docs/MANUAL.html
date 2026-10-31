@@ -768,21 +768,25 @@ aconnect '&lt;seu controlador&gt;' 'Mare Tranquillitatis'</code></pre>
       </ol>
       <p style="font-size:13.5px;color:var(--text-muted)">Limites: só existem dois retratos do espectro (A e B) com uma transição linear entre eles, então sons cujos parciais morrem em tempos bem diferentes (piano, sino longo) ficam aproximados. O envelope de FX passa a ser usado pelo morph: se o operador tiver um efeito FX ligado, ele também segue essa curva.</p>
 
-      <h3>Efeitos por operador (10)</h3>
+      <h3>Efeitos por operador (12)</h3>
       <p>Cada operador tem um efeito, ajustado no card <strong>EFEITO DO OPERADOR</strong> (abaixo do card do operador selecionado). Escolha o efeito nos botões; o gráfico mostra o que ele faz com os valores atuais, e os knobs têm o nome e a unidade de cada parâmetro. Na tabela de operadores, a coluna <em>Ajuste do FX</em> edita o parâmetro principal do efeito direto ali (corte, taxa, afinação, drive ou o operador fonte do ring mod); o botão <strong>…</strong> ao lado seleciona o operador e rola a tela até o card completo.</p>
       <div class="tablewrap">
         <table>
           <tr><th>Efeito</th><th>Ajustes</th><th>O gráfico mostra</th></tr>
-          <tr><td>Passa-baixa / Passa-banda / Passa-alta</td><td>Corte (Hz), Q (ressonância; 0,7 = sem pico)</td><td>Resposta em frequência. A faixa sombreada vai do corte com o envelope de FX no nível 0 (20% do corte) até o nível 99 (100%).</td></tr>
+          <tr><td>Passa-baixa / Passa-banda / Passa-alta</td><td>Modelo, Corte (Hz), Q (ressonância; 0,7 = sem pico)</td><td>Resposta em frequência. A faixa sombreada vai do corte com o envelope de FX no nível 0 (20% do corte) até o nível 99 (100%).</td></tr>
+          <tr><td>Rejeita-faixa</td><td>Corte (Hz), Q</td><td>Resposta em frequência, com o vale no corte.</td></tr>
           <tr><td>Ring mod</td><td>Operador fonte</td><td>As duas ondas e o produto delas.</td></tr>
           <tr><td>Saturação</td><td>Drive</td><td>Curva entrada → saída e um seno processado.</td></tr>
           <tr><td>Bitcrusher</td><td>Taxa (Hz), Bits (1–24)</td><td>Os degraus de quantização e o “sample &amp; hold” num seno de 220 Hz.</td></tr>
           <tr><td>Freq shift</td><td>Deslocamento (Hz)</td><td>Os harmônicos de 220 Hz (cinza) e para onde vão: somar Hz fixos deixa o som inarmônico.</td></tr>
           <tr><td>Comb</td><td>Afinação (Hz), Feedback</td><td>Os “dentes” de ressonância na afinação e nos múltiplos.</td></tr>
           <tr><td>Wavefolder</td><td>Drive (1–16), Simetria</td><td>Curva e seno processado, com o drive mínimo (envelope em 0, branco) e máximo (cor do operador). Simetria 0 = só harmônicos ímpares; acima disso entram os pares. Tem antialiasing próprio (ADAA); em notas muito agudas com drive alto, o oversampling 2× ou 4× (Configurações) limpa o resto.</td></tr>
+          <tr><td>Waveshaper</td><td>Curva, Drive (1–16), Bias</td><td>Curva e seno processado, com o drive mínimo e o máximo.</td></tr>
         </table>
       </div>
-      <p>O <strong>envelope de FX</strong> fica no mesmo card. Ele só age nos filtros (varre o corte), no Wavefolder (varre o drive) e no morph da forma de onda Additive. Nos outros efeitos os knobs dele ficam desativados, e o texto acima deles diz o que ele controla. Ao trocar de efeito, os ajustes voltam a valores iniciais adequados (entre os três filtros, corte e Q são mantidos).</p>
+      <p>O <strong>envelope de FX</strong> fica no mesmo card. Ele só age nos filtros (varre o corte), no Wavefolder e no Waveshaper (varrem o drive) e no morph da forma de onda Additive. Nos outros efeitos os knobs dele ficam desativados, e o texto acima deles diz o que ele controla. Ao trocar de efeito, os ajustes voltam a valores iniciais adequados (entre os três filtros, corte e Q são mantidos).</p>
+      <p><strong>Modelos de filtro</strong> (Passa-baixa, Passa-banda e Passa-alta): <strong>SVF 12 dB</strong> (limpo, o padrão), <strong>SVF 24 dB</strong> (limpo, corte mais íngreme), <strong>Ladder 24 dB</strong> (gordo, estilo transistor), <strong>Diodo</strong> (estilo baixo ácido) e <strong>Sallen-Key</strong> (12 dB agressivo, estilo MS-20). No Ladder, no Diodo e no Sallen-Key, o Q no máximo faz o filtro auto-oscilar. O Q também muda o volume dos graves e o caráter de cada modelo, e sinal forte satura esses três modelos.</p>
+      <p><strong>Curvas do Waveshaper</strong>: <strong>Suave</strong> e <strong>Clip</strong> (harmônicos ímpares), <strong>Seno</strong> (dobra suave), <strong>Válvula</strong> (assimétrica, com harmônicos pares), <strong>Chebyshev 3</strong> (um seno em nível cheio vira o 3º harmônico) e <strong>Retificador</strong> (oitava acima). <strong>Bias</strong> desloca o sinal na curva e acrescenta harmônicos pares.</p>
       <p><strong>Key track</strong> (nos filtros, Comb, Freq shift e Bitcrusher): faz o valor em Hz acompanhar a nota tocada, em volta do C4. Em 100%, uma oitava acima dobra o valor — o filtro mantém o mesmo brilho em toda a extensão do teclado e o Comb ressoa afinado com a nota (ajuste a afinação do Comb pra 261,6 Hz, que é o C4, ou um múltiplo dele). Em 50%, sobe meia oitava por oitava; em 0% (padrão), o valor é fixo como antes. Acompanha o glide, mas não o pitch bend nem o vibrato.</p>
 
       <h3>Macros e MIDI learn</h3>

@@ -2851,6 +2851,185 @@ static void testOpFxFilterCurveMatchesDsp() {
     check(worst < 0.1f, "painel de efeito: curva dos filtros LP/BP/HP bate com o TPTStateVariableFilter medido (0.1 dB)");
 }
 
+// [2026-10-30] modelos de filtro e waveshaper do efeito por operador
+static void testFilterModels() {
+    using dx7fm_app::opfx::filterMagnitudeDb;
+    const FilterModel models[] = {FilterModel::Svf24, FilterModel::Ladder, FilterModel::Diode, FilterModel::Ms20};
+    // grafico x DSP medido com sinal pequeno (na parte linear)
+    float worst = 0.0f;
+    for (FilterModel m : models)
+        for (int mode = 0; mode < 3; ++mode)
+            for (float q : {0.707f, 2.0f})
+                for (float f : {200.0f, 800.0f, 2000.0f, 5000.0f}) {
+                    ModelFilter flt;
+                    flt.setSampleRate(48000.0);
+                    const float got = measureGainDb([&](float x) { return flt.process(x * 0.001f, 2000.0f, q, m, mode) * 1000.0f; }, f);
+                    const FxType t = mode == kFilterLP ? FxType::LowPass : mode == kFilterBP ? FxType::BandPass : FxType::HighPass;
+                    const float drawn = filterMagnitudeDb(t, m, f, 2000.0f, q, 48000.0f);
+                    if (drawn > -50.0f && std::fabs(got - drawn) > worst) {
+                        worst = std::fabs(got - drawn);
+                        std::printf("  (modelo %d modo %d Q %.2f %.0f Hz: medido %.2f, grafico %.2f)\n", static_cast<int>(m), mode, q, f, got, drawn);
+                    }
+                }
+    check(worst < 0.5f, "modelos de filtro: o grafico bate com o DSP medido (0.5 dB)");
+    // inclinacao LP e pico da ressonancia perto do corte
+    auto lpDb = [](FilterModel m, float f, float q) {
+        ModelFilter flt;
+        flt.setSampleRate(48000.0);
+        return measureGainDb([&](float x) { return flt.process(x * 0.001f, 1000.0f, q, m, kFilterLP) * 1000.0f; }, f);
+    };
+    const float slopeLadder = lpDb(FilterModel::Ladder, 2000.0f, 0.707f) - lpDb(FilterModel::Ladder, 8000.0f, 0.707f);
+    const float slopeMs = lpDb(FilterModel::Ms20, 2000.0f, 0.707f) - lpDb(FilterModel::Ms20, 8000.0f, 0.707f);
+    std::printf("  (de 2 a 8 kHz com corte 1 kHz: Ladder cai %.1f dB, Sallen-Key %.1f dB)\n", slopeLadder, slopeMs);
+    check(slopeLadder > 40.0f && slopeMs > 18.0f && slopeMs < 32.0f, "modelos de filtro: Ladder ~24 dB/oit, Sallen-Key ~12 dB/oit");
+    bool peakOk = true;
+    for (FilterModel m : {FilterModel::Ladder, FilterModel::Diode, FilterModel::Ms20}) {
+        float best = -200.0f, bestF = 0.0f;
+        for (float f = 500.0f; f < 2000.0f; f *= 1.03f) { const float d = lpDb(m, f, 6.0f); if (d > best) { best = d; bestF = f; } }
+        std::printf("  (modelo %d, Q 6, corte 1 kHz: pico %.1f dB em %.0f Hz)\n", static_cast<int>(m), best, bestF);
+        if (bestF < 850.0f || bestF > 1180.0f || best - lpDb(m, 200.0f, 6.0f) < 3.0f) peakOk = false;
+    }
+    check(peakOk, "modelos de filtro: a ressonancia aparece no corte");
+    // Q maximo auto-oscila, limitado; entrada extrema + corte varrido nao explode
+    bool stable = true, sings = true;
+    for (FilterModel m : models) {
+        for (int mode = 0; mode < 3; ++mode) {
+            ModelFilter flt;
+            flt.setSampleRate(48000.0);
+            std::mt19937 rng(5);
+            std::uniform_real_distribution<float> d(-4.0f, 4.0f);
+            float pk = 0.0f;
+            for (int i = 0; i < 96000; ++i) {
+                const float fc = 20.0f * std::exp2(10.0f * (0.5f + 0.5f * std::sin(0.002f * i)));
+                const float y = flt.process(d(rng), fc, 16.0f, m, mode);
+                if (!std::isfinite(y)) stable = false;
+                pk = std::max(pk, std::fabs(y));
+            }
+            if (pk > 60.0f) { stable = false; std::printf("  (modelo %d modo %d: pico %.1f)\n", static_cast<int>(m), mode, pk); }
+        }
+        if (m == FilterModel::Svf24) continue;
+        ModelFilter flt;
+        flt.setSampleRate(48000.0);
+        flt.process(0.5f, 1000.0f, 16.0f, m, kFilterLP); // um impulso
+        std::vector<float> tail;
+        for (int i = 0; i < 48000; ++i) tail.push_back(flt.process(0.0f, 1000.0f, 16.0f, m, kFilterLP));
+        const float r = computeRms(tail, 36000, 12000);
+        std::printf("  (modelo %d, Q 16, sem entrada: RMS %.3f depois de 1 s)\n", static_cast<int>(m), r);
+        if (r < 0.01f || r > 8.0f) sings = false;
+    }
+    check(stable, "modelos de filtro: estaveis com ruido forte, Q maximo e corte varrido");
+    check(sings, "modelos de filtro: Ladder, Diodo e Sallen-Key auto-oscilam no Q maximo, com nivel limitado");
+    // Notch tira o corte e deixa o resto; bate com o grafico
+    {
+        Synth s;
+        s.init(48000.0, 8);
+        auto gain = [](float f) {
+            TPTStateVariableFilter flt;
+            flt.setSampleRate(48000.0);
+            flt.setParams(1000.0f, 2.0f);
+            return measureGainDb([&](float x) { auto o = flt.process(x); return o.lp + o.hp; }, f);
+        };
+        check(gain(1000.0f) < -30.0f && std::fabs(gain(100.0f)) < 0.5f && std::fabs(gain(1000.0f * 8.0f)) < 0.5f
+                  && std::fabs(gain(600.0f) - filterMagnitudeDb(FxType::Notch, FilterModel::Svf, 600.0f, 1000.0f, 2.0f, 48000.0f)) < 0.2f,
+              "Notch: remove o corte, deixa o resto e bate com o grafico");
+    }
+    // na voz: patch com modelo soa diferente do SVF; JSON guarda; ausente = SVF
+    {
+        auto render = [](auto setup) {
+            Synth s;
+            s.init(48000.0, 8);
+            auto& v = s.part(0).voice;
+            v.op[0].waveform = Waveform::Saw;
+            setup(v.op[0]);
+            s.recompile(0);
+            s.noteOn(0, 45, 100);
+            std::vector<float> x;
+            for (int i = 0; i < 24000; ++i) { float l, r; s.renderStereo(l, r); x.push_back(l); }
+            return x;
+        };
+        auto lp = [](FilterModel m) { return [m](OperatorParams& o) { o.fxType = FxType::LowPass; o.fxParam1 = 800.0f; o.fxParam2 = 4.0f; o.fxModel = m; }; };
+        const auto a = render(lp(FilterModel::Svf)), b = render(lp(FilterModel::Ladder));
+        check(a != b && computeRms(b, 12000, 12000) > 0.005f, "modelos de filtro: na voz, o Ladder soa e e diferente do SVF");
+        VoiceParams v;
+        v.op[3].fxType = FxType::Waveshape;
+        v.op[3].fxShape = WaveshapeCurve::Tube;
+        v.op[2].fxModel = FilterModel::Diode;
+        VoiceParams w = voiceParamsFromJson(voiceParamsToJson(v));
+        check(w.op[3].fxType == FxType::Waveshape && w.op[3].fxShape == WaveshapeCurve::Tube && w.op[2].fxModel == FilterModel::Diode && w.op[0].fxModel == FilterModel::Svf,
+              "modelo, curva e tipos novos sobrevivem ao JSON");
+        v.op[2].fxModel = FilterModel::Svf;
+        v.op[3].fxShape = WaveshapeCurve::Soft;
+        std::string text = voiceParamsToJson(v).dump();
+        size_t at;
+        while ((at = text.find("\"fxModel\"")) != std::string::npos) text.erase(at, text.find('\n', at) - at + 1);
+        VoiceParams old = voiceParamsFromJson(JsonValue::parse(text));
+        check(old.op[2].fxModel == FilterModel::Svf, "patch antigo (sem fxModel) carrega com o SVF");
+    }
+}
+
+static void testWaveshaper() {
+    const WaveshapeCurve curves[] = {WaveshapeCurve::Soft, WaveshapeCurve::Hard, WaveshapeCurve::Sine, WaveshapeCurve::Tube, WaveshapeCurve::Cheby3, WaveshapeCurve::Rectify};
+    // a antiderivada usada no ADAA bate com a curva (derivada numerica) e a saida fica limitada
+    float worst = 0.0f;
+    for (WaveshapeCurve c : curves)
+        for (double x = -3.0; x <= 3.0; x += 0.0173) {
+            const double h = 1e-5;
+            const double num = (waveshapeAntideriv(c, x + h) - waveshapeAntideriv(c, x - h)) / (2 * h);
+            worst = std::max(worst, static_cast<float>(std::fabs(num - waveshapeCurve(c, static_cast<float>(x)))));
+        }
+    std::printf("  (waveshaper: maior erro antiderivada x curva = %.5f)\n", worst);
+    check(worst < 0.01f, "waveshaper: as antiderivadas do ADAA batem com as curvas");
+    auto harmonics = [](WaveshapeCurve c, float amp, float bias, float& h1, float& h2, float& h3) {
+        AdaaState ad;
+        std::vector<float> x;
+        for (int i = 0; i < 19200; ++i) x.push_back(ad.waveshape(amp * std::sin(2.0f * kPi * 200.0f * i / 48000.0f) + bias, c));
+        std::vector<float> seg(x.begin() + 9600, x.end());
+        h1 = goertzelMagnitude(seg, 200.0, 48000.0); h2 = goertzelMagnitude(seg, 400.0, 48000.0); h3 = goertzelMagnitude(seg, 600.0, 48000.0);
+    };
+    float a, b, c3;
+    harmonics(WaveshapeCurve::Cheby3, 1.0f, 0.0f, a, b, c3);
+    check(c3 > 50.0f * a, "waveshaper: Chebyshev 3 num seno cheio vira o 3o harmonico");
+    harmonics(WaveshapeCurve::Rectify, 1.0f, 0.0f, a, b, c3);
+    check(b > 20.0f * a, "waveshaper: Retificador sobe uma oitava");
+    harmonics(WaveshapeCurve::Tube, 1.5f, 0.0f, a, b, c3);
+    const float tubeEven = b / a;
+    harmonics(WaveshapeCurve::Hard, 1.5f, 0.0f, a, b, c3);
+    check(tubeEven > 0.05f && b / a < 0.01f && c3 / a > 0.05f, "waveshaper: Valvula gera pares; Clip simetrico so impares");
+    // ADAA reduz o alias: seno agudo no clip forte (o alias de 3x7 kHz cai em 27 kHz -> 21 kHz nao, usa o 5o: 35 -> 13 kHz)
+    {
+        std::vector<float> plain, adaa;
+        AdaaState st;
+        for (int i = 0; i < 48000; ++i) {
+            const float x = 8.0f * std::sin(2.0f * kPi * 7000.0f * i / 48000.0f);
+            plain.push_back(waveshapeCurve(WaveshapeCurve::Hard, x));
+            adaa.push_back(st.waveshape(x, WaveshapeCurve::Hard));
+        }
+        const float ap = goertzelMagnitude(plain, 13000.0, 48000.0) / goertzelMagnitude(plain, 7000.0, 48000.0);
+        const float aa = goertzelMagnitude(adaa, 13000.0, 48000.0) / goertzelMagnitude(adaa, 7000.0, 48000.0);
+        std::printf("  (alias em 13 kHz relativo ao seno: sem ADAA %.1f dB, com ADAA %.1f dB)\n", 20.0f * std::log10(ap), 20.0f * std::log10(aa));
+        check(aa < 0.7f * ap, "waveshaper: o ADAA reduz o alias");
+    }
+    // na voz: todas as curvas, drive e bias nos extremos, sem NaN nem DC preso
+    bool ok = true;
+    for (WaveshapeCurve c : curves)
+        for (float drive : {1.0f, 16.0f})
+            for (float bias : {0.0f, 1.0f}) {
+                Synth s;
+                s.init(48000.0, 8);
+                auto& o = s.part(0).voice.op[0];
+                o.fxType = FxType::Waveshape; o.fxShape = c; o.fxParam1 = drive; o.fxParam2 = bias;
+                s.recompile(0);
+                s.noteOn(0, 57, 100);
+                std::vector<float> x;
+                for (int i = 0; i < 48000; ++i) { float l, r; s.renderStereo(l, r); ok = ok && std::isfinite(l); x.push_back(l); }
+                double dc = 0.0;
+                for (size_t i = 24000; i < x.size(); ++i) dc += x[i];
+                dc /= 24000.0;
+                if (std::fabs(dc) > 0.05 || computeRms(x, 24000, 24000) < 0.005f) { ok = false; std::printf("  (curva %d drive %.0f bias %.0f: dc %.3f rms %.3f)\n", static_cast<int>(c), drive, bias, dc, computeRms(x, 24000, 24000)); }
+            }
+    check(ok, "waveshaper: todas as curvas na voz soam, sem NaN e sem DC preso");
+}
+
 static void testOpFxCombCurveMatchesDsp() {
     using dx7fm_app::opfx::combMagnitudeDb;
     float worst = 0.0f;
@@ -5374,6 +5553,8 @@ int main() {
     testAdditivePresetsAreValid();
     testAdditiveSquarePresetSounds();
     testOpFxFilterCurveMatchesDsp();
+    testFilterModels();
+    testWaveshaper();
     testOpFxCombCurveMatchesDsp();
     testOpFxDefaultsAndSummary();
     testFxKeyTrackMovesFilterWithNote();

@@ -1,6 +1,7 @@
 #pragma once
 #include "dx7_params.h"
 #include "dx7_dsp.h"
+#include "dx7_filters.h"
 #include "dx7_wavetable.h"
 #include "dx7_tuning.h"
 #include <algorithm>
@@ -101,6 +102,7 @@ struct OperatorState {
     SegmentEG ampEG;
     SegmentEG fxEG;
     TPTStateVariableFilter filter;
+    ModelFilter modelFilter; // [2026-10-30] OperatorParams::fxModel != Svf
     Crusher crusher;
     CombFilter comb;
     FreqShifter shifter;
@@ -150,6 +152,7 @@ public:
         for (auto& l : lfos_) l.setSampleRate(sampleRate_);
         for (auto& op : ops_) {
             op.filter.setSampleRate(sampleRate_);
+            op.modelFilter.setSampleRate(sampleRate_);
             op.crusher.setSampleRate(sampleRate_);
             op.comb.setSampleRate(sampleRate_);
             op.shifter.setSampleRate(sampleRate_);
@@ -200,6 +203,7 @@ public:
                 op.signal = 0.0f;
                 // estado dos FX do slot NAO pode vazar da nota anterior (voz roubada)
                 op.filter.reset();
+                op.modelFilter.reset();
                 op.crusher.reset();
                 op.comb.reset();
                 op.shifter.reset();
@@ -655,20 +659,41 @@ private:
                 case FxType::Bypass: break;
                 case FxType::LowPass: {
                     float cutoff = std::max(20.0f, fx1 * (0.2f + 0.8f * (fxEnv / 99.0f)));
+                    if (opParams.fxModel != FilterModel::Svf) { processed = op.modelFilter.process(raw, cutoff, fx2, opParams.fxModel, kFilterLP); break; }
                     op.filter.setParams(cutoff, std::max(0.1f, fx2));
                     processed = op.filter.process(raw).lp;
                     break;
                 }
                 case FxType::BandPass: {
                     float cutoff = std::max(20.0f, fx1 * (0.2f + 0.8f * (fxEnv / 99.0f)));
+                    if (opParams.fxModel != FilterModel::Svf) { processed = op.modelFilter.process(raw, cutoff, fx2, opParams.fxModel, kFilterBP); break; }
                     op.filter.setParams(cutoff, std::max(0.1f, fx2));
                     processed = op.filter.process(raw).bp;
                     break;
                 }
                 case FxType::HighPass: {
                     float cutoff = std::max(20.0f, fx1 * (0.2f + 0.8f * (fxEnv / 99.0f)));
+                    if (opParams.fxModel != FilterModel::Svf) { processed = op.modelFilter.process(raw, cutoff, fx2, opParams.fxModel, kFilterHP); break; }
                     op.filter.setParams(cutoff, std::max(0.1f, fx2));
                     processed = op.filter.process(raw).hp;
+                    break;
+                }
+                case FxType::Notch: {
+                    float cutoff = std::max(20.0f, fx1 * (0.2f + 0.8f * (fxEnv / 99.0f)));
+                    op.filter.setParams(cutoff, std::max(0.1f, fx2));
+                    const auto o = op.filter.process(raw);
+                    processed = o.lp + o.hp;
+                    break;
+                }
+                case FxType::Waveshape: {
+                    // FX1 = drive (1..16; o fxEG varre como no Fold), FX2 = bias (0..1)
+                    const float maxDrive = std::clamp(fx1, 1.0f, 16.0f);
+                    const float drive = 1.0f + (maxDrive - 1.0f) * (0.2f + 0.8f * (fxEnv / 99.0f));
+                    const float bias = std::clamp(fx2, 0.0f, 1.0f);
+                    processed = op.adaa.waveshape(raw * drive + bias, opParams.fxShape);
+                    // bias e as curvas assimetricas geram DC
+                    if (bias > 0.0f || opParams.fxShape == WaveshapeCurve::Tube || opParams.fxShape == WaveshapeCurve::Rectify)
+                        processed = op.dcBlock.process(processed);
                     break;
                 }
                 case FxType::RingMod: {
@@ -718,6 +743,7 @@ private:
                 // da voz e pelos buffers dos efeitos globais, silenciando tudo
                 op.signal = 0.0f;
                 op.filter.reset();
+                op.modelFilter.reset();
                 op.comb.reset();
                 op.shifter.reset();
                 op.crusher.reset();

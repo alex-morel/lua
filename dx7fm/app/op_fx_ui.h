@@ -128,8 +128,8 @@ inline void OperatorFxGraph(const dx7fm::VoiceParams& v, int opIndex, ImVec2 siz
             label(dl, ImVec2((p0.x + p1.x - ts.x) * 0.5f, (p0.y + p1.y - ts.y) * 0.5f), s, col::kTextDim);
             break;
         }
-        case FxType::LowPass: case FxType::BandPass: case FxType::HighPass: {
-            freqPlot(dl, i0, i1, [&](float f, bool top) { return opfx::svfMagnitudeDb(op.fxType, f, top ? p1v : 0.2f * p1v, p2v, sr); },
+        case FxType::LowPass: case FxType::BandPass: case FxType::HighPass: case FxType::Notch: {
+            freqPlot(dl, i0, i1, [&](float f, bool top) { return opfx::filterMagnitudeDb(op.fxType, op.fxModel, f, top ? p1v : 0.2f * p1v, p2v, sr); },
                      24.0f, -48.0f, true, 20000.0f, color);
             float xc = i0.x + (i1.x - i0.x) * std::log(std::clamp(p1v, 20.0f, 20000.0f) / 20.0f) / std::log(1000.0f);
             dashedV(dl, xc, i0.y, i1.y, color);
@@ -147,9 +147,9 @@ inline void OperatorFxGraph(const dx7fm::VoiceParams& v, int opIndex, ImVec2 siz
             }
             break;
         }
-        case FxType::Saturate: case FxType::Fold:
-            shaperPlot(dl, i0, i1, [&](float x, bool top) { return opfx::shape(op.fxType, x, p1v, p2v, top ? 1.0f : 0.0f); },
-                       op.fxType == FxType::Fold, color);
+        case FxType::Saturate: case FxType::Fold: case FxType::Waveshape:
+            shaperPlot(dl, i0, i1, [&](float x, bool top) { return opfx::shape(op.fxType, x, p1v, p2v, top ? 1.0f : 0.0f, op.fxShape); },
+                       op.fxType != FxType::Saturate, color);
             break;
         case FxType::Crush: {
             // a onda inclui o sample & hold, num seno de 220 Hz amostrado a 48 kHz
@@ -230,12 +230,13 @@ inline bool OperatorFxQuickEdit(dx7fm::VoiceParams& v, int opIndex, float width)
     const ImGuiSliderFlags log = ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic;
     switch (op.fxType) {
         case FxType::Bypass: ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("-"); break;
-        case FxType::LowPass: case FxType::BandPass: case FxType::HighPass:
+        case FxType::LowPass: case FxType::BandPass: case FxType::HighPass: case FxType::Notch:
             changed = ImGui::DragFloat("##fxq", &op.fxParam1, 5.0f, 20.0f, 20000.0f, "corte %.0f Hz", log); break;
         case FxType::Saturate: changed = ImGui::DragFloat("##fxq", &op.fxParam2, 0.02f, 0.0f, 16.0f, "drive %.2f", ImGuiSliderFlags_AlwaysClamp); break;
         case FxType::Crush: changed = ImGui::DragFloat("##fxq", &op.fxParam1, 10.0f, 100.0f, 20000.0f, "taxa %.0f Hz", log); break;
         case FxType::FreqShift: changed = ImGui::DragFloat("##fxq", &op.fxParam1, 1.0f, 1.0f, 5000.0f, "+%.0f Hz", log); break;
         case FxType::Comb: changed = ImGui::DragFloat("##fxq", &op.fxParam1, 2.0f, 20.0f, 20000.0f, "afin. %.0f Hz", log); break;
+        case FxType::Waveshape:
         case FxType::Fold: changed = ImGui::DragFloat("##fxq", &op.fxParam1, 0.02f, 1.0f, 16.0f, "drive %.2f", ImGuiSliderFlags_AlwaysClamp); break;
         case FxType::RingMod: {
             char prev[16];
@@ -268,8 +269,8 @@ inline bool OperatorFxPanel(dx7fm::VoiceParams& v, int opIndex) {
     const ImU32 color = opColor(opIndex);
     bool changed = false;
 
-    // botoes de escolha (os 10 efeitos, na ordem do enum)
-    for (int t = 0; t <= static_cast<int>(FxType::Fold); ++t) {
+    // botoes de escolha (os efeitos, na ordem do enum)
+    for (int t = 0; t <= static_cast<int>(FxType::Notch); ++t) {
         const FxType type = static_cast<FxType>(t);
         const char* name = opfx::info(type).name;
         if (t > 0) wrapSameLine(ImGui::CalcTextSize(name).x + ImGui::GetStyle().FramePadding.x * 2);
@@ -290,6 +291,36 @@ inline bool OperatorFxPanel(dx7fm::VoiceParams& v, int opIndex) {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", opfx::info(type).about);
     }
     ImGui::TextDisabled("%s", opfx::info(op.fxType).about);
+    // [2026-10-30] modelo do filtro / curva do waveshaper
+    if (opfx::hasModel(op.fxType)) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Modelo");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(170);
+        if (ImGui::BeginCombo("##fxmodel", opfx::filterModelLabel(op.fxModel))) {
+            for (int m = 0; m <= static_cast<int>(dx7fm::FilterModel::Ms20); ++m) {
+                const auto fm = static_cast<dx7fm::FilterModel>(m);
+                if (ImGui::Selectable(opfx::filterModelLabel(fm), fm == op.fxModel) && fm != op.fxModel) { op.fxModel = fm; changed = true; }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip("SVF 12 dB: limpo (o de sempre)\nSVF 24 dB: limpo, corte mais ingreme\nLadder: 24 dB, gordo; auto-oscila com Q no maximo\n"
+                              "Diodo: estilo baixo acido, ressonancia estreita\nSallen-Key: 12 dB agressivo, estilo MS-20");
+    } else if (op.fxType == FxType::Waveshape) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Curva");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(170);
+        if (ImGui::BeginCombo("##fxshape", opfx::waveshapeLabel(op.fxShape))) {
+            for (int c = 0; c <= static_cast<int>(dx7fm::WaveshapeCurve::Rectify); ++c) {
+                const auto wc = static_cast<dx7fm::WaveshapeCurve>(c);
+                if (ImGui::Selectable(opfx::waveshapeLabel(wc), wc == op.fxShape) && wc != op.fxShape) { op.fxShape = wc; changed = true; }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip("Suave e Clip: harmonicos impares, com mais drive = mais forte\nSeno: dobra suave\nValvula: assimetrica, entram os pares\n"
+                              "Chebyshev 3: seno cheio vira o 3o harmonico\nRetificador: oitava acima");
+    }
 
     // grafico | knobs
     KnobStyle ks;
@@ -303,7 +334,7 @@ inline bool OperatorFxPanel(dx7fm::VoiceParams& v, int opIndex) {
     logk.logarithmic = true;
     switch (op.fxType) {
         case FxType::Bypass: ImGui::TextDisabled("nada a ajustar"); break;
-        case FxType::LowPass: case FxType::BandPass: case FxType::HighPass:
+        case FxType::LowPass: case FxType::BandPass: case FxType::HighPass: case FxType::Notch:
             changed |= Knob("Corte", &op.fxParam1, 20.0f, 20000.0f, 2000.0f, "%.0f Hz", logk);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("corte com o FX EG no maximo (99); no nivel 0 o corte cai pra 20%%");
             ImGui::SameLine();
@@ -349,6 +380,13 @@ inline bool OperatorFxPanel(dx7fm::VoiceParams& v, int opIndex) {
             ImGui::SameLine();
             { float fb = std::min(op.fxParam2, 0.99f);
               if (Knob("Feedback", &fb, 0.0f, 0.99f, 0.7f, "%.2f", ks)) { op.fxParam2 = fb; changed = true; } }
+            break;
+        case FxType::Waveshape:
+            changed |= Knob("Drive", &op.fxParam1, 1.0f, 16.0f, 2.0f, "%.2f", ks);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("drive com o FX EG no maximo; no nivel 0 cai pra 20%% do excesso");
+            ImGui::SameLine();
+            changed |= Knob("Bias", &op.fxParam2, 0.0f, 1.0f, 0.0f, "%.2f", ks);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("desloca o sinal na curva: entram harmonicos pares");
             break;
         case FxType::Fold:
             changed |= Knob("Drive", &op.fxParam1, 1.0f, 16.0f, 3.0f, "%.2f", ks);

@@ -51,8 +51,16 @@ enum class Waveform : uint8_t {
 
 enum class FxType : uint8_t {
     Bypass, LowPass, BandPass, HighPass, RingMod, Saturate, Crush, FreqShift, Comb,
-    Fold // [ADICIONADO em 2026-09-23] wavefolder; SEMPRE no fim, pra nao renumerar os anteriores
+    Fold, // [ADICIONADO em 2026-09-23] wavefolder; SEMPRE no fim, pra nao renumerar os anteriores
+    Waveshape, // [ADICIONADO em 2026-10-30] curva escolhida em OperatorParams::fxShape
+    Notch      // [ADICIONADO em 2026-10-30] rejeita-faixa (SVF)
 };
+
+// [ADICIONADO em 2026-10-30] Modelo dos filtros LowPass/BandPass/HighPass
+// (dx7_filters.h). Svf = o de sempre; novos SEMPRE no fim.
+enum class FilterModel : uint8_t { Svf, Svf24, Ladder, Diode, Ms20 };
+// [ADICIONADO em 2026-10-30] Curvas do FxType::Waveshape; novas SEMPRE no fim.
+enum class WaveshapeCurve : uint8_t { Soft, Hard, Sine, Tube, Cheby3, Rectify };
 
 // SmoothRandom [ADICIONADO em 2026-10-22, no fim]: S&H suave (um valor
 // aleatorio novo por ciclo, com transicao em cosseno ate ele).
@@ -120,6 +128,8 @@ struct OperatorParams {
     FxType fxType = FxType::Bypass;
     float fxParam1 = 1000.0f;
     float fxParam2 = 0.5f;
+    FilterModel fxModel = FilterModel::Svf;       // [2026-10-30] so nos filtros LP/BP/HP
+    WaveshapeCurve fxShape = WaveshapeCurve::Soft; // [2026-10-30] so no Waveshape
     // [ADICIONADO em 2026-10-20] key tracking do efeito (0..1): FX1 (corte dos
     // filtros, afinacao do Comb, Hz do FreqShift, taxa do Crush) multiplicado
     // por 2^(fxKeyTrack * oitavas da nota em relacao ao C4). 1 = acompanha a
@@ -537,7 +547,9 @@ inline void sanitize(OperatorParams& o) {
     o.wavetable.waveA = sanWave(o.wavetable.waveA);
     o.wavetable.waveB = sanWave(o.wavetable.waveB);
     o.phaseDistortion = sanF(o.phaseDistortion, 0.0f, 1.0f, 0.0f);
-    o.fxType = sanEnum(o.fxType, FxType::Fold);
+    o.fxType = sanEnum(o.fxType, FxType::Notch);
+    o.fxModel = sanEnum(o.fxModel, FilterModel::Ms20);
+    o.fxShape = sanEnum(o.fxShape, WaveshapeCurve::Rectify);
     o.fxParam1 = sanF(o.fxParam1, 0.0f, 20000.0f, 1000.0f);
     o.fxParam2 = sanF(o.fxParam2, 0.0f, 16.0f, 0.5f);
     o.ringModSource = std::clamp(o.ringModSource, -1, kNumOps - 1);

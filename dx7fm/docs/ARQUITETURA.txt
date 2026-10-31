@@ -117,6 +117,18 @@ dx7fm/
                       Room/Hall/Plate, EQ 3 bandas, compressor). Desde
                       2026-10-29 sao 7 dos tipos do rack (a cadeia fixa
                       GlobalFxChain saiu). Ver secao 7D.
+    dx7_filters.h   - [ADICIONADO em 2026-10-30] modelos de filtro do efeito
+                      por operador (OperatorParams::fxModel): Svf24, Ladder,
+                      Diode e Ms20, ZDF, implementacao propria a partir de
+                      Zavalishin, "The Art of VA Filter Design"; Svf continua
+                      sendo o TPTStateVariableFilter. Resposta linear em
+                      modelFilterMagnitudeDb (grafico; testFilterModels
+                      confere contra o DSP medido). FxType::Notch (sempre
+                      SVF) e FxType::Waveshape (OperatorParams::fxShape:
+                      Soft, Hard, Sine, Tube, Cheby3, Rectify, com ADAA;
+                      FX1 = drive varrido pelo fxEG, FX2 = bias) estao em
+                      dx7_dsp.h/dx7_engine.h. JSON: "fxModel" e "fxShape"
+                      (ausentes = Svf e Soft).
     dx7_fxrack.h    - [ADICIONADO em 2026-10-29] RACK DE EFEITOS POS-MIX:
                       2 cadeias x 4 slots, qualquer efeito em qualquer
                       slot, envios seco/1/2 por parte, paralelo ou serie,

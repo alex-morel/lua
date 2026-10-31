@@ -435,7 +435,7 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
                                    "HalfSine", "AbsSine", "QuarterSine", "AlternatingSine",
                                    "CamelSine", "SquaredSine", "LogSaw", "Additive", "Wavetable"};
     static const char* kFx[] = {"Bypass", "LowPass", "BandPass", "HighPass", "RingMod",
-                                 "Saturate", "Crush", "FreqShift", "Comb", "Fold"};
+                                 "Saturate", "Crush", "FreqShift", "Comb", "Fold", "Waveshape", "Notch"};
     bool changed = false;
     if (ImGui::BeginTable("ops", 8, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Op");
@@ -575,11 +575,11 @@ bool DrawOperatorFx(VoiceParams& v, int opIndex) {
     // "additive": operador com morph A->B (Additive ou Wavetable), que o FX EG tambem move
     const bool additive = op.waveform == Waveform::Additive || op.waveform == Waveform::Wavetable, sweeps = egSweeps(op.fxType);
     const char* morphOf = op.waveform == Waveform::Wavetable ? "Wavetable" : "Additive";
-    const char* what = sweeps ? (op.fxType == FxType::Fold ? "varre o drive" : "varre o corte (20% no nivel 0, 100% no 99)") : nullptr;
+    const char* what = sweeps ? (op.fxType == FxType::Fold || op.fxType == FxType::Waveshape ? "varre o drive" : "varre o corte (20% no nivel 0, 100% no 99)") : nullptr;
     if (what && additive) ImGui::TextDisabled("FX EG: %s e move o morph A->B da %s", what, morphOf);
     else if (what) ImGui::TextDisabled("FX EG: %s", what);
     else if (additive) ImGui::TextDisabled("FX EG: move o morph A->B da %s (nao afeta este efeito)", morphOf);
-    else ImGui::TextDisabled("FX EG: nao afeta este efeito (so filtros, Wavefolder e o morph da Additive/Wavetable)");
+    else ImGui::TextDisabled("FX EG: nao afeta este efeito (so filtros, Wavefolder, Waveshaper e o morph da Additive/Wavetable)");
     ImGui::BeginDisabled(!sweeps && !additive);
     changed |= DrawEGKnobs("fxeg", op.fxEG.rate, op.fxEG.level, ui::opColor(opIndex, 200));
     changed |= ImGui::Checkbox("FX EG acompanha o release do Amp EG", &op.fxEGReleaseWithAmp);
