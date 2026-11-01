@@ -117,6 +117,13 @@ dx7fm/
                       Room/Hall/Plate, EQ 3 bandas, compressor). Desde
                       2026-10-29 sao 7 dos tipos do rack (a cadeia fixa
                       GlobalFxChain saiu). Ver secao 7D.
+    (app) algo_editor.h, algo_graph.h - [ADICIONADO em 2026-10-31] editor grafico
+                      de algoritmos (janela flutuante) e a logica sem ImGui
+                      (conectar, laco, Organizar, selecao, presets; testAlgoGraph).
+                      Presets em algorithms/*.json: kind "algorithm", matriz com
+                      o feedback na diagonal e posicoes. Carregar com 1 algoritmo
+                      poe o feedback em OperatorParams::feedback; com morph,
+                      desconta dele e fica na diagonal do slot.
     (operadores)    - [ADICIONADO em 2026-10-31] OperatorParams::enabled (JSON
                       "enabled", ausente = ligado): rebuildCache tira o
                       operador de used[] e as conexoes dele, como se nao

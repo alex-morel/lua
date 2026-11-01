@@ -814,6 +814,19 @@ aconnect '&lt;seu controlador&gt;' 'Mare Tranquillitatis'</code></pre>
       <h3>Configurações</h3>
       <p>O botão <strong>Configurações</strong> (embaixo do logo) abre: <strong>oversampling</strong> 1×/2×/4× (menos aliasing em FM agressiva e notas agudas, ao custo de ~2×/~4× de CPU nas vozes; trocar corta as notas que estiverem soando), <strong>seguir o clock MIDI</strong> e a lista do <strong>MIDI learn</strong>. Ficam salvas em <span class="mono">~/.config/mare-tranquillitatis/settings.json</span>.</p>
 
+      <h3>Editor gráfico de algoritmos</h3>
+      <p>O botão <strong>Editor gráfico</strong>, no card Algoritmo, abre uma janela flutuante: dá para tocar enquanto edita, e cada mudança vale na hora.</p>
+      <ul>
+        <li><strong>Conectar:</strong> arraste da bolinha de baixo de um operador até outro; o primeiro passa a modular o segundo.</li>
+        <li><strong>Portadora:</strong> arraste a bolinha até a barra <strong>SAÍDA</strong>.</li>
+        <li><strong>Feedback:</strong> clique no círculo do canto do operador.</li>
+        <li><strong>Ajustar:</strong> clique numa conexão ou no fio de saída e use o painel da direita (quantidade, FM ou Ring, nível), ou a roda do mouse em cima do fio.</li>
+        <li><strong>Apagar:</strong> botão direito no fio, ou selecione e tecle Delete.</li>
+        <li><strong>Organizar:</strong> arraste os operadores à vontade; o botão <strong>Organizar</strong> põe as portadoras embaixo e os moduladores acima. <strong>Limpar</strong> tira tudo.</li>
+      </ul>
+      <p>Conexão tracejada fecha um laço e usa a amostra anterior. "Sem efeito" no operador significa que ele não chega à saída. Tudo entra no Ctrl+Z.</p>
+      <p><strong>Presets:</strong> dê um nome e clique em <strong>Salvar</strong>. O preset fica em <code>algorithms/&lt;nome&gt;.json</code> (relativo a onde o app foi aberto) e guarda conexões, feedback, níveis de saída e a posição dos operadores; não guarda timbre nem o liga/desliga dos operadores. Os seus presets aparecem em <em>Meus algoritmos</em>, no menu do editor e no do card Algoritmo, junto com os 32 de fábrica. Com vários algoritmos de morph, editar e carregar valem para o algoritmo em edição.</p>
+
       <h3>Morph entre algoritmos</h3>
       <p>No card <strong>Algoritmo</strong>, a fileira <strong>Algoritmos 1 2 …</strong> guarda até <strong>8 algoritmos</strong> no mesmo patch. Clique num número pra editar aquele algoritmo (o combo de algoritmos e a matriz avançada passam a valer pra ele); <strong>+</strong> cria um novo, copiando o que está em edição, e <strong>−</strong> remove o que está em edição. Com dois ou mais, aparece a <strong>régua do morph</strong>: arraste o marcador laranja pra escolher a posição — ela passa pelos algoritmos em ordem, e no meio do caminho as conexões são misturadas (uma modulação que só existe num deles vai sumindo aos poucos, como um índice de FM diminuindo). <strong>Saltar</strong> pula de algoritmo em algoritmo em vez de passar pelo meio. <strong>Ver posição</strong> faz o diagrama mostrar o ponto do morph, com as setas mais grossas onde a conexão é mais forte. Pra mover o morph durante a nota, use o destino <strong>AlgoMorph</strong> na matriz de modulação (com um LFO, um envelope com loop, a mod wheel…).</p>
       <p style="font-size:13.5px;color:var(--text-muted)">O <em>Feedback</em> de cada operador na tabela vale em todos os algoritmos; o feedback que vem dos presets fica dentro de cada algoritmo e faz morph junto. Ring mod não tem meio-termo: a conexão liga ou desliga no ponto mais próximo.</p>

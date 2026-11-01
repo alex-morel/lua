@@ -27,6 +27,7 @@
 #include "factory_bank.h"
 #include "fx_factory.h"
 #include "fx_rack_ui.h"
+#include "algo_editor.h"
 #include <chrono>
 #include "viz.h"
 #include "patch_browser.h"
@@ -132,6 +133,7 @@ struct AppState {
     std::atomic<float> mpeBend{48.0f};
     int selectedOp = 0;
     int selectedAlgo = 0; // indice (0-based) no combo de presets de algoritmo
+    dx7fm_app::algoed::AlgoEditor algoEd; // [2026-10-31] editor grafico de algoritmos
     int algoSlot = 0;          // [2026-10-24] slot do morph de algoritmos em edicao (0 = slot 1)
     bool algoMorphView = false; // diagrama mostra a posicao do morph em vez do slot em edicao
     // [ADICIONADO em 2026-09-23] estado do navegador de patches (so UI thread)
@@ -176,6 +178,7 @@ struct AppState {
 };
 
 const std::filesystem::path kPatchDir = "patches";
+const std::filesystem::path kAlgoPresetDir = "algorithms"; // [2026-10-31] presets de algoritmo (usuario)
 const std::filesystem::path kFxPresetDir = "fxpresets"; // [2026-10-29] presets do rack de efeitos (usuario)
 
 void syncRoutingCache(AppState& app, int part) {
@@ -1820,17 +1823,15 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
         changed |= DrawAlgoSlots(app, pp.voice);
         const int nAlgo = pp.voice.activeAlgos();
         // [2026-10-30] escolher um algoritmo diferente ja aplica (antes havia um botao Aplicar)
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::Combo("##algo", &app.selectedAlgo, namePtrs.data(), static_cast<int>(namePtrs.size()))) {
-            // so vira edicao (e passo de desfazer) se mudar o som: escolher o
-            // algoritmo que o patch ja usa nao faz nada
-            VoiceParams next = pp.voice;
-            if (nAlgo == 1) applyAlgorithm(next, app.selectedAlgo + 1);
-            else applyAlgorithmToMatrix(next.algo(app.algoSlot), app.selectedAlgo + 1);
-            if (voiceParamsToJson(next).dump() != voiceParamsToJson(pp.voice).dump()) {
-                pp.voice = next;
-                changed = true;
-            }
+        ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - 130.0f));
+        const std::string algoPreview = app.algoEd.current.empty() ? names[static_cast<size_t>(app.selectedAlgo)] : app.algoEd.current;
+        // so vira edicao (e passo de desfazer) se mudar o som: escolher o
+        // algoritmo que o patch ja usa nao faz nada
+        if (ImGui::BeginCombo("##algo", algoPreview.c_str(), ImGuiComboFlags_HeightLarge)) {
+            dx7fm_app::algoed::AlgoChoice ch;
+            if (dx7fm_app::algoed::PresetMenuItems(app.algoEd, kAlgoPresetDir, ch))
+                changed |= dx7fm_app::algoed::applyChoice(app.algoEd, ch, pp.voice, app.algoSlot, &app.selectedAlgo);
+            ImGui::EndCombo();
         }
         if (nAlgo == 1)
             ImGui::SetItemTooltip("Escolher um algoritmo ja troca: sobrescreve a matriz e o feedback de todos os operadores (Ctrl+Z desfaz).\n"
@@ -1840,6 +1841,9 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
             ImGui::SetItemTooltip("Escolher um algoritmo ja troca o algoritmo %d (Ctrl+Z desfaz). O feedback do preset vai pra diagonal\n"
                                   "dele, pra fazer morph junto; o Feedback de cada operador na tabela continua valendo em todos os algoritmos.",
                                   app.algoSlot + 1);
+        ImGui::SameLine();
+        if (ImGui::Button("Editor grafico")) app.algoEd.open = true;
+        ImGui::SetItemTooltip("Conecte os operadores arrastando e salve o algoritmo como preset");
         if (nAlgo > 1 && app.algoMorphView) {
             // ponto interpolado na posicao do knob (como o motor faz, sem a modulacao)
             const auto& v = pp.voice;
@@ -1943,6 +1947,7 @@ bool DrawPartLeftColumn(AppState& app, int partIndex) {
         else ImGui::TextDisabled("Roteamento livre entre os 8 operadores e output mix -- os presets do card Algoritmo ja preenchem isto.");
     }
     ui::EndCard();
+    changed |= dx7fm_app::algoed::DrawAlgoEditor(app.algoEd, pp.voice, partIndex, std::min(app.algoSlot, pp.voice.activeAlgos() - 1), app.selectedOp, app.selectedAlgo, kAlgoPresetDir);
     return changed;
 }
 
@@ -2286,7 +2291,7 @@ void DrawMainUi(AppState& app, int forceTab = -1) {
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
     ImGui::Begin("Mare Tranquillitatis", nullptr,
-                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
+                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus); // janelas flutuantes (editor de algoritmo) nao somem atras
 
     DrawTopBar(app);
     DrawVisualizers(app);

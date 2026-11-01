@@ -13,6 +13,9 @@
 //   load:NOME      carrega o patch de fabrica NOME na parte A
 //   fx:NOME        carrega o preset de efeitos de fabrica NOME e abre a aba Efeitos
 //   tab:N          abre a aba N (0-3 = partes, 4 = Efeitos)
+//   drag:X1,Y1,X2,Y2  arrasta com o botao esquerdo
+//   rclick:X,Y     clique com o botao direito
+//   ctrlz          Ctrl+Z
 //   wheel:N        roda do mouse N passos pra baixo, com o mouse na lateral direita
 #define main dx7fm_app_main
 #include "../app/main.cpp"
@@ -95,6 +98,36 @@ int main(int argc, char** argv) {
             for (const auto& pr : app.fxFactory)
                 if (pr.name == arg) dx7fm_app::fxui::loadPresetInto(app.fxUi, app.synth, pr.rack, pr.name, 0.0);
             gForceTab = 4;
+        } else if (kind == "drag") {
+            float v[4];
+            std::sscanf(arg.c_str(), "%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3]);
+            io.AddMousePosEvent(v[0], v[1]);
+            frame(app, renderer);
+            io.AddMouseButtonEvent(0, true);
+            frame(app, renderer);
+            for (int k = 1; k <= 8; ++k) {
+                io.AddMousePosEvent(v[0] + (v[2] - v[0]) * static_cast<float>(k) / 8.0f, v[1] + (v[3] - v[1]) * static_cast<float>(k) / 8.0f);
+                frame(app, renderer);
+            }
+            io.AddMouseButtonEvent(0, false);
+            frame(app, renderer);
+        } else if (kind == "ctrlz") {
+            io.AddKeyEvent(ImGuiMod_Ctrl, true);
+            io.AddKeyEvent(ImGuiKey_LeftCtrl, true);
+            frame(app, renderer);
+            io.AddKeyEvent(ImGuiKey_Z, true);
+            frame(app, renderer);
+            io.AddKeyEvent(ImGuiKey_Z, false);
+            io.AddKeyEvent(ImGuiKey_LeftCtrl, false);
+            io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        } else if (kind == "rclick") {
+            const float x = std::stof(arg.substr(0, arg.find(','))), y = std::stof(arg.substr(arg.find(',') + 1));
+            io.AddMousePosEvent(x, y);
+            frame(app, renderer);
+            io.AddMouseButtonEvent(1, true);
+            frame(app, renderer);
+            io.AddMouseButtonEvent(1, false);
+            frame(app, renderer);
         } else if (kind == "wheel") {
             io.AddMousePosEvent(1400.0f, 500.0f);
             frame(app, renderer);

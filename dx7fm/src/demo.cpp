@@ -24,6 +24,7 @@
 #include "../app/factory_bank.h"
 #include "../app/fx_factory.h"
 #include "../app/fx_rack_logic.h"
+#include "../app/algo_graph.h"
 #include "dx7_fxrack_io.h"
 
 #include <algorithm>
@@ -3263,6 +3264,102 @@ static void testOperatorEnableSolo() {
     }
 }
 
+// [2026-10-31] editor grafico de algoritmos: logica e presets
+static void testAlgoGraph() {
+    namespace ag = dx7fm_app::algograph;
+    AlgorithmMatrix m;
+    ag::connect(m, 1, 0); // op2 modula op1
+    check(m.mod[0][1] == ag::kDefaultMod && m.mod[1][0] == 0.0f, "algoritmo: conectar grava mod[destino][fonte]");
+    m.mod[0][1] = 0.8f;
+    ag::connect(m, 1, 0);
+    check(m.mod[0][1] == 0.8f, "algoritmo: conectar de novo nao muda a quantidade");
+    ag::setRing(m, 1, 0, true);
+    check(m.ring[0][1] && m.mod[0][1] == 0.0f && ag::hasEdge(m, 1, 0), "algoritmo: conexao vira ring");
+    ag::disconnect(m, 1, 0);
+    check(!ag::hasEdge(m, 1, 0), "algoritmo: desconectar apaga FM e ring");
+    // laco e alcance da saida
+    AlgorithmMatrix g;
+    g.outputMix[0] = 1.0f;
+    ag::connect(g, 1, 0);
+    ag::connect(g, 2, 1);
+    check(!ag::closesLoop(g, 2, 1) && ag::reachesOutput(g, 2) && !ag::reachesOutput(g, 3), "algoritmo: modulador em cadeia chega na saida; solto nao");
+    ag::connect(g, 0, 2);
+    check(ag::closesLoop(g, 0, 2), "algoritmo: conexao de volta fecha um laco");
+    // organizar: os 32 de fabrica, sem operadores sobrepostos, portadora abaixo do modulador
+    bool layoutOk = true;
+    for (int n = 1; n <= kNumAlgorithms; ++n) {
+        AlgorithmMatrix a;
+        applyAlgorithmToMatrix(a, n);
+        const ag::Layout l = ag::autoLayout(a);
+        for (int i = 0; i < kNumOps; ++i) {
+            if (!(l.x[i] >= 0.0f && l.x[i] <= 1.0f && l.y[i] >= 0.0f && l.y[i] <= 1.0f)) layoutOk = false;
+            for (int k = i + 1; k < kNumOps; ++k)
+                if (std::fabs(l.x[i] - l.x[k]) < 1e-3f && std::fabs(l.y[i] - l.y[k]) < 1e-3f) layoutOk = false;
+            for (int k = 0; k < kNumOps; ++k)
+                if (k != i && ag::hasEdge(a, k, i) && !ag::closesLoop(a, k, i) && !(l.y[k] < l.y[i])) layoutOk = false;
+        }
+    }
+    check(layoutOk, "algoritmo: Organizar nos 32 de fabrica: sem sobrepor e modulador acima");
+    {
+        const ag::Layout l = ag::autoLayout(AlgorithmMatrix{});
+        bool ok = true;
+        for (int i = 0; i < kNumOps; ++i) ok = ok && std::isfinite(l.x[i]) && std::isfinite(l.y[i]);
+        check(ok, "algoritmo: Organizar com a matriz vazia");
+    }
+    // selecao por clique: em cima da curva sim, longe nao
+    check(ag::distanceToEdge(100.0f, 150.0f, 100.0f, 100.0f, 100.0f, 200.0f) < 1.0f && ag::distanceToEdge(160.0f, 150.0f, 100.0f, 100.0f, 100.0f, 200.0f) > 40.0f,
+          "algoritmo: clique acha a conexao");
+    // preset: mesmo som depois de salvar e carregar, com 1 algoritmo e com morph
+    auto render = [](const VoiceParams& voice) {
+        Synth s;
+        s.init(48000.0, 8);
+        s.part(0).voice = voice;
+        s.recompile(0);
+        s.noteOn(0, 57, 100);
+        std::vector<float> x;
+        for (int i = 0; i < 12000; ++i) { float l, r; s.renderStereo(l, r); x.push_back(l); }
+        return x;
+    };
+    VoiceParams src;
+    applyAlgorithm(src, 7);
+    for (auto& o : src.op) o.outputLevel = 80;
+    ag::Layout custom = ag::autoLayout(src.matrix);
+    custom.x[2] = 0.123f; custom.y[2] = 0.456f;
+    ag::Preset back;
+    const bool parsed = ag::presetFromJson(ag::presetToJson(ag::presetFrom(src, 0, custom)), back);
+    check(parsed && std::fabs(back.layout.x[2] - 0.123f) < 1e-4f && std::fabs(back.layout.y[2] - 0.456f) < 1e-4f, "algoritmo: preset guarda as posicoes");
+    VoiceParams dst;
+    for (auto& o : dst.op) o.outputLevel = 80;
+    dst.op[3].feedback = 0.9f; // nao pode sobrar do patch anterior
+    dst.matrix.ring[1][2] = true;
+    ag::applyPreset(dst, 0, back);
+    check(render(dst) == render(src), "algoritmo: carregar um preset soa igual ao original, amostra por amostra");
+    {
+        VoiceParams a = src, b = src;
+        a.numAlgos = b.numAlgos = 2;
+        a.op[1].feedback = b.op[1].feedback = 0.2f; // feedback do operador continua valendo no morph
+        applyAlgorithmToMatrix(a.algo(1), 12);
+        ag::Preset p = ag::presetFrom(a, 1, ag::autoLayout(a.algo(1)));
+        b.algo(1) = AlgorithmMatrix{};
+        ag::applyPreset(b, 1, p);
+        a.algoMorph = b.algoMorph = 1.0f;
+        check(render(a) == render(b), "algoritmo: preset no slot de um morph soa igual");
+    }
+    {
+        ag::Preset p;
+        check(!ag::presetFromJson("{\"kind\":\"outra coisa\"}", p) && !ag::presetFromJson("lixo", p), "algoritmo: arquivo que nao e preset e recusado");
+        const bool ok = ag::presetFromJson(R"({"kind":"algorithm","matrix":{"outputMix":[5,0,0,0,0,0,0,0]}})", p);
+        check(ok && p.matrix.outputMix[0] == 1.0f && std::isfinite(p.layout.x[0]), "algoritmo: preset sem posicoes abre organizado e com valores na faixa");
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::temp_directory_path() / "mare_algo_teste";
+        fs::remove_all(dir);
+        ag::Preset q;
+        const bool saved = ag::savePresetFile(dir / "x.json", ag::presetFrom(src, 0, custom)), loaded = ag::loadPresetFile(dir / "x.json", q);
+        check(saved && loaded && q.matrix.mod[0][1] == ag::presetFrom(src, 0, custom).matrix.mod[0][1], "algoritmo: salvar e ler do disco");
+        fs::remove_all(dir);
+    }
+}
+
 static void testOpFxCombCurveMatchesDsp() {
     using dx7fm_app::opfx::combMagnitudeDb;
     float worst = 0.0f;
@@ -5804,6 +5901,7 @@ int main() {
     testWaveshaper();
     testModMatrixExpansion();
     testOperatorEnableSolo();
+    testAlgoGraph();
     testOpFxCombCurveMatchesDsp();
     testOpFxDefaultsAndSummary();
     testFxKeyTrackMovesFilterWithNote();
