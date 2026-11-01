@@ -436,7 +436,7 @@ void flowSameLine(float w) {
 // botao "..." da coluna de efeito da tabela: rola ate o card EFEITO DO OPERADOR
 bool g_scrollToFxCard = false;
 
-bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
+bool DrawOperatorTable(VoiceParams& v, int& selectedOp, int& soloOp) {
     // As ultimas 7 sao a reconstrucao propria das formas de onda AFM da
     // SY77/TX81Z (ver dx7_dsp.h e ARQUITETURA.txt secao 5).
     // os combos de onda/FX mostram a lista INTEIRA (ultimo argumento do Combo):
@@ -448,8 +448,9 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
     static const char* kFx[] = {"Bypass", "LowPass", "BandPass", "HighPass", "RingMod",
                                  "Saturate", "Crush", "FreqShift", "Comb", "Fold", "Waveshape", "Notch"};
     bool changed = false;
-    if (ImGui::BeginTable("ops", 8, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+    if (ImGui::BeginTable("ops", 9, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
         ImGui::TableSetupColumn("Op");
+        ImGui::TableSetupColumn("On  Solo");
         ImGui::TableSetupColumn("Onda");
         ImGui::TableSetupColumn("Ratio/Hz");
         ImGui::TableSetupColumn("Fixo");
@@ -477,12 +478,29 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
             }
             ImGui::PopStyleColor(3);
 
+            // [2026-10-31] liga/desliga (vai no patch) e solo (so na edicao)
             ImGui::TableSetColumnIndex(1);
+            ImGui::PushStyleColor(ImGuiCol_Button, op.enabled ? ui::opColor(i, 190) : ui::rgb(40, 44, 56));
+            ImGui::PushStyleColor(ImGuiCol_Text, op.enabled ? ui::rgb(14, 16, 22) : ui::col::kTextDim);
+            if (ImGui::SmallButton(op.enabled ? "On##on" : "Off##on")) { op.enabled = !op.enabled; changed = true; }
+            ImGui::PopStyleColor(2);
+            ImGui::SetItemTooltip(op.enabled ? "Ligado: clique pra desligar. Desligado, o operador nao soa nem modula;\nos ajustes ficam guardados e o estado vai no patch."
+                                             : "Desligado: clique pra ligar");
+            ImGui::SameLine(0, 4);
+            const bool soloed = soloOp == i;
+            ImGui::PushStyleColor(ImGuiCol_Button, soloed ? ui::col::kAccent2 : ui::rgb(40, 44, 56));
+            ImGui::PushStyleColor(ImGuiCol_Text, soloed ? ui::rgb(14, 16, 22) : ui::col::kText);
+            if (ImGui::SmallButton("S##solo")) soloOp = soloed ? -1 : i;
+            ImGui::PopStyleColor(2);
+            ImGui::SetItemTooltip("Solo: ouve so este operador, com os moduladores dele, mesmo que seja um modulador.\nSo vale na edicao: nao vai no patch.");
+            if (!op.enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45f); // desligado: esmaecido, mas editavel
+
+            ImGui::TableSetColumnIndex(2);
             int wave = static_cast<int>(op.waveform);
             ImGui::SetNextItemWidth(140);
             if (ImGui::Combo("##wave", &wave, kWave, IM_ARRAYSIZE(kWave), IM_ARRAYSIZE(kWave))) { op.waveform = static_cast<Waveform>(wave); changed = true; }
 
-            ImGui::TableSetColumnIndex(2);
+            ImGui::TableSetColumnIndex(3);
             ImGui::SetNextItemWidth(80);
             if (op.fixedFreq) {
                 changed |= ImGui::DragFloat("##hz", &op.fixedHz, 1.0f, 0.1f, 20000.0f, "%.1f Hz", ImGuiSliderFlags_AlwaysClamp);
@@ -490,21 +508,21 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
                 changed |= ImGui::DragFloat("##ratio", &op.coarseRatio, 0.01f, 0.01f, 32.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
             }
 
-            ImGui::TableSetColumnIndex(3);
+            ImGui::TableSetColumnIndex(4);
             changed |= ImGui::Checkbox("##fixed", &op.fixedFreq);
 
-            ImGui::TableSetColumnIndex(4);
+            ImGui::TableSetColumnIndex(5);
             {
                 int lvl = op.outputLevel;
                 ImGui::SetNextItemWidth(70);
                 if (ImGui::SliderInt("##lvl", &lvl, 0, 99, "%d", ImGuiSliderFlags_AlwaysClamp)) { op.outputLevel = static_cast<uint8_t>(lvl); changed = true; }
             }
 
-            ImGui::TableSetColumnIndex(5);
+            ImGui::TableSetColumnIndex(6);
             ImGui::SetNextItemWidth(70);
             changed |= ImGui::SliderFloat("##fb", &op.feedback, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
-            ImGui::TableSetColumnIndex(6);
+            ImGui::TableSetColumnIndex(7);
             int fx = static_cast<int>(op.fxType);
             ImGui::SetNextItemWidth(100);
             if (ImGui::Combo("##fx", &fx, kFx, IM_ARRAYSIZE(kFx), IM_ARRAYSIZE(kFx))) {
@@ -517,16 +535,22 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp) {
                 changed = true;
             }
 
-            ImGui::TableSetColumnIndex(7);
+            ImGui::TableSetColumnIndex(8);
             // parametro principal do efeito editavel aqui; "..." leva ao card completo
             changed |= ui::OperatorFxQuickEdit(v, i, 120);
             ImGui::SameLine();
             if (ImGui::SmallButton("...")) { selectedOp = i; g_scrollToFxCard = true; }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("todos os ajustes do efeito, com grafico (card EFEITO DO OPERADOR %d)", i + 1);
 
+            if (!op.enabled) ImGui::PopStyleVar();
             ImGui::PopID();
         }
         ImGui::EndTable();
+    }
+    if (soloOp >= 0) {
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::col::kAccent2), "Solo: voce esta ouvindo so o Op%d (e os moduladores dele).", soloOp + 1);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Tirar solo")) soloOp = -1;
     }
     return changed;
 }
@@ -635,6 +659,7 @@ void DrawAlgorithmDiagram(const VoiceParams& v, const AlgorithmMatrix& m, int& s
             bool hasMod = m.mod[i][j] != 0.0f;
             bool hasRing = m.ring[i][j];
             if (!hasMod && !hasRing) continue;
+            if (!v.op[i].enabled || !v.op[j].enabled) continue; // conexao de um operador desligado nao age
             ImVec2 from(boxPos[j].x + boxW * 0.5f, boxPos[j].y + boxH * 0.5f);
             ImVec2 to(boxPos[i].x + boxW * 0.5f, boxPos[i].y + boxH * 0.5f);
             const float w = weighted && !hasRing ? std::min(1.0f, std::fabs(m.mod[i][j])) : 1.0f;
@@ -653,25 +678,28 @@ void DrawAlgorithmDiagram(const VoiceParams& v, const AlgorithmMatrix& m, int& s
     }
 
     for (int i = 0; i < kNumOps; ++i) {
-        bool isCarrier = m.outputMix[i] > 0.0f;
+        const bool on = v.op[i].enabled;
+        bool isCarrier = m.outputMix[i] > 0.0f && on;
         bool hasFeedback = (m.mod[i][i] != 0.0f) || (v.op[i].feedback > 0.0f);
         ImVec2 p0 = boxPos[i];
         ImVec2 p1(p0.x + boxW, p0.y + boxH);
         bool hot = mouse.x >= p0.x && mouse.x <= p1.x && mouse.y >= p0.y && mouse.y <= p1.y;
         if (clicked && hot) selectedOp = i;
         dl->AddRectFilled(p0, p1, ui::opColor(i, isCarrier ? static_cast<int>(40 + 50 * (weighted ? std::min(1.0f, m.outputMix[i]) : 1.0f)) : 40), 6.0f);
-        dl->AddRect(p0, p1, ui::opColor(i, hot || i == selectedOp ? 255 : 160), 6.0f, 0, i == selectedOp ? 2.5f : 1.2f);
+        dl->AddRect(p0, p1, ui::opColor(i, hot || i == selectedOp ? 255 : on ? 160 : 60), 6.0f, 0, i == selectedOp ? 2.5f : 1.2f);
 
         char label[8];
         std::snprintf(label, sizeof(label), "Op%d", i + 1);
         ImVec2 ts = ImGui::CalcTextSize(label);
-        dl->AddText(ImVec2(p0.x + (boxW - ts.x) * 0.5f, p0.y + (boxH - ts.y) * 0.5f), ui::col::kText, label);
+        dl->AddText(ImVec2(p0.x + (boxW - ts.x) * 0.5f, p0.y + (boxH - ts.y) * 0.5f), on ? ui::col::kText : ui::col::kTextDim, label);
 
         if (isCarrier) dl->AddLine(ImVec2(p0.x + boxW * 0.5f, p1.y), ImVec2(p0.x + boxW * 0.5f, outputY), ui::opColor(i, 150), 1.5f);
-        if (hasFeedback) dl->AddCircle(ImVec2(p1.x, p0.y), 6.0f, ui::col::kAccent2, 12, 1.5f);
+        if (hasFeedback && on) dl->AddCircle(ImVec2(p1.x, p0.y), 6.0f, ui::col::kAccent2, 12, 1.5f);
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Clique num operador pra seleciona-lo");
-    ImGui::TextDisabled("Preenchido = portadora | setas = modulacao | circulo laranja = feedback | laranja = ring mod");
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("Preenchido = portadora | setas = modulacao | circulo laranja = feedback | laranja = ring mod | apagado = desligado");
+    ImGui::PopTextWrapPos();
 }
 // [ADICIONADO em 2026-10-24] Morph entre algoritmos: fileira de slots (qual
 // editar, +/-), regua da posicao (arrastavel, com os slots marcados), Saltar
@@ -1875,7 +1903,11 @@ bool DrawPartLeftColumn(AppState& app, int partIndex) {
     bool changed = false;
     int& sel = app.selectedOp;
 
-    if (ui::BeginCard("##card_ops", "OPERADORES")) changed |= DrawOperatorTable(pp.voice, sel);
+    if (ui::BeginCard("##card_ops", "OPERADORES")) {
+        int solo = app.synth.soloOperator(partIndex);
+        changed |= DrawOperatorTable(pp.voice, sel, solo);
+        app.synth.setSoloOperator(partIndex, solo);
+    }
     ui::EndCard();
 
     if (ui::BeginCard("##card_env", "ENVELOPES DE AMPLITUDE")) {

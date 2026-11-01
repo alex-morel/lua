@@ -3166,6 +3166,103 @@ static void testModMatrixExpansion() {
     }
 }
 
+// [2026-10-31] liga/desliga de operador e solo
+static void testOperatorEnableSolo() {
+    // op1 portadora modulada pelo op2; op3 portadora separada
+    auto patch = [](VoiceParams& v) {
+        v.matrix = AlgorithmMatrix{};
+        v.matrix.outputMix[0] = 1.0f; v.matrix.outputMix[2] = 0.7f;
+        v.matrix.mod[0][1] = 1.5f;
+        v.op[1].coarseRatio = 3.0f;
+        v.op[2].coarseRatio = 2.0f;
+    };
+    auto render = [&](const std::function<void(VoiceParams&)>& edit, int solo = -1) {
+        Synth s;
+        s.init(48000.0, 8);
+        patch(s.part(0).voice);
+        edit(s.part(0).voice);
+        s.recompile(0);
+        s.setSoloOperator(0, solo);
+        s.noteOn(0, 57, 100);
+        std::vector<float> x;
+        for (int i = 0; i < 12000; ++i) { float l, r; s.renderStereo(l, r); x.push_back(l); }
+        return x;
+    };
+    auto none = [](VoiceParams&) {};
+    check(render([](VoiceParams& v) { v.op[1].enabled = false; }) == render([](VoiceParams& v) { v.matrix.mod[0][1] = 0.0f; }),
+          "operador: desligar um modulador = tira-lo do algoritmo, amostra por amostra");
+    check(render([](VoiceParams& v) { v.op[2].enabled = false; }) == render([](VoiceParams& v) { v.matrix.outputMix[2] = 0.0f; }),
+          "operador: desligar uma portadora = tira-la da saida");
+    {
+        auto x = render([](VoiceParams& v) { v.op[0].enabled = false; v.op[2].enabled = false; });
+        float pk = 0.0f;
+        for (float a : x) pk = std::max(pk, std::fabs(a));
+        check(pk == 0.0f, "operador: tudo desligado = silencio exato");
+    }
+    { // desliga e religa com a nota soando; depois de velho, salva o ajuste
+        Synth s;
+        s.init(48000.0, 8);
+        patch(s.part(0).voice);
+        s.part(0).voice.op[0].enabled = s.part(0).voice.op[2].enabled = false;
+        s.recompile(0);
+        s.noteOn(0, 57, 100);
+        for (int i = 0; i < 4800; ++i) { float l, r; s.renderStereo(l, r); }
+        const bool alive = s.activeVoiceCount() == 1;
+        s.part(0).voice.op[0].enabled = true;
+        s.recompile(0);
+        std::vector<float> y;
+        for (int i = 0; i < 4800; ++i) { float l, r; s.renderStereo(l, r); y.push_back(l); }
+        check(alive && computeRms(y, 2400, 2400) > 0.05f, "operador: religar no meio da nota volta a soar");
+    }
+    { // ring: fonte desligada nao cala o operador
+        auto ring = [](VoiceParams& v) { v.op[0].fxType = FxType::RingMod; v.op[0].ringModSource = 1; };
+        auto a = render([&](VoiceParams& v) { ring(v); v.op[1].enabled = false; v.matrix.mod[0][1] = 0.0f; });
+        auto b = render([](VoiceParams& v) { v.matrix.mod[0][1] = 0.0f; });
+        check(a == b, "operador: ring mod com a fonte desligada passa direto");
+    }
+    {
+        VoiceParams v;
+        v.op[4].enabled = false;
+        VoiceParams w = voiceParamsFromJson(voiceParamsToJson(v));
+        std::string text = voiceParamsToJson(VoiceParams{}).dump();
+        size_t at;
+        while ((at = text.find("\"enabled\"")) != std::string::npos) text.erase(at, text.find('\n', at) - at + 1);
+        VoiceParams old = voiceParamsFromJson(JsonValue::parse(text));
+        check(!w.op[4].enabled && w.op[3].enabled && old.op[4].enabled, "operador: liga/desliga no JSON; patch antigo abre ligado");
+    }
+    // solo: portadora com o modulador = patch so com ela na saida (ganho 1)
+    check(render(none, 0) == render([](VoiceParams& v) { v.matrix.outputMix[2] = 0.0f; }), "solo: portadora soa com o modulador dela, sem as outras");
+    check(render(none, 2) == render([](VoiceParams& v) { v.matrix.outputMix[0] = 0.0f; v.matrix.outputMix[2] = 1.0f; }), "solo: a outra portadora, em ganho cheio");
+    {
+        // modulador em solo: seno na razao dele (3x), audivel
+        // (nivel 99: o solo toca no nivel real, e o Op2 do patch inicial vem em 60, ~-32 dB)
+        auto x = render([](VoiceParams& v) { v.op[1].outputLevel = 99; }, 1);
+        const float f3 = goertzelMagnitude(x, 660.0, 48000.0), f1 = goertzelMagnitude(x, 220.0, 48000.0);
+        check(f3 > 50.0f * f1 && computeRms(x, 6000, 6000) > 0.1f, "solo: um modulador soa sozinho");
+        auto y = render([](VoiceParams& v) { v.op[1].outputLevel = 99; v.op[1].enabled = false; }, 1);
+        check(computeRms(y, 6000, 6000) > 0.1f, "solo: toca o operador mesmo desligado");
+        auto m = render([](VoiceParams& v) { v.op[1].enabled = false; }, 0);
+        check(m == render([](VoiceParams& v) { v.op[1].enabled = false; v.matrix.outputMix[2] = 0.0f; }), "solo: modulador desligado continua sem modular");
+    }
+    { // tirar o solo com a nota soando traz o patch de volta; solo nao muda o patch
+        Synth s;
+        s.init(48000.0, 8);
+        patch(s.part(0).voice);
+        s.recompile(0);
+        const std::string before = voiceParamsToJson(s.part(0).voice).dump();
+        s.setSoloOperator(0, 1);
+        s.noteOn(0, 57, 100);
+        for (int i = 0; i < 2400; ++i) { float l, r; s.renderStereo(l, r); }
+        s.setSoloOperator(0, -1);
+        std::vector<float> x;
+        for (int i = 0; i < 4800; ++i) { float l, r; s.renderStereo(l, r); x.push_back(l); }
+        const float f2 = goertzelMagnitude(x, 440.0, 48000.0), f3 = goertzelMagnitude(x, 660.0, 48000.0);
+        check(f2 > 5.0f * f3 * 0.1f && computeRms(x, 2400, 2400) > 0.1f && voiceParamsToJson(s.part(0).voice).dump() == before,
+              "solo: tirar com a nota soando volta ao patch, que nao mudou");
+        check(s.soloOperator(0) == -1 && s.soloOperator(1) == -1, "solo: por parte, comeca desligado");
+    }
+}
+
 static void testOpFxCombCurveMatchesDsp() {
     using dx7fm_app::opfx::combMagnitudeDb;
     float worst = 0.0f;
@@ -5706,6 +5803,7 @@ int main() {
     testFilterModels();
     testWaveshaper();
     testModMatrixExpansion();
+    testOperatorEnableSolo();
     testOpFxCombCurveMatchesDsp();
     testOpFxDefaultsAndSummary();
     testFxKeyTrackMovesFilterWithNote();

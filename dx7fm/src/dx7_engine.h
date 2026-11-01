@@ -267,7 +267,7 @@ public:
         if (!active_ || !patch_) return 0.0f;
         float m = 0.0f;
         for (int i = 0; i < kNumOps; ++i)
-            if (isCarrier(i)) m = std::max(m, ops_[i].lastAmp);
+            if (isCarrier(i) && patch_->op[i].enabled) m = std::max(m, ops_[i].lastAmp);
         return m;
     }
     bool isReleasing() const { return releasing_; }
@@ -285,6 +285,14 @@ public:
         patch_ = patch;
         compiled_ = compiled;
         generation_ = generation;
+    }
+
+    // [2026-10-31] solo (so na edicao, nao vai no patch): sai so este operador,
+    // com os moduladores dele; os outros nao sao calculados. -1 = desligado.
+    void setSoloOperator(int op) {
+        if (op == soloOp_) return;
+        soloOp_ = op;
+        cacheValid_ = false;
     }
 
     // [2026-10-22] tabelas da Waveform::Wavetable do MESMO snapshot de patch_
@@ -365,7 +373,7 @@ private:
         const int nAlgo = v.activeAlgos();
         const AlgorithmMatrix topo = algoUnion(v);
         bool used[kNumOps] = {};
-        for (int i = 0; i < kNumOps; ++i) used[i] = topo.outputMix[i] != 0.0f;
+        for (int i = 0; i < kNumOps; ++i) used[i] = soloOp_ >= 0 ? i == soloOp_ : (topo.outputMix[i] != 0.0f && v.op[i].enabled);
         for (bool grew = true; grew;) {
             grew = false;
             for (int i = 0; i < kNumOps; ++i) {
@@ -373,7 +381,7 @@ private:
                 for (int j = 0; j < kNumOps; ++j) {
                     bool feeds = j != i && (topo.mod[i][j] != 0.0f || topo.ring[i][j]);
                     if (v.op[i].fxType == FxType::RingMod && v.op[i].ringModSource == j) feeds = true;
-                    if (feeds && !used[j]) { used[j] = true; grew = true; }
+                    if (feeds && !used[j] && v.op[j].enabled) { used[j] = true; grew = true; }
                 }
             }
         }
@@ -398,6 +406,7 @@ private:
             c.nMod = c.nRing = 0;
             for (int j = 0; j < kNumOps; ++j) {
                 if (j == i) continue;
+                if (!v.op[j].enabled) continue; // desligado: como se a conexao nao existisse
                 bool delayed = compiled_->feedbackEdge[i][j];
                 if (topo.mod[i][j] != 0.0f) {
                     c.modSrc[c.nMod] = static_cast<uint8_t>(j);
@@ -552,7 +561,7 @@ private:
                 case ModSource::Alternate:    srcVal = controllers_.alternate; break;
                 case ModSource::NoteAge:      srcVal = noteAge_; break;
                 case ModSource::AmpEnv:
-                    for (int k = 0; k < kNumOps; ++k) if (isCarrier(k)) srcVal = std::max(srcVal, ops_[k].lastAmpRaw / 99.0f);
+                    for (int k = 0; k < kNumOps; ++k) if (isCarrier(k) && patch_->op[k].enabled) srcVal = std::max(srcVal, ops_[k].lastAmpRaw / 99.0f);
                     break;
                 case ModSource::PegEnv:       srcVal = pegNorm; break;
                 case ModSource::Constant:     srcVal = 1.0f; break;
@@ -741,6 +750,7 @@ private:
                 }
                 case FxType::RingMod: {
                     int src = opParams.ringModSource;
+                    if (src >= 0 && src < kNumOps && !patch_->op[src].enabled) break; // fonte desligada: passa direto
                     float srcSig = (src >= 0 && src < kNumOps) ? ops_[src].prevOut : 0.0f;
                     processed = raw * srcSig;
                     break;
@@ -797,7 +807,8 @@ private:
 
         // 6. soma outputMix, depois propaga signal -> prevOut para TODOS de uma vez
         float sum = 0.0f;
-        for (int i = 0; i < kNumOps; ++i) sum += ops_[i].signal * outMix_[i];
+        if (soloOp_ >= 0 && soloOp_ < kNumOps) sum = ops_[soloOp_].signal;
+        else for (int i = 0; i < kNumOps; ++i) sum += ops_[i].signal * outMix_[i];
         for (auto& op : ops_) { op.prevPrevOut = op.prevOut; op.prevOut = op.signal; }
         if (voiceLevelTrim != 0.0f) sum *= std::max(0.0f, 1.0f + voiceLevelTrim); // ModDest::VoiceLevel
         if (patchGain_ != 1.0f) sum *= patchGain_;                                  // VoiceParams::volumeDb
@@ -914,6 +925,7 @@ private:
     float lfoRateMul_[kNumLfos] = {1.0f, 1.0f, 1.0f, 1.0f}, lfoDepthMul_[kNumLfos] = {1.0f, 1.0f, 1.0f, 1.0f};
     float modEnvRateMul_[kNumModEnvs] = {1.0f, 1.0f, 1.0f};
     float noteAge_ = 0.0f;
+    int soloOp_ = -1;
     float panMod_ = 0.0f;
     float patchGain_ = 1.0f; // [2026-10-29] dbToLinear(VoiceParams::volumeDb), no rebuildCache
     VoiceControllers controllers_;

@@ -117,6 +117,15 @@ dx7fm/
                       Room/Hall/Plate, EQ 3 bandas, compressor). Desde
                       2026-10-29 sao 7 dos tipos do rack (a cadeia fixa
                       GlobalFxChain saiu). Ver secao 7D.
+    (operadores)    - [ADICIONADO em 2026-10-31] OperatorParams::enabled (JSON
+                      "enabled", ausente = ligado): rebuildCache tira o
+                      operador de used[] e as conexoes dele, como se nao
+                      estivesse no algoritmo; os EGs seguem andando, entao
+                      religar no meio da nota funciona. Solo:
+                      Synth::setSoloOperator (atomico, fora do patch, do JSON
+                      e do desfazer): used[] parte so do operador em solo e a
+                      voz sai dele, sem outputMix. Solo de um operador
+                      desligado toca esse operador. testOperatorEnableSolo.
     (matriz)        - [ALTERADO em 2026-10-30] 29 fontes e 21 destinos: novas
                       fontes Breath/Foot/Expression/SustainPedal
                       (Synth::setController, AppEvent::Controller, CC2/4/11/64),

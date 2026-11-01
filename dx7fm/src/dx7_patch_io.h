@@ -621,6 +621,7 @@ inline std::shared_ptr<const std::vector<float>> waveFromJson(const JsonValue* j
 
 inline JsonValue operatorParamsToJson(const OperatorParams& o) {
     JsonValue j = JsonValue::makeObject();
+    j.set("enabled", JsonValue::makeBool(o.enabled));
     j.set("fixedFreq", JsonValue::makeBool(o.fixedFreq));
     j.set("coarseRatio", JsonValue::makeNumber(o.coarseRatio));
     j.set("fineCents", JsonValue::makeNumber(o.fineCents));
@@ -665,6 +666,7 @@ inline JsonValue operatorParamsToJson(const OperatorParams& o) {
 inline OperatorParams operatorParamsFromJson(const JsonValue* j) {
     OperatorParams o;
     if (!j) return o;
+    o.enabled = j->boolAt("enabled", true); // ausente (patch antigo) = ligado
     o.fixedFreq = j->boolAt("fixedFreq", o.fixedFreq);
     o.coarseRatio = clampCast<float>(j->numberAt("coarseRatio", o.coarseRatio));
     o.fineCents = clampCast<float>(j->numberAt("fineCents", o.fineCents));

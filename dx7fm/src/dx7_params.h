@@ -109,6 +109,9 @@ struct KeyLevelScaling {
 };
 
 struct OperatorParams {
+    // [2026-10-31] desligado: nao soa nem modula (equivale a tira-lo do algoritmo)
+    // e nao e calculado; os ajustes ficam guardados
+    bool enabled = true;
     bool fixedFreq = false;
     float coarseRatio = 1.0f;
     float fineCents = 0.0f;

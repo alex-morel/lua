@@ -91,6 +91,7 @@ struct PartRuntime {
     float modWheel = 0.0f;
     float cc01[4] = {};     // [2026-10-30] CC2, CC4, CC11, pedal de sustain (fontes da matriz)
     bool alternate = false; // [2026-10-30] ModSource::Alternate
+    std::atomic<int> soloOp{-1}; // [2026-10-31] operador em solo (-1 = nenhum); UI -> audio
     // [2026-10-24] macros: a audio thread escreve (setMacro), a UI le pra mostrar
     std::atomic<float> macro[VoiceParams::kNumMacros] = {};
     // [2026-10-24] LFOs globais (LFOParams::global): um por parte, calculados
@@ -446,6 +447,11 @@ public:
         pr.cc01[index] = v01;
         for (auto& s : slots_) if (s.ownerPart == part) s.voice.controllers().cc01[index] = v01;
     }
+
+    // [2026-10-31] solo de um operador da parte (-1 = desligado). So na edicao:
+    // nao entra no patch, no JSON nem no desfazer.
+    void setSoloOperator(int part, int op) { parts_[part].soloOp.store(std::clamp(op, -1, kNumOps - 1), std::memory_order_relaxed); }
+    int soloOperator(int part) const { return parts_[part].soloOp.load(std::memory_order_relaxed); }
 
     void modWheel(int part, float v01) {
         auto& pr = parts_[part];
@@ -889,6 +895,7 @@ private:
             const PatchSnapshot* snap = live[s.ownerPart];
             s.voice.rebind(&snap->voice, &snap->compiled, snap->generation); // "ao vivo": pega qualquer recompile() publicado ate agora
             s.voice.bindWavetables(&snap->wavetables);
+            s.voice.setSoloOperator(pr.soloOp.load(std::memory_order_relaxed));
             s.voice.setTempo(bpm);
             s.voice.bindGlobalLfos(glfoPtr[s.ownerPart]);
             float pan = std::clamp(pr.params.pan + s.subPan, -1.0f, 1.0f);
