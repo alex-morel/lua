@@ -391,7 +391,49 @@ inline int fxLinkFromId(const std::string& id) {
     return -1;
 }
 
+// [2026-11-01] Modulacao dos efeitos: rotas proprias do rack, porque a matriz do
+// patch e por voz e os efeitos sao um so pra todas as partes. Por isso as fontes
+// sao globais: 2 LFOs do rack, o nivel da entrada e os controladores, macros e
+// sequencer de uma parte. A quantidade anda na escala do knob (-1..1 = a faixa
+// toda). Parametros "rebuild" nao podem ser alvo. Novas fontes SEMPRE no fim.
+enum class FxModSource : uint8_t { None, LfoA, LfoB, Follower, ModWheel, Breath, Foot, Expression, Sustain, ChannelAT,
+                                   Macro1, Macro2, Macro3, Macro4, Seq1, Seq2, Seq3, Seq4, Count };
+enum FxCtl : int { kFxCtlModWheel, kFxCtlBreath, kFxCtlFoot, kFxCtlExpression, kFxCtlSustain, kFxCtlChannelAT,
+                   kFxCtlMacro1, kFxCtlMacro2, kFxCtlMacro3, kFxCtlMacro4, kFxCtlCount };
+struct FxModSourceInfo { const char* id; const char* name; bool perPart; };
+inline const FxModSourceInfo& fxModSourceInfo(FxModSource s) {
+    static const FxModSourceInfo t[] = {
+        {"None", "Nenhuma", false}, {"LfoA", "LFO A", false}, {"LfoB", "LFO B", false}, {"Follower", "Nível da entrada", false},
+        {"ModWheel", "ModWheel", true}, {"Breath", "Sopro (CC2)", true}, {"Foot", "Pé (CC4)", true}, {"Expression", "Expressão (CC11)", true},
+        {"Sustain", "Pedal sustain", true}, {"ChannelAT", "ChannelAT", true},
+        {"Macro1", "Macro1", true}, {"Macro2", "Macro2", true}, {"Macro3", "Macro3", true}, {"Macro4", "Macro4", true},
+        {"Seq1", "Sequencer A", false}, {"Seq2", "Sequencer B", false}, {"Seq3", "Sequencer C", false}, {"Seq4", "Sequencer D", false}};
+    return t[std::min<int>(static_cast<int>(s), static_cast<int>(FxModSource::Count) - 1)];
+}
+constexpr int kFxModRoutes = 8;
+constexpr int kFxModMix = -1; // alvo: o Mix do pedal
+struct FxModRoute {
+    FxModSource src = FxModSource::None;
+    int part = 0;              // de qual parte vem a fonte (fontes perPart)
+    int chain = 0, slot = 0;
+    int param = kFxModMix;     // indice em fxInfo, ou kFxModMix
+    float depth = 0.0f;        // -1..1
+};
+enum class FxLfoShape : uint8_t { Sine, Triangle, Saw, Square, SampleHold, Count };
+inline const char* fxLfoShapeName(int s) {
+    static const char* n[] = {"Seno", "Triângulo", "Serra", "Quadrada", "S&H"};
+    return n[std::clamp(s, 0, 4)];
+}
+constexpr int kFxLfos = 2;
+struct FxLfoParams {
+    uint8_t shape = 0;
+    float rate = 1.0f;         // Hz
+    int sync = -1;             // -1 = livre; senao indice de lfoDivisionName
+};
+
 struct FxRackParams {
+    FxModRoute mod[kFxModRoutes];
+    FxLfoParams lfo[kFxLfos];
     FxChainParams chain[kFxChains];
     FxExpression expr;
     uint8_t link = kFxLinkParallel; // FxLink: como as 2 cadeias se ligam (antes: bool serial)
@@ -421,6 +463,19 @@ inline void sanitize(FxRackParams& r) {
     }
     if (r.link >= kFxNumLinks) r.link = kFxLinkParallel;
     for (auto& c : r.chain) if (c.algorithm >= kFxNumChainAlgorithms) c.algorithm = 0;
+    for (auto& l : r.lfo) {
+        l.shape = static_cast<uint8_t>(std::min<int>(l.shape, static_cast<int>(FxLfoShape::Count) - 1));
+        l.rate = f(l.rate, 0.01f, 20.0f, 1.0f);
+        if (l.sync < -1 || l.sync >= kNumLfoDivisions) l.sync = -1;
+    }
+    for (auto& m : r.mod) { // rota com alvo invalido se desfaz
+        if (static_cast<int>(m.src) >= static_cast<int>(FxModSource::Count)) m.src = FxModSource::None;
+        m.depth = f(m.depth, -1.0f, 1.0f, 0.0f);
+        m.part = std::clamp(m.part, 0, kFxParts - 1);
+        if (m.chain < 0 || m.chain >= kFxChains || m.slot < 0 || m.slot >= kFxSlots) { m.src = FxModSource::None; m.chain = m.slot = 0; continue; }
+        const FxInfo& info = fxInfo(r.chain[m.chain].slot[m.slot].kind);
+        if (m.param != kFxModMix && (m.param < 0 || m.param >= info.nParams || info.params[m.param].rebuild)) { m.param = kFxModMix; }
+    }
     // pedal de expressao: alvo valido, parametro existente e nao "rebuild"
     auto& e = r.expr;
     if (e.chain < 0 || e.chain >= kFxChains || e.slot < 0 || e.slot >= kFxSlots) e.chain = -1;
@@ -444,6 +499,8 @@ struct FxContext {
     double sampleRate = 48000.0;
     float bpm = 120.0f;
     double beatPos = 0.0;     // posicao de batida no inicio do bloco
+    float ctl[kFxParts][kFxCtlCount] = {}; // [2026-11-01] controladores por parte (modulacao dos efeitos)
+    float seq[kFxParts] = {};              // valor do passo do sequencer de cada track
 };
 
 // DSP de um tipo de efeito. process() trabalha no lugar (L/R entram secos e
@@ -932,6 +989,7 @@ public:
     // (n amostras, n <= kMaxBlock). Saida em L/R. Chamar depois de beginBlock().
     void process(float* L, float* R, float* in1L, float* in1R, float* in2L, float* in2R, int n, const FxContext& ctx) {
         const FxRackParams& p = *cur_;
+        computeMods(p, in1L, in1R, in2L, in2R, n, ctx);
         runChain(0, p.chain[0], in1L, in1R, n, ctx);
         if (p.link != kFxLinkParallel) // serie: a saida da 1 entra na 2
             for (int i = 0; i < n; ++i) { in2L[i] += in1L[i]; in2R[i] += in1R[i]; }
@@ -960,6 +1018,71 @@ public:
     float slotMeter(int c, int s) const { return slotMeter_[c][s].load(std::memory_order_relaxed); }
 
 private:
+    // [2026-11-01] quanto cada parametro anda neste bloco (escala do knob)
+    void computeMods(const FxRackParams& p, const float* a, const float* b, const float* c, const float* d, int n, const FxContext& ctx) {
+        anyMod_ = false;
+        for (const auto& m : p.mod) anyMod_ = anyMod_ || (m.src != FxModSource::None && m.depth != 0.0f);
+        // LFOs e nivel andam mesmo sem rota: ligar uma rota nao da salto
+        const double dt = n / sampleRate_;
+        for (int k = 0; k < kFxLfos; ++k) {
+            const FxLfoParams& l = p.lfo[k];
+            double ph;
+            if (l.sync >= 0) { ph = ctx.beatPos / lfoDivisionBeats(l.sync); ph -= std::floor(ph); }
+            else { lfoPhase_[k] += l.rate * dt; lfoPhase_[k] -= std::floor(lfoPhase_[k]); ph = lfoPhase_[k]; }
+            if (ph < lfoLast_[k]) { // nova volta: novo sorteio do S&H
+                lfoRand_[k] = lfoRand_[k] * 1664525u + 1013904223u;
+                lfoHold_[k] = static_cast<float>(lfoRand_[k] >> 8) / 8388608.0f - 1.0f;
+            }
+            lfoLast_[k] = ph;
+            const float x = static_cast<float>(ph);
+            switch (static_cast<FxLfoShape>(l.shape)) {
+                case FxLfoShape::Sine: lfoValue_[k] = std::sin(2.0f * 3.14159265f * x); break;
+                case FxLfoShape::Triangle: lfoValue_[k] = 1.0f - 4.0f * std::fabs(x - 0.5f); break;
+                case FxLfoShape::Saw: lfoValue_[k] = 2.0f * x - 1.0f; break;
+                case FxLfoShape::Square: lfoValue_[k] = x < 0.5f ? 1.0f : -1.0f; break;
+                default: lfoValue_[k] = lfoHold_[k]; break;
+            }
+        }
+        float pk = 0.0f;
+        for (int i = 0; i < n; ++i) pk = std::max({pk, std::fabs(a[i]), std::fabs(b[i]), std::fabs(c[i]), std::fabs(d[i])});
+        const float coef = pk > follower_ ? 1.0f - std::exp(static_cast<float>(-dt / 0.005)) : 1.0f - std::exp(static_cast<float>(-dt / 0.2));
+        follower_ += (std::min(pk, 1.0f) - follower_) * coef;
+        if (!anyMod_) return;
+        std::memset(modAmount_, 0, sizeof modAmount_);
+        std::memset(slotHasMod_, 0, sizeof slotHasMod_);
+        for (const auto& m : p.mod) {
+            if (m.src == FxModSource::None || m.depth == 0.0f) continue;
+            float v = 0.0f;
+            switch (m.src) {
+                case FxModSource::LfoA: v = lfoValue_[0]; break;
+                case FxModSource::LfoB: v = lfoValue_[1]; break;
+                case FxModSource::Follower: v = follower_; break;
+                case FxModSource::Seq1: case FxModSource::Seq2: case FxModSource::Seq3: case FxModSource::Seq4:
+                    v = ctx.seq[static_cast<int>(m.src) - static_cast<int>(FxModSource::Seq1)];
+                    break;
+                default:
+                    v = ctx.ctl[m.part][static_cast<int>(m.src) - static_cast<int>(FxModSource::ModWheel)];
+                    break;
+            }
+            modAmount_[m.chain][m.slot][m.param + 1] += v * m.depth;
+            slotHasMod_[m.chain][m.slot] = true;
+        }
+    }
+    static void applyMods(FxSlotParams& sp, const float* amount) {
+        if (amount[0] != 0.0f) sp.mix = std::clamp(sp.mix + amount[0], 0.0f, 1.0f);
+        const FxInfo& info = fxInfo(sp.kind);
+        for (int i = 0; i < info.nParams; ++i) {
+            const float q = amount[i + 1];
+            if (q == 0.0f) continue;
+            const FxParamInfo& pi = info.params[i];
+            const bool lg = pi.log && pi.min > 0.0f;
+            float nv = lg ? std::log(sp.p[i] / pi.min) / std::log(pi.max / pi.min) : (sp.p[i] - pi.min) / (pi.max - pi.min);
+            nv = std::clamp(nv + q, 0.0f, 1.0f);
+            sp.p[i] = lg ? pi.min * std::pow(pi.max / pi.min, nv) : pi.min + (pi.max - pi.min) * nv;
+            if (pi.choices) sp.p[i] = std::round(sp.p[i]);
+        }
+    }
+
     // uma cadeia no lugar (L/R = entrada -> saida): algoritmo, nivel e pan
     void runChain(int c, const FxChainParams& ch, float* L, float* R, int n, const FxContext& ctx) {
         const FxChainAlgorithm& alg = kFxChainAlgorithms[ch.algorithm < kFxNumChainAlgorithms ? ch.algorithm : 0];
@@ -1004,6 +1127,11 @@ private:
             if (ex.chain == c && ex.slot == s && expression_ >= 0.0f) { // pedal: o parametro alvo segue o pedal
                 exprSlot = ch.slot[s];
                 exprSlot.p[ex.param] = ex.min + (ex.max - ex.min) * expression_;
+                spp = &exprSlot;
+            }
+            if (anyMod_ && slotHasMod_[c][s]) { // rotas de modulacao somam por cima
+                if (spp != &exprSlot) exprSlot = ch.slot[s];
+                applyMods(exprSlot, modAmount_[c][s]);
                 spp = &exprSlot;
             }
             const FxSlotParams& sp = *spp;
@@ -1066,6 +1194,13 @@ private:
     float dryL_[kMaxBlock], dryR_[kMaxBlock];
     float slotL_[kFxSlots][kMaxBlock], slotR_[kFxSlots][kMaxBlock];  // saida de cada pedal (algoritmos com ramos)
     float expression_ = -1.0f;
+    bool anyMod_ = false;
+    bool slotHasMod_[kFxChains][kFxSlots] = {};
+    float modAmount_[kFxChains][kFxSlots][kFxParams + 1] = {};
+    double lfoPhase_[kFxLfos] = {}, lfoLast_[kFxLfos] = {};
+    float lfoValue_[kFxLfos] = {}, lfoHold_[kFxLfos] = {};
+    uint32_t lfoRand_[kFxLfos] = {12345u, 67890u};
+    float follower_ = 0.0f;
     std::atomic<float> chainPeak_[kFxChains] = {};
     std::atomic<float> slotMeter_[kFxChains][kFxSlots] = {};
 };

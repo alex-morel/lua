@@ -5615,6 +5615,110 @@ static void testSequencer() {
     }
 }
 
+// [2026-11-01] destinos nos efeitos: rotas proprias do rack
+static void testFxModulation() {
+    auto eq = [] { FxRackParams r; r.chain[0].slot[0].setKind(FxKind::Eq3); r.chain[0].slot[0].p[2] = 1000.0f; r.chain[0].slot[0].p[4] = 0.5f; return r; };
+    auto level = [](const FxRackParams& r, const FxContext& base) {
+        FxRack rack;
+        rack.prepare(48000.0);
+        rack.setParams(r);
+        float L[256], R[256], a[256], b[256], c[256], d[256];
+        double e = 0.0;
+        int cnt = 0;
+        for (int at = 0; at < 24000; at += 256) {
+            rack.beginBlock();
+            for (int i = 0; i < 256; ++i) { L[i] = R[i] = 0.0f; a[i] = b[i] = sineAt(at + i, 1000.0f); c[i] = d[i] = 0.0f; }
+            rack.process(L, R, a, b, c, d, 256, base);
+            if (at >= 12000) for (int i = 0; i < 256; ++i) { e += L[i] * L[i]; ++cnt; }
+        }
+        return 20.0f * std::log10(static_cast<float>(std::sqrt(e / cnt)) / (0.5f / std::sqrt(2.0f)));
+    };
+    FxContext none;
+    auto route = [&](FxModSource src, int param, float depth, int part = 0) { FxRackParams r = eq(); r.mod[0] = FxModRoute{src, part, 0, 0, param, depth}; sanitize(r); return r; };
+    // midGain -18..+18: a escala do knob e 36 dB; +0.5 = +18 dB
+    FxContext wheel; wheel.ctl[2][kFxCtlModWheel] = 1.0f;
+    const float base = level(eq(), none), on = level(route(FxModSource::ModWheel, 3, 0.5f, 2), wheel), other = level(route(FxModSource::ModWheel, 3, 0.5f, 1), wheel);
+    std::printf("  (efeito: sem rota %.2f dB; com ModWheel da parte C %.2f dB)\n", base, on);
+    check(std::fabs(on - 18.0f) < 0.5f && std::fabs(other) < 0.1f, "efeitos: fonte da parte certa move o parametro na escala do knob");
+    FxContext seq; seq.seq[1] = -1.0f;
+    check(std::fabs(level(route(FxModSource::Seq2, 3, 0.25f), seq) + 9.0f) < 0.5f, "efeitos: Sequencer B como fonte");
+    {
+        FxRackParams r = route(FxModSource::Macro3, kFxModMix, -1.0f, 0);
+        FxContext m; m.ctl[0][kFxCtlMacro3] = 1.0f;
+        r.chain[0].slot[0].p[3] = -18.0f;
+        check(std::fabs(level(r, m)) < 0.1f, "efeitos: o Mix do pedal tambem e destino");
+    }
+    { // LFO varia o nivel; rebuild nao pode ser alvo
+        FxRackParams r = route(FxModSource::LfoA, 3, 0.5f);
+        r.lfo[0].rate = 4.0f;
+        FxRack rack;
+        rack.prepare(48000.0);
+        rack.setParams(r);
+        float L[256], R[256], a[256], b[256], c[256], d[256], lo = 1e9f, hi = 0.0f;
+        for (int at = 0; at < 48000; at += 256) {
+            rack.beginBlock();
+            for (int i = 0; i < 256; ++i) { L[i] = R[i] = 0.0f; a[i] = b[i] = sineAt(at + i, 1000.0f); c[i] = d[i] = 0.0f; }
+            rack.process(L, R, a, b, c, d, 256, none);
+            if (at < 4800) continue;
+            float pk = 0.0f;
+            for (int i = 0; i < 256; ++i) pk = std::max(pk, std::fabs(L[i]));
+            lo = std::min(lo, pk); hi = std::max(hi, pk);
+        }
+        std::printf("  (LFO A no ganho do EQ: de %.3f a %.3f)\n", lo, hi);
+        check(hi > 4.0f * lo, "efeitos: LFO do rack oscila o parametro");
+        FxRackParams h;
+        h.chain[0].slot[0].setKind(FxKind::Hall);
+        h.mod[0] = FxModRoute{FxModSource::LfoA, 0, 0, 0, 2, 0.5f}; // size e rebuild
+        sanitize(h);
+        check(h.mod[0].param == kFxModMix, "efeitos: parametro rebuild nao e alvo");
+    }
+    { // todos os efeitos, todos os parametros moduláveis, em LFO rapido: estaveis
+        bool ok = true;
+        for (int k = 1; k < static_cast<int>(FxKind::Count); ++k) {
+            const FxInfo& info = fxInfo(static_cast<FxKind>(k));
+            FxRackParams r;
+            r.chain[0].slot[0].setKind(static_cast<FxKind>(k));
+            r.lfo[0].rate = 13.0f; r.lfo[0].shape = static_cast<uint8_t>(FxLfoShape::Square);
+            int at = 0;
+            for (int i = 0; i < info.nParams && at < kFxModRoutes; ++i)
+                if (!info.params[i].rebuild) r.mod[at++] = FxModRoute{FxModSource::LfoA, 0, 0, 0, i, 1.0f};
+            sanitize(r);
+            FxRack rack;
+            rack.prepare(48000.0);
+            rack.setParams(r);
+            float L[256], R[256], a[256], b[256], c[256], d[256], pk = 0.0f;
+            std::mt19937 rng(9);
+            std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+            for (int n = 0; n < 48000; n += 256) {
+                rack.beginBlock();
+                for (int i = 0; i < 256; ++i) { L[i] = R[i] = 0.0f; a[i] = b[i] = dist(rng); c[i] = d[i] = 0.0f; }
+                rack.process(L, R, a, b, c, d, 256, none);
+                for (int i = 0; i < 256; ++i) { if (!std::isfinite(L[i])) ok = false; pk = std::max(pk, std::fabs(L[i])); }
+            }
+            if (pk > 40.0f || !ok) { ok = false; std::printf("  (%s: pico %.1f)\n", info.id, pk); }
+        }
+        check(ok, "efeitos: todos os tipos estaveis com todos os parametros modulados");
+    }
+    {
+        namespace fu = dx7fm_app::fxui;
+        FxRackParams r = eq();
+        r.chain[1].slot[2].setKind(FxKind::Hall);
+        r.mod[0] = FxModRoute{FxModSource::Seq3, 0, 1, 2, 0, -0.4f};
+        r.mod[1] = FxModRoute{FxModSource::ModWheel, 2, 0, 0, kFxModMix, 0.5f};
+        r.lfo[1].shape = 3; r.lfo[1].sync = 6; r.lfo[1].rate = 3.0f;
+        sanitize(r);
+        FxRackParams b = fxRackFromString(fxRackToString(r));
+        check(fxRackToString(b) == fxRackToString(r) && b.mod[0].src == FxModSource::Seq3 && b.mod[1].param == kFxModMix && b.lfo[1].sync == 6 && fu::rackEqual(r, b),
+              "efeitos: rotas e LFOs sobrevivem ao JSON");
+        check(fxRackFromString(fxRackToString(eq())).mod[0].src == FxModSource::None, "efeitos: rack sem rotas continua sem rotas");
+        FxRackParams m = r;
+        fu::moveSlot(m, 1, 2, 0, 3, false);
+        check(m.mod[0].chain == 0 && m.mod[0].slot == 3, "efeitos: a rota acompanha o pedal arrastado");
+        fu::clearSlotMods(m, 0, 3);
+        check(m.mod[0].src == FxModSource::None && m.mod[1].src == FxModSource::ModWheel, "efeitos: trocar o efeito do pedal apaga so as rotas dele");
+    }
+}
+
 static void testMicroGranular() {
     auto tone = [](float hz, int len) { return [hz, len](int i) { return i < len ? 0.4f * std::sin(2.0f * kPi * hz * i / 48000.0f) : 0.0f; }; };
     // Hold: a entrada acaba em 1 s; sem Hold o Mosaic some, com Hold continua
@@ -6059,6 +6163,7 @@ int main() {
     testAlgoGraph();
     testMidiInputPlan();
     testSequencer();
+    testFxModulation();
     testOpFxCombCurveMatchesDsp();
     testOpFxDefaultsAndSummary();
     testFxKeyTrackMovesFilterWithNote();

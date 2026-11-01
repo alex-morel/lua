@@ -117,6 +117,23 @@ dx7fm/
                       Room/Hall/Plate, EQ 3 bandas, compressor). Desde
                       2026-10-29 sao 7 dos tipos do rack (a cadeia fixa
                       GlobalFxChain saiu). Ver secao 7D.
+    dx7_sequencer.h, dx7_sequencer_io.h - [ADICIONADO em 2026-11-01] sequencer de
+                      4 tracks (uma por parte), 32 passos: nota, velocity, gate
+                      e modulacao. O Synth toca em renderBlock, cortando o bloco
+                      no instante do passo, como o arpejador; padrao publicado
+                      por triple buffer; notas entram por noteOn (passam pelo
+                      arpejador). Fora do patch. UI: app/sequencer_ui.h.
+    (efeitos)       - [ADICIONADO em 2026-11-01] destinos nos efeitos:
+                      FxRackParams::mod (8 rotas) e lfo (2), fontes globais via
+                      FxContext; calculadas por bloco em FxRack::computeMods.
+                      Cloud Seed: UpdateLines nao aloca mais na thread de audio
+                      (README.dx7fm). Verificado com new contado em todos os
+                      parametros moduláveis.
+    (app) visual    - [ALTERADO em 2026-11-01] tema, cards, knobs e topo da janela
+                      refinados em ui_widgets.h/main.cpp; ui::ValueBar (Nivel e
+                      Feedback da tabela). Textos da UI com acento; ids do JSON,
+                      nomes salvos em settings e nomes de patches/presets de
+                      fabrica continuam sem acento (o golden usa esses nomes).
     (app) algo_editor.h, algo_graph.h - [ADICIONADO em 2026-10-31] editor grafico
                       de algoritmos (janela flutuante) e a logica sem ImGui
                       (conectar, laco, Organizar, selecao, presets; testAlgoGraph).

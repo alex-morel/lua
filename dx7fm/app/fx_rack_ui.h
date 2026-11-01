@@ -240,7 +240,7 @@ inline void DrawPedal(FxRackUi& ui, dx7fm::Synth& synth, int c, int s) {
             ImGui::EndDragDropSource();
         }
         ImGui::SameLine();
-        KindCombo(sp);
+        if (KindCombo(sp)) clearSlotMods(r, c, s); // as rotas apontavam pra parametros do efeito anterior
 
         if (empty) {
             ImGui::TextDisabled("Vazio: o sinal passa direto.");
@@ -410,7 +410,118 @@ inline void DrawRackMixer(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks& 
         ImGui::SetNextItemWidth(-FLT_MIN);
         if (ImGui::SliderFloat("##pedaltest", &ui.pedalTest, 0.0f, 1.0f, "pedal (teste) %.2f") && hooks.sendExpression)
             hooks.sendExpression(ui.pedalTest);
-        ImGui::SetItemTooltip("Simula o pedal pela tela (o CC aprendido faz o mesmo).\nAntes do primeiro valor o parametro fica como no pedal.");
+        ImGui::SetItemTooltip("Simula o pedal pela tela (o CC aprendido faz o mesmo).\nAntes do primeiro valor o parâmetro fica como no pedal.");
+    }
+    ui::EndCard();
+}
+
+// [2026-11-01] Modulacao dos efeitos: 2 LFOs do rack e as rotas
+inline void DrawFxModCard(FxRackUi& ui) {
+    FxRackParams& r = ui.edit;
+    if (!ui::BeginCard("##fxmod", "MODULAÇÃO DOS EFEITOS", 0.0f, ui::col::kAccent2)) { ui::EndCard(); return; }
+    ImGui::TextDisabled("Qualquer parâmetro de um pedal pode ser destino. Tamanho e pre-delay de alguns reverbs não: recriam o efeito.");
+    for (int k = 0; k < kFxLfos; ++k) {
+        FxLfoParams& l = r.lfo[k];
+        ImGui::PushID(k);
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("LFO %c", 'A' + k);
+        ImGui::SameLine(60);
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::BeginCombo("##shape", fxLfoShapeName(l.shape))) {
+            for (int s = 0; s < static_cast<int>(FxLfoShape::Count); ++s)
+                if (ImGui::Selectable(fxLfoShapeName(s), s == l.shape)) l.shape = static_cast<uint8_t>(s);
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(80);
+        if (ImGui::BeginCombo("##sync", l.sync < 0 ? "Livre" : lfoDivisionName(l.sync))) {
+            if (ImGui::Selectable("Livre", l.sync < 0)) l.sync = -1;
+            for (int d = 0; d < kNumLfoDivisions; ++d)
+                if (ImGui::Selectable(lfoDivisionName(d), d == l.sync)) l.sync = d;
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip("Livre, ou uma divisão do BPM");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(l.sync >= 0);
+        ImGui::SetNextItemWidth(160);
+        ImGui::SliderFloat("##rate", &l.rate, 0.01f, 20.0f, "%.2f Hz", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+        ImGui::EndDisabled();
+        ImGui::PopID();
+    }
+    int lastUsed = -1;
+    for (int k = 0; k < kFxModRoutes; ++k) if (r.mod[k].src != FxModSource::None) lastUsed = k;
+    const int visible = std::min(kFxModRoutes, std::max(lastUsed + 2, 2));
+    if (ImGui::BeginTable("##fxmodt", 5, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Fonte");
+        ImGui::TableSetupColumn("Parte");
+        ImGui::TableSetupColumn("Pedal");
+        ImGui::TableSetupColumn("Parâmetro");
+        ImGui::TableSetupColumn("Profundidade");
+        ImGui::TableHeadersRow();
+        for (int k = 0; k < visible; ++k) {
+            FxModRoute& m = r.mod[k];
+            ImGui::PushID(100 + k);
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::BeginCombo("##src", fxModSourceInfo(m.src).name, ImGuiComboFlags_HeightLarge)) {
+                for (int s = 0; s < static_cast<int>(FxModSource::Count); ++s) {
+                    const FxModSource fs = static_cast<FxModSource>(s);
+                    if (ImGui::Selectable(fxModSourceInfo(fs).name, fs == m.src)) {
+                        m.src = fs;
+                        if (fs != FxModSource::None && m.depth == 0.0f) m.depth = 0.5f;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(50);
+            if (fxModSourceInfo(m.src).perPart) {
+                char prev[4];
+                std::snprintf(prev, sizeof prev, "%c", 'A' + m.part);
+                if (ImGui::BeginCombo("##part", prev)) {
+                    for (int p = 0; p < kFxParts; ++p) {
+                        char it[4];
+                        std::snprintf(it, sizeof it, "%c", 'A' + p);
+                        if (ImGui::Selectable(it, p == m.part)) m.part = p;
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip("De qual parte vem o controlador ou a macro");
+            } else ImGui::TextDisabled("-");
+            ImGui::BeginDisabled(m.src == FxModSource::None);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::SetNextItemWidth(190);
+            char prev[64];
+            std::snprintf(prev, sizeof prev, "%d.%d %s", m.chain + 1, m.slot + 1, fxInfo(r.chain[m.chain].slot[m.slot].kind).name);
+            if (ImGui::BeginCombo("##pedal", prev, ImGuiComboFlags_HeightLarge)) {
+                for (int c = 0; c < kFxChains; ++c)
+                    for (int s = 0; s < kFxSlots; ++s) {
+                        char it[64];
+                        std::snprintf(it, sizeof it, "%d.%d %s", c + 1, s + 1, fxInfo(r.chain[c].slot[s].kind).name);
+                        if (ImGui::Selectable(it, c == m.chain && s == m.slot)) { m.chain = c; m.slot = s; m.param = kFxModMix; }
+                    }
+                ImGui::EndCombo();
+            }
+            ImGui::TableSetColumnIndex(3);
+            ImGui::SetNextItemWidth(130);
+            const FxInfo& info = fxInfo(r.chain[m.chain].slot[m.slot].kind);
+            if (ImGui::BeginCombo("##param", m.param == kFxModMix ? "Mix" : info.params[m.param].label, ImGuiComboFlags_HeightLarge)) {
+                if (ImGui::Selectable("Mix", m.param == kFxModMix)) m.param = kFxModMix;
+                for (int i = 0; i < info.nParams; ++i) {
+                    if (info.params[i].rebuild) continue;
+                    if (ImGui::Selectable(info.params[i].label, i == m.param)) m.param = i;
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::TableSetColumnIndex(4);
+            ImGui::SetNextItemWidth(90);
+            ImGui::DragFloat("##depth", &m.depth, 0.005f, -1.0f, 1.0f, "%+.2f", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetItemTooltip("-1..+1 = a faixa inteira do knob. Ctrl+clique digita");
+            ImGui::EndDisabled();
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
     }
     ui::EndCard();
 }
@@ -505,6 +616,7 @@ inline void DrawFxRackPanel(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks
                 ImGui::EndTable();
             }
         }
+        DrawFxModCard(ui);
         ImGui::EndTable();
     }
 

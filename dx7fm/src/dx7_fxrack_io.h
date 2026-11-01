@@ -58,6 +58,30 @@ inline JsonValue fxRackToJson(const FxRackParams& r) {
         chains.push(std::move(cj));
     }
     j.set("chains", std::move(chains));
+    // [2026-11-01] modulacao dos efeitos: fonte e parametro por nome
+    JsonValue lfos = JsonValue::makeArray();
+    for (const auto& l : r.lfo) {
+        JsonValue e = JsonValue::makeObject();
+        e.set("shape", JsonValue::makeNumber(l.shape));
+        e.set("rate", JsonValue::makeNumber(l.rate));
+        e.set("sync", JsonValue::makeString(l.sync < 0 ? "" : lfoDivisionName(l.sync)));
+        lfos.push(std::move(e));
+    }
+    j.set("modLfos", std::move(lfos));
+    JsonValue mods = JsonValue::makeArray();
+    for (const auto& m : r.mod) {
+        if (m.src == FxModSource::None) continue;
+        const FxInfo& info = fxInfo(r.chain[m.chain].slot[m.slot].kind);
+        JsonValue e = JsonValue::makeObject();
+        e.set("source", JsonValue::makeString(fxModSourceInfo(m.src).id));
+        e.set("part", JsonValue::makeNumber(m.part));
+        e.set("chain", JsonValue::makeNumber(m.chain));
+        e.set("slot", JsonValue::makeNumber(m.slot));
+        e.set("param", JsonValue::makeString(m.param == kFxModMix ? "mix" : info.params[m.param].id));
+        e.set("depth", JsonValue::makeNumber(m.depth));
+        mods.push(std::move(e));
+    }
+    j.set("mods", std::move(mods));
     if (r.expr.chain >= 0) {
         const FxInfo& info = fxInfo(r.chain[r.expr.chain].slot[r.expr.slot].kind);
         JsonValue e = JsonValue::makeObject();
@@ -104,6 +128,36 @@ inline FxRackParams fxRackFromJson(const JsonValue& j) {
                     for (int i = 0; i < info.nParams; ++i) sp.p[i] = clampCast<float>(pj->numberAt(info.params[i].id, sp.p[i]));
             }
         }
+    if (const JsonValue* lfos = j.find("modLfos"))
+        for (size_t k = 0; k < lfos->arraySize() && k < static_cast<size_t>(kFxLfos); ++k) {
+            const JsonValue& e = lfos->at(k);
+            r.lfo[k].shape = clampCast<uint8_t>(e.numberAt("shape", 0));
+            r.lfo[k].rate = clampCast<float>(e.numberAt("rate", 1.0));
+            const std::string d = e.stringAt("sync", "");
+            r.lfo[k].sync = -1;
+            for (int v = 0; v < kNumLfoDivisions; ++v) if (d == lfoDivisionName(v)) r.lfo[k].sync = v;
+        }
+    if (const JsonValue* mods = j.find("mods")) {
+        int at = 0;
+        for (size_t k = 0; k < mods->arraySize() && at < kFxModRoutes; ++k) {
+            const JsonValue& e = mods->at(k);
+            FxModRoute m;
+            const std::string id = e.stringAt("source", "None");
+            for (int v = 1; v < static_cast<int>(FxModSource::Count); ++v)
+                if (id == fxModSourceInfo(static_cast<FxModSource>(v)).id) m.src = static_cast<FxModSource>(v);
+            m.part = static_cast<int>(e.numberAt("part", 0));
+            m.chain = static_cast<int>(e.numberAt("chain", 0));
+            m.slot = static_cast<int>(e.numberAt("slot", 0));
+            m.depth = clampCast<float>(e.numberAt("depth", 0.0));
+            if (m.src == FxModSource::None || m.chain < 0 || m.chain >= kFxChains || m.slot < 0 || m.slot >= kFxSlots) continue;
+            const FxInfo& info = fxInfo(r.chain[m.chain].slot[m.slot].kind);
+            const std::string pid = e.stringAt("param", "mix");
+            m.param = kFxModMix;
+            bool found = pid == "mix";
+            for (int i = 0; i < info.nParams; ++i) if (pid == info.params[i].id) { m.param = i; found = true; }
+            if (found) r.mod[at++] = m; // parametro desconhecido: a rota cai, o resto carrega
+        }
+    }
     if (const JsonValue* e = j.find("expression")) {
         int c = static_cast<int>(e->numberAt("chain", -1)), s = static_cast<int>(e->numberAt("slot", 0));
         if (c >= 0 && c < kFxChains && s >= 0 && s < kFxSlots) {

@@ -1054,6 +1054,15 @@ private:
         ctx.sampleRate = sampleRate_;
         ctx.bpm = bpm;
         ctx.beatPos = beatPos_;
+        for (int p = 0; p < kFxParts; ++p) { // valores de controle pra modulacao dos efeitos
+            const auto& pr = parts_[p];
+            auto* c = ctx.ctl[p];
+            c[kFxCtlModWheel] = pr.modWheel;
+            for (int k = 0; k < 4; ++k) c[kFxCtlBreath + k] = pr.cc01[k];
+            c[kFxCtlChannelAT] = pr.channelAT;
+            for (int k = 0; k < 4; ++k) c[kFxCtlMacro1 + k] = pr.macro[k].load(std::memory_order_relaxed);
+            ctx.seq[p] = pr.seqMod;
+        }
         fxRack_.process(mixL_, mixR_, sendL_[0], sendR_[0], sendL_[1], sendR_[1], len, ctx);
         for (int i = 0; i < len; ++i) {
             float l = mixL_[i], r = mixR_[i];

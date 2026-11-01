@@ -6,3 +6,7 @@ So DSP/, Parameters.h/.cpp, LICENSE e o Readme. Uma mudanca MECANICA:
     redefinicao. A macro so tem efeito no MSVC.)
 O strcpy_s (so existe no MSVC) usado em Parameters.h vem de um shim em
 src/dx7_fx_reverbs.h, sem mudar o codigo deles.
+
+2026-11-01: DSP/ReverbChannel.h: UpdateLines guarda as sementes das linhas numa
+membro e so as regenera quando a semente muda (antes alocava um vector a cada
+knob mudado, na thread de audio). Os valores sao os mesmos.

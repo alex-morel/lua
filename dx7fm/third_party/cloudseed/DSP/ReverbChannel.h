@@ -378,6 +378,10 @@ namespace Cloudseed
 			return 1.0 / std::sqrt(lineCount);
 		}
 
+		std::vector<float> delayLineSeeds;
+		decltype(delayLineSeed) delayLineSeedsSeed{};
+		decltype(crossSeed) delayLineSeedsCross{};
+
 		void UpdateLines()
 		{
 			auto lineDelaySamples = (int)Ms2Samples(paramsScaled[Parameter::LateLineSize]);
@@ -390,7 +394,13 @@ namespace Cloudseed
 			auto lateDiffusionModAmount = Ms2Samples(paramsScaled[Parameter::LateDiffuseModAmount]);
 			auto lateDiffusionModRate = paramsScaled[Parameter::LateDiffuseModRate];
 
-			auto delayLineSeeds = RandomBuffer::Generate(delayLineSeed, TotalLineCount * 3, crossSeed);
+			// dx7fm: guarda as sementes; UpdateLines roda na thread de audio a cada knob mudado e nao pode alocar
+			if (delayLineSeeds.empty() || delayLineSeedsSeed != delayLineSeed || delayLineSeedsCross != crossSeed)
+			{
+				delayLineSeeds = RandomBuffer::Generate(delayLineSeed, TotalLineCount * 3, crossSeed);
+				delayLineSeedsSeed = delayLineSeed;
+				delayLineSeedsCross = crossSeed;
+			}
 
 			for (int i = 0; i < TotalLineCount; i++)
 			{

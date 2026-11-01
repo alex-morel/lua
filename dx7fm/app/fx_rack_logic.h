@@ -41,6 +41,12 @@ inline bool rackEqual(const FxRackParams& a, const FxRackParams& b) {
         if (a.dry[p] != b.dry[p]) return false;
         for (int c = 0; c < kFxChains; ++c) if (a.send[p][c] != b.send[p][c]) return false;
     }
+    for (int k = 0; k < kFxLfos; ++k)
+        if (a.lfo[k].shape != b.lfo[k].shape || a.lfo[k].rate != b.lfo[k].rate || a.lfo[k].sync != b.lfo[k].sync) return false;
+    for (int k = 0; k < kFxModRoutes; ++k) {
+        const FxModRoute &m = a.mod[k], &n = b.mod[k];
+        if (m.src != n.src || m.part != n.part || m.chain != n.chain || m.slot != n.slot || m.param != n.param || m.depth != n.depth) return false;
+    }
     const FxExpression &x = a.expr, &y = b.expr;
     return x.chain == y.chain && (x.chain < 0 || (x.slot == y.slot && x.param == y.param && x.min == y.min && x.max == y.max));
 }
@@ -63,6 +69,11 @@ inline FxRackParams withLiveRebuild(const FxRackParams& edit, const FxRackParams
     return out;
 }
 
+// O efeito do pedal mudou: as rotas apontavam pra parametros de outro efeito
+inline void clearSlotMods(FxRackParams& r, int chain, int slot) {
+    for (auto& m : r.mod) if (m.chain == chain && m.slot == slot) m = FxModRoute{};
+}
+
 // Arrastar um pedal: copy=false troca os dois slots (o pedal de expressao vai
 // junto com o seu slot); copy=true copia por cima do destino.
 inline void moveSlot(FxRackParams& r, int fromChain, int fromSlot, int toChain, int toSlot, bool copy) {
@@ -73,9 +84,15 @@ inline void moveSlot(FxRackParams& r, int fromChain, int fromSlot, int toChain, 
     if (copy) {
         b = a;
         if (e.chain == toChain && e.slot == toSlot) e.chain = -1; // o alvo foi sobrescrito
+        clearSlotMods(r, toChain, toSlot);
         return;
     }
     std::swap(a, b);
+    for (auto& m : r.mod) { // as rotas de modulacao vao junto com o pedal
+        if (m.src == FxModSource::None) continue;
+        if (m.chain == fromChain && m.slot == fromSlot) { m.chain = toChain; m.slot = toSlot; }
+        else if (m.chain == toChain && m.slot == toSlot) { m.chain = fromChain; m.slot = fromSlot; }
+    }
     if (e.chain == fromChain && e.slot == fromSlot) { e.chain = toChain; e.slot = toSlot; }
     else if (e.chain == toChain && e.slot == toSlot) { e.chain = fromChain; e.slot = fromSlot; }
 }

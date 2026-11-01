@@ -441,6 +441,7 @@
       <li><a href="#algoritmos">Algoritmos</a></li>
       <li><a href="#modulacao">Modulação</a></li>
       <li><a href="#arpejador">Arpejador</a></li>
+      <li><a href="#sequencer">Sequencer</a></li>
       <li><a href="#rack">Efeitos (pedaleira)</a></li>
       <li><a href="#configuracoes">Configurações</a></li>
       <li><a href="#arquivos">Onde ficam os arquivos</a></li>
@@ -461,6 +462,7 @@
         <span class="tag">64 vozes</span>
         <span class="tag">4 partes</span>
         <span class="tag">39 efeitos</span>
+        <span class="tag">Sequencer de 4 tracks</span>
         <span class="tag">MIDI e MPE</span>
       </div>
     </header>
@@ -573,12 +575,12 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
 
     <section id="interface">
       <h2><span class="num">05</span>A interface</h2>
-      <p class="lede">Um topo fixo, um visualizador e 5 abas.</p>
+      <p class="lede">Um topo fixo, um visualizador e 6 abas.</p>
       <h3>Topo da janela</h3>
       <div class="tablewrap"><table>
         <tr><th>Item</th><th>O que mostra ou faz</th></tr>
         <tr><td>Configurações</td><td>Oversampling, clock, MPE e MIDI learn (<a href="#configuracoes">detalhes</a>)</td></tr>
-        <tr><td>Audio</td><td>Estado, taxa de amostragem, buffer, formato e xruns (falhas de áudio)</td></tr>
+        <tr><td>Áudio</td><td>Estado, taxa de amostragem, buffer, formato e xruns (falhas de áudio)</td></tr>
         <tr><td>MIDI</td><td>Dispositivo de entrada e luz de atividade</td></tr>
         <tr><td>Teclado do PC</td><td>Nota base e canal</td></tr>
         <tr><td>Vozes</td><td>Quantas das 64 vozes estão soando</td></tr>
@@ -593,7 +595,7 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
         <li><strong>Espectrograma:</strong> as frequências dos últimos 3,4 s, com a mais recente à direita. Passe o mouse para ver frequência, nota e nível. O menu ajusta a faixa dinâmica.</li>
       </ul>
       <h3>Abas</h3>
-      <p><strong>Parte A</strong> a <strong>Parte D</strong> têm o som de cada parte, em cards. <strong>Efeitos</strong> tem a <a href="#rack">pedaleira</a>. Em janelas estreitas, os cards ficam em uma coluna só.</p>
+      <p><strong>Parte A</strong> a <strong>Parte D</strong> têm o som de cada parte, em cards. <strong>Efeitos</strong> tem a <a href="#rack">pedaleira</a>, e <strong>Sequencer</strong>, o <a href="#sequencer">sequencer</a>. Em janelas estreitas, os cards ficam em uma coluna só.</p>
       <h3>Como usar os knobs</h3>
       <div class="tablewrap"><table>
         <tr><th>Gesto</th><th>Ação</th></tr>
@@ -602,7 +604,7 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
         <tr><td>Duplo clique</td><td>Volta ao padrão</td></tr>
         <tr><td>Botão direito</td><td>Abre um campo para digitar</td></tr>
       </table></div>
-      <p>Campos numéricos, como Ratio, se ajustam arrastando; <span class="kbd">Ctrl</span>+clique permite digitar. Cada operador tem cor fixa em toda a interface.</p>
+      <p>Campos numéricos, como Ratio, e as barras de Nível e Feedback da tabela se ajustam arrastando; <span class="kbd">Ctrl</span>+clique permite digitar. Cada operador tem cor fixa em toda a interface.</p>
     </section>
 
     <section id="conceitos">
@@ -634,9 +636,9 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
       </ol>
       <h3>2. Desenhe um algoritmo</h3>
       <ol class="steps">
-        <li><strong>Abra o editor</strong>No card Algoritmo, clique em <strong>Editor grafico</strong>. Com o sino do tutorial 1, aparece o Op2 sobre o Op1.</li>
+        <li><strong>Abra o editor</strong>No card Algoritmo, clique em <strong>Editor gráfico</strong>. Com o sino do tutorial 1, aparece o Op2 sobre o Op1.</li>
         <li><strong>Conecte</strong>Arraste da bolinha de baixo do <strong>Op3</strong> até o <strong>Op1</strong>. O Op3 passa a modular o Op1, e o sino ganha outra camada de brilho.</li>
-        <li><strong>Crie uma portadora</strong>Arraste da bolinha do <strong>Op5</strong> até a barra <strong>SAIDA</strong>. Agora há duas portadoras.</li>
+        <li><strong>Crie uma portadora</strong>Arraste da bolinha do <strong>Op5</strong> até a barra <strong>SAÍDA</strong>. Agora há duas portadoras.</li>
         <li><strong>Ajuste</strong>Clique no fio do Op3 e mude a quantidade no painel da direita, ou gire a roda do mouse sobre o fio.</li>
         <li><strong>Salve como preset</strong>Dê um nome e clique em <strong>Salvar</strong>. Ele aparece em <em>Meus algoritmos</em>.</li>
       </ol>
@@ -686,7 +688,7 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
         <tr><td>Habilitada</td><td>Liga a parte</td></tr>
         <tr><td>Canal MIDI</td><td>Omni (recebe todos) ou de 1 a 16</td></tr>
         <tr><td>Modo de voz</td><td><strong>Poly</strong>, <strong>Mono</strong> ou <strong>Unison</strong> (várias vozes por nota, com detune e espalhamento). Mono e Unison mostram os controles de glide</td></tr>
-        <tr><td>Panico</td><td>Solta todas as notas da parte</td></tr>
+        <tr><td>Pânico</td><td>Solta todas as notas da parte</td></tr>
         <tr><td>Nível, Pan</td><td>Mix da parte</td></tr>
         <tr><td>Transpose, Bend range</td><td>Em semitons</td></tr>
         <tr><td>Key range</td><td>Faixa de notas que a parte toca</td></tr>
@@ -767,7 +769,7 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
     <section id="efeito-op">
       <h2><span class="num">12</span>Efeito do operador</h2>
       <p class="lede">Cada operador tem um efeito, com gráfico ao vivo do que ele faz.</p>
-      <figure class="shot"><a href="img/efeito-operador.png" title="Abrir em tamanho real"><img src="img/efeito-operador.png" alt="Card Efeito do Operador com o filtro Passa-baixa no modelo Ladder 24 dB, gráfico da resposta e knobs de corte e Q"></a></figure>
+      <figure class="shot"><a href="img/efeito-operador.png" title="Abrir em tamanho real"><img src="img/efeito-operador.png" alt="Card Efeito do Operador com o filtro Passa-baixa no modelo Diodo, gráfico da resposta e knobs de corte e Q"></a></figure>
       <div class="tablewrap"><table>
         <tr><th>Efeito</th><th>Ajustes</th><th>O que faz</th></tr>
         <tr><td>Passa-baixa, Passa-banda, Passa-alta</td><td>Modelo, Corte, Q</td><td>Filtros. Q 0,7 não tem pico. O FX EG varre o corte de 20% a 100%</td></tr>
@@ -818,12 +820,12 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
       </table></div>
       <p>É um conjunto próprio para 8 operadores, não a lista oficial do DX7 nem do Montage. O diagrama abaixo do menu mostra a ligação atual: preenchido é portadora, setas são modulação, círculo laranja é feedback, seta laranja é ring mod e apagado é desligado. Clique numa caixa para selecionar o operador.</p>
       <h3 id="editor">Editor gráfico</h3>
-      <p>O botão <strong>Editor grafico</strong> abre uma janela flutuante. Dá para tocar enquanto edita, e tudo entra no <span class="kbd">Ctrl+Z</span>.</p>
-      <figure class="shot"><a href="img/editor-algoritmo.png" title="Abrir em tamanho real"><img src="img/editor-algoritmo.png" alt="Editor de algoritmo com duas cadeias de quatro operadores ligadas à barra SAIDA e o painel de ajustes à direita"></a></figure>
+      <p>O botão <strong>Editor gráfico</strong> abre uma janela flutuante. Dá para tocar enquanto edita, e tudo entra no <span class="kbd">Ctrl+Z</span>.</p>
+      <figure class="shot"><a href="img/editor-algoritmo.png" title="Abrir em tamanho real"><img src="img/editor-algoritmo.png" alt="Editor de algoritmo com duas cadeias de quatro operadores ligadas à barra SAÍDA e o painel de ajustes à direita"></a></figure>
       <div class="tablewrap"><table>
         <tr><th>Para</th><th>Faça</th></tr>
         <tr><td>Conectar</td><td>Arraste da bolinha de baixo de um operador até outro: o primeiro modula o segundo</td></tr>
-        <tr><td>Criar portadora</td><td>Arraste a bolinha até a barra <strong>SAIDA</strong></td></tr>
+        <tr><td>Criar portadora</td><td>Arraste a bolinha até a barra <strong>SAÍDA</strong></td></tr>
         <tr><td>Ligar feedback</td><td>Clique no círculo do canto do operador</td></tr>
         <tr><td>Ajustar</td><td>Clique no fio e use o painel da direita (quantidade, FM ou Ring, nível), ou a roda do mouse sobre o fio</td></tr>
         <tr><td>Apagar</td><td>Botão direito no fio, ou selecione e tecle <span class="kbd">Delete</span></td></tr>
@@ -878,6 +880,7 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
         <tr><td>Alternado</td><td>+1 ou −1</td><td>Troca a cada nota</td></tr>
         <tr><td>Tempo da nota</td><td>0 a 1</td><td>Sobe nos 5 s depois do note on</td></tr>
         <tr><td>Constante</td><td>1</td><td>Um ajuste fixo do destino</td></tr>
+        <tr><td>Sequencer</td><td>−1 a +1</td><td>Fileira Modulação da track desta parte (<a href="#sequencer">sequencer</a>)</td></tr>
       </table></div>
       <div class="tablewrap"><table>
         <tr><th>Destino</th><th>Alvo</th><th>Efeito da quantidade</th></tr>
@@ -925,8 +928,45 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
       <p>Os passos caem na grade do compasso, e o Start de um clock MIDI recomeça o arpejo.</p>
     </section>
 
+    <section id="sequencer">
+      <h2><span class="num">16</span>Sequencer</h2>
+      <p class="lede">Quatro tracks, uma para cada parte, que tocam notas e movem parâmetros.</p>
+      <figure class="shot"><a href="img/sequencer.png" title="Abrir em tamanho real"><img src="img/sequencer.png" alt="Aba Sequencer com as tracks A a D em grade de passos e, embaixo, as fileiras de nota, velocity, gate e modulação da track A"></a></figure>
+      <p>Na aba <strong>Sequencer</strong>, cada track toca a parte de mesma letra, com o som e os efeitos daquela parte. Só soa se a parte estiver habilitada; um aviso oferece <strong>Ligar Parte</strong> quando uma track com notas está numa parte desligada.</p>
+      <ol class="steps">
+        <li><strong>Escreva o ritmo</strong>Clique nas células para ligar os passos, ou arraste para ligar vários.</li>
+        <li><strong>Escolha as notas</strong>Clique na letra da track e, na fileira <strong>Nota</strong>, arraste um passo na vertical ou use a roda do mouse. Um passo novo copia a nota do último passo ligado antes dele.</li>
+        <li><strong>Toque</strong>Clique em <strong>Play</strong> ou tecle <span class="kbd">Espaço</span> com a aba aberta. Dá para editar tocando.</li>
+      </ol>
+      <div class="tablewrap"><table>
+        <tr><th>Controle da track</th><th>O que faz</th></tr>
+        <tr><td>M</td><td>Cala as notas; a modulação continua</td></tr>
+        <tr><td>Passos</td><td>De 1 a 32. Tamanhos diferentes entre tracks criam polirritmia</td></tr>
+        <tr><td>Divisão</td><td>Duração do passo, de 4/1 a 1/32, com pontuadas e tercinas</td></tr>
+        <tr><td>Swing</td><td>Atrasa os passos pares; 33% é tercina</td></tr>
+        <tr><td>&lt;&lt; &gt;&gt;</td><td>Desloca os passos dentro do comprimento</td></tr>
+      </table></div>
+      <div class="tablewrap"><table>
+        <tr><th>Fileira</th><th>O que define em cada passo</th></tr>
+        <tr><td>Nota</td><td>Altura. Fica guardada mesmo com o passo desligado</td></tr>
+        <tr><td>Velocity</td><td>Força da nota, de 1 a 127</td></tr>
+        <tr><td>Gate</td><td>Quanto do passo a nota soa. No máximo, liga na nota seguinte, o que permite glide em Mono</td></tr>
+        <tr><td>Modulação</td><td>Valor de −1 a +1, mesmo em passos sem nota. Um risco na célula mostra que há modulação</td></tr>
+      </table></div>
+      <p>Nas fileiras de barras, arraste para desenhar; o botão direito volta o passo ao padrão.</p>
+      <h3>Modulando com o sequencer</h3>
+      <p>O valor da fileira Modulação vira a fonte <strong>Sequencer</strong> na <a href="#matriz">matriz da parte</a> e as fontes <strong>Sequencer A a D</strong> na <a href="#rack-mod">modulação dos efeitos</a>. Por exemplo, <em>Sequencer → OperatorFx1</em> abre o filtro passo a passo. Parado, o valor volta a 0.</p>
+      <h3>Tempo, padrões e arpejador</h3>
+      <ul>
+        <li>Segue o <a href="#bpm">BPM</a>. O Start de um clock MIDI recomeça as tracks, se o sequencer estiver tocando; ele não dá play nem para sozinho.</li>
+        <li><strong>Salvar</strong> grava o padrão em <code>sequences/&lt;nome&gt;.json</code>. O último padrão volta ao reabrir, sempre parado. <span class="kbd">Ctrl+Z</span> desfaz.</li>
+        <li>O padrão não vai no patch: trocar de patch muda o som, não as notas.</li>
+        <li>Se o arpejador da parte estiver ligado, as notas do sequencer passam por ele, como as de um teclado.</li>
+      </ul>
+    </section>
+
     <section id="rack">
-      <h2><span class="num">16</span>Efeitos (pedaleira)</h2>
+      <h2><span class="num">17</span>Efeitos (pedaleira)</h2>
       <p class="lede">Duas cadeias de 4 pedais, com qualquer efeito em qualquer pedal.</p>
       <figure class="shot"><a href="img/pedaleira.png" title="Abrir em tamanho real"><img src="img/pedaleira.png" alt="Aba Efeitos com os envios por parte à esquerda e duas fileiras de pedais, cada uma com seletor de algoritmo e diagrama"></a><figcaption>O preset Delays em ramos: a cadeia 1 usa o algoritmo Pré + 3 ramos.</figcaption></figure>
       <h3>Pedais</h3>
@@ -965,6 +1005,16 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
       <p>O card <strong>Cadeias</strong> traz também nível, pan e medidor de saída de cada cadeia.</p>
       <h3 id="expressao">Pedal de expressão</h3>
       <p>O botão <strong>EXP</strong> de um pedal escolhe o parâmetro a controlar, como a posição do wah ou o Hold do Micro. No card <strong>Pedal de expressão</strong> ficam a faixa (<em>Calcanhar</em> e <em>Ponta</em>), o MIDI learn do CC e um controle para testar pela tela.</p>
+      <h3 id="rack-mod">Modulação dos efeitos</h3>
+      <p>O card <strong>Modulação dos efeitos</strong>, abaixo dos pedais, tem <strong>8 rotas</strong> que movem o Mix ou um parâmetro de qualquer pedal. São separadas da matriz da parte porque os efeitos são um só para todas as partes. Tamanho e pre-delay de alguns reverbs não podem ser destino, porque mudá-los recria o efeito.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Fonte</th><th>O que é</th></tr>
+        <tr><td>LFO A, LFO B</td><td>LFOs do próprio rack: Seno, Triângulo, Serra, Quadrada ou S&amp;H, livres (0,01 a 20 Hz) ou sincronizados ao BPM</td></tr>
+        <tr><td>Nível da entrada</td><td>Segue o volume do que entra nas cadeias. Por exemplo, tocar mais forte abre o Mix do reverb</td></tr>
+        <tr><td>ModWheel, Sopro, Pé, Expressão, Pedal sustain, ChannelAT, Macro1 a 4</td><td>Da parte escolhida na coluna Parte</td></tr>
+        <tr><td>Sequencer A a D</td><td>Fileira Modulação de cada track</td></tr>
+      </table></div>
+      <p>A profundidade vai de −1 a +1, na escala do knob: +0,5 anda meia volta do knob. As rotas e os LFOs vão nos presets de efeitos. Arrastar um pedal leva as rotas junto, e trocar o efeito do pedal apaga as rotas dele. A modulação é atualizada a cada bloco de áudio, até 256 amostras (cerca de 5 ms); parâmetros com salto, como o tempo de um delay, podem soar degraus em LFO rápido.</p>
       <h3>Presets</h3>
       <p>A barra do topo tem 28 presets de fábrica e os seus, salvos em <code>fxpresets/</code>. <strong>Salvar</strong> grava o rack inteiro, <strong>Init</strong> esvazia, e <span class="kbd">Ctrl+Z</span> vale em toda a aba. O estado volta sozinho ao reabrir o programa.</p>
       <div class="tablewrap"><table>
@@ -1009,36 +1059,36 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
       <h4>Drive</h4>
       <div class="tablewrap"><table>
         <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
-        <tr><td>Overdrive</td><td>Drive de pedal</td><td>Drive, Highpass, Saida</td></tr>
-        <tr><td>Valvula</td><td>Saturação de válvula</td><td>Entrada, Valvula</td></tr>
-        <tr><td>Distorcao</td><td>Distorção com 5 curvas</td><td>Entrada, Curva, Saida</td></tr>
-        <tr><td>Saturacao</td><td>Densidade, do leve ao forte</td><td>Densidade, Highpass, Saida</td></tr>
+        <tr><td>Overdrive</td><td>Drive de pedal</td><td>Drive, Highpass, Saída</td></tr>
+        <tr><td>Válvula</td><td>Saturação de válvula</td><td>Entrada, Válvula</td></tr>
+        <tr><td>Distorção</td><td>Distorção com 5 curvas</td><td>Entrada, Curva, Saída</td></tr>
+        <tr><td>Saturação</td><td>Densidade, do leve ao forte</td><td>Densidade, Highpass, Saída</td></tr>
         <tr><td>Lo-fi</td><td>Reduz taxa e bits</td><td>Taxa, Bits</td></tr>
       </table></div>
       <h4>Fita</h4>
       <div class="tablewrap"><table>
         <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
-        <tr><td>Simulador de fita</td><td>Fita magnética completa: saturação, perdas, wow, flutter e desgaste</td><td>Drive, Saturacao, Bias, Tom, Velocidade, Espacamento, Gap, Espessura, Wow, Flutter, Desgaste, Intens.</td></tr>
-        <tr><td>Fita leve</td><td>Fita simples, mais barata de CPU</td><td>Entrada, Suavizar, Head bump, Flutter, Saida</td></tr>
+        <tr><td>Simulador de fita</td><td>Fita magnética completa: saturação, perdas, wow, flutter e desgaste</td><td>Drive, Saturação, Bias, Tom, Velocidade, Espaçamento, Gap, Espessura, Wow, Flutter, Desgaste, Intens.</td></tr>
+        <tr><td>Fita leve</td><td>Fita simples, mais barata de CPU</td><td>Entrada, Suavizar, Head bump, Flutter, Saída</td></tr>
       </table></div>
       <h4>Filtro</h4>
       <div class="tablewrap"><table>
         <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
-        <tr><td>EQ 3 bandas</td><td>Graves, médios e agudos, ±18 dB</td><td>Grave, Ganho, Medio, Ganho, Q, Agudo, Ganho</td></tr>
-        <tr><td>Wah</td><td>Pedal, automático pelo nível, ou por LFO</td><td>Modo, Posicao, Sensib., Rate, Faixa</td></tr>
+        <tr><td>EQ 3 bandas</td><td>Graves, médios e agudos, ±18 dB</td><td>Grave, Ganho, Médio, Ganho, Q, Agudo, Ganho</td></tr>
+        <tr><td>Wah</td><td>Pedal, automático pelo nível, ou por LFO</td><td>Modo, Posição, Sensib., Rate, Faixa</td></tr>
         <tr><td>Filtro com LFO</td><td>Filtro varrido, com sync no BPM</td><td>Tipo, Corte, Resson., Forma, Rate, Sync, Profund.</td></tr>
       </table></div>
       <h4>Modulação</h4>
       <div class="tablewrap"><table>
         <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
         <tr><td>Chorus</td><td>Chorus denso e largo, de &quot;string machine&quot;</td><td>Rate, Depth</td></tr>
-        <tr><td>Phaser</td><td>Vales varridos por LFO</td><td>Notches, Rate, Min, Max, Razao, Largura, Depth, Feedback</td></tr>
+        <tr><td>Phaser</td><td>Vales varridos por LFO</td><td>Notches, Rate, Min, Max, Razão, Largura, Depth, Feedback</td></tr>
         <tr><td>Flanger</td><td>Atraso curto varrido, som de jato</td><td>Rate, Delay, Sweep, Depth, Feedback, Fase</td></tr>
         <tr><td>Tremolo</td><td>Volume oscilando</td><td>Velocidade, Profund.</td></tr>
         <tr><td>Auto-pan</td><td>Som indo de um lado a outro</td><td>Velocidade, Fase, Largura</td></tr>
         <tr><td>Vibrato</td><td>Altura oscilando</td><td>Velocidade, Profund., FM vel., FM prof.</td></tr>
         <tr><td>Ring mod</td><td>Multiplica por um oscilador</td><td>Freq E, Freq D, Soar</td></tr>
-        <tr><td>Rotary (Leslie)</td><td>Caixa rotativa, com chave lento/rápido e inércia</td><td>Velocidade, Lento, Rapido, Doppler, Tremolo, Drive, Largura</td></tr>
+        <tr><td>Rotary (Leslie)</td><td>Caixa rotativa, com chave lento/rápido e inércia</td><td>Velocidade, Lento, Rápido, Doppler, Tremolo, Drive, Largura</td></tr>
       </table></div>
       <h4>Pitch</h4>
       <div class="tablewrap"><table>
@@ -1055,24 +1105,24 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
       <h4>Reverb</h4>
       <div class="tablewrap"><table>
         <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
-        <tr><td>Reverb classico</td><td>Room, Hall ou Plate, com freeze</td><td>Tipo, Tamanho, Damping, Largura, Pre-delay, Freeze</td></tr>
-        <tr><td>Hall</td><td>Sala grande</td><td>Decay, Pre-delay, Tamanho, Tom, Difusao, Mod, Reflexoes</td></tr>
-        <tr><td>Room</td><td>Sala pequena</td><td>Decay, Pre-delay, Tamanho, Tom, Difusao, Grave, Reflexoes</td></tr>
+        <tr><td>Reverb clássico</td><td>Room, Hall ou Plate, com freeze</td><td>Tipo, Tamanho, Damping, Largura, Pre-delay, Freeze</td></tr>
+        <tr><td>Hall</td><td>Sala grande</td><td>Decay, Pre-delay, Tamanho, Tom, Difusão, Mod, Reflexões</td></tr>
+        <tr><td>Room</td><td>Sala pequena</td><td>Decay, Pre-delay, Tamanho, Tom, Difusão, Grave, Reflexões</td></tr>
         <tr><td>Plate</td><td>Placa metálica</td><td>Placa, Decay, Pre-delay, Tom</td></tr>
         <tr><td>Reflections</td><td>Primeiras reflexões de 8 salas</td><td>Sala, Tamanho, Largura, Tom</td></tr>
-        <tr><td>Cloud</td><td>Cauda longa e modulada</td><td>Decay, Tamanho, Mod, Difusao, Tom, Pre-delay</td></tr>
-        <tr><td>Spring</td><td>Mola de amplificador</td><td>Tamanho, Decay, Reflexoes, Spin, Escuro, Caos</td></tr>
+        <tr><td>Cloud</td><td>Cauda longa e modulada</td><td>Decay, Tamanho, Mod, Difusão, Tom, Pre-delay</td></tr>
+        <tr><td>Spring</td><td>Mola de amplificador</td><td>Tamanho, Decay, Reflexões, Spin, Escuro, Caos</td></tr>
         <tr><td>Swell</td><td>O volume sobe sozinho a cada nota</td><td>Subida, Sensib., Decay, Tom, Reverb</td></tr>
         <tr><td>Bloom</td><td>A cauda floresce depois do ataque</td><td>Decay, Laco, Florescer, Tom</td></tr>
         <tr><td>Chorale</td><td>A cauda canta uma vogal</td><td>Decay, Vogal, Resson., Coro, Tom, Tamanho</td></tr>
         <tr><td>Shimmer</td><td>A cauda sobe de altura a cada volta</td><td>Decay, Voz 1, Voz 2, Brilho, Tom, Tamanho</td></tr>
-        <tr><td>Magneto</td><td>Eco de 4 cabeças difuso</td><td>Tempo, Sync, Cabecas, Feedback, Difusao, Decay, Tom, Wow</td></tr>
-        <tr><td>Nonlinear</td><td>Reverse, Swoosh, Ramp e Gate</td><td>Forma, Tempo, Difusao, Tom</td></tr>
+        <tr><td>Magneto</td><td>Eco de 4 cabeças difuso</td><td>Tempo, Sync, Cabeças, Feedback, Difusão, Decay, Tom, Wow</td></tr>
+        <tr><td>Nonlinear</td><td>Reverse, Swoosh, Ramp e Gate</td><td>Forma, Tempo, Difusão, Tom</td></tr>
       </table></div>
       <h4>Granular</h4>
       <div class="tablewrap"><table>
         <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
-        <tr><td>Micro (granular)</td><td>Grãos e micro-loops em 11 variações</td><td>Variacao, Atividade, Forma, Repeticoes, Tempo, Sync, Altura, Abertura, Filtro, Espaco, Hold, Variar</td></tr>
+        <tr><td>Micro (granular)</td><td>Grãos e micro-loops em 11 variações</td><td>Variação, Atividade, Forma, Repetições, Tempo, Sync, Altura, Abertura, Filtro, Espaço, Hold, Variar</td></tr>
       </table></div>
       <h3>As variações do Micro</h3>
       <p>O Micro grava continuamente os últimos 6 segundos e toca pedaços. <strong>Hold</strong> congela o que foi gravado.</p>
@@ -1093,7 +1143,7 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
     </section>
 
     <section id="configuracoes">
-      <h2><span class="num">17</span>Configurações</h2>
+      <h2><span class="num">18</span>Configurações</h2>
       <p class="lede">O botão embaixo do logo. Tudo fica salvo no programa, não no patch.</p>
       <div class="tablewrap"><table>
         <tr><th>Opção</th><th>O que faz</th></tr>
@@ -1105,22 +1155,24 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
     </section>
 
     <section id="arquivos">
-      <h2><span class="num">18</span>Onde ficam os arquivos</h2>
+      <h2><span class="num">19</span>Onde ficam os arquivos</h2>
       <div class="tablewrap"><table>
         <tr><th>Conteúdo</th><th>Local</th></tr>
         <tr><td>Patches</td><td class="mono">patches/*.json</td></tr>
         <tr><td>Presets de efeitos</td><td class="mono">fxpresets/*.json</td></tr>
         <tr><td>Presets de algoritmo</td><td class="mono">algorithms/*.json</td></tr>
+        <tr><td>Padrões do sequencer</td><td class="mono">sequences/*.json</td></tr>
         <tr><td>Configurações</td><td class="mono">~/.config/mare-tranquillitatis/settings.json</td></tr>
         <tr><td>Último estado dos efeitos</td><td class="mono">~/.config/mare-tranquillitatis/fxrack.json</td></tr>
+        <tr><td>Último padrão do sequencer</td><td class="mono">~/.config/mare-tranquillitatis/sequencer.json</td></tr>
       </table></div>
-      <p>As três primeiras pastas são relativas a onde o programa foi aberto. São JSON legível, fáceis de copiar e compartilhar. Se você usou uma versão antiga, a configuração de <code>~/.config/dx7fm</code> é copiada na primeira execução, e a pasta original fica intacta.</p>
+      <p>As quatro primeiras pastas são relativas a onde o programa foi aberto. São JSON legível, fáceis de copiar e compartilhar. Se você usou uma versão antiga, a configuração de <code>~/.config/dx7fm</code> é copiada na primeira execução, e a pasta original fica intacta.</p>
     </section>
 
     <section id="problemas">
-      <h2><span class="num">19</span>Solução de problemas</h2>
+      <h2><span class="num">20</span>Solução de problemas</h2>
       <h3>Sem áudio</h3>
-      <p>Se o topo mostrar <em>Audio PARADO</em> com um erro, o ALSA não abriu o dispositivo <code>default</code>. Rode <code>aplay -l</code> para ver os dispositivos. Por enquanto não dá para escolher outro dentro do programa.</p>
+      <p>Se o topo mostrar <em>Áudio parado</em> com um erro, o ALSA não abriu o dispositivo <code>default</code>. Rode <code>aplay -l</code> para ver os dispositivos. Por enquanto não dá para escolher outro dentro do programa.</p>
       <h3>Não soa ao tocar</h3>
       <ul>
         <li>A parte está <strong>Habilitada</strong>? O canal MIDI confere?</li>
@@ -1145,12 +1197,12 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
     </section>
 
     <section id="limites">
-      <h2><span class="num">20</span>Limitações</h2>
+      <h2><span class="num">21</span>Limitações</h2>
       <ul>
         <li>O áudio usa sempre o dispositivo <code>default</code> do ALSA.</li>
         <li>Só há entrada MIDI. Não há saída MIDI nem entrada de áudio.</li>
         <li>Não há reprodução de samples: o granular Micro é um efeito, não um oscilador.</li>
-        <li>A matriz não alcança os efeitos da pedaleira; só o pedal de expressão controla um parâmetro de efeito.</li>
+        <li>A matriz de cada parte tem 16 rotas, e a dos efeitos, 8. A matriz da parte não alcança os efeitos: eles têm rotas próprias, com fontes globais.</li>
         <li>Dois aparelhos MIDI idênticos, com o mesmo nome, não são diferenciados no menu.</li>
         <li>Envelopes, key scaling e velocity são aproximações próprias, não as tabelas exatas do hardware original.</li>
         <li>Os patches ficam só em <code>patches/</code>; para abrir um de outro lugar, copie o arquivo para lá.</li>
@@ -1159,7 +1211,7 @@ aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
     </section>
 
     <section id="fabrica">
-      <h2><span class="num">21</span>Anexo: banco de fábrica</h2>
+      <h2><span class="num">22</span>Anexo: banco de fábrica</h2>
       <p class="lede">Os 39 patches do botão Fábrica. As descrições são as que o programa mostra.</p>
       <p><em>Estilo DX7</em> foi programado em parâmetros do DX7, inspirado nos timbres clássicos; <em>Estilo SY77</em> usa ondas AFM, filtros e camadas. Nenhum é cópia dos sons originais.</p>
       <h3>Demonstracao</h3>
