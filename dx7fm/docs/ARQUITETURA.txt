@@ -1952,7 +1952,7 @@ simulador de fita aberto. Plano em 7 passos, um commit cada (19cec00,
   Nada aloca na thread de audio. A UI so publica os parametros rebuild ao
   soltar o knob (fxui::withLiveRebuild).
 
-  EFEITOS (43 tipos; origem completa em THIRD_PARTY_NOTICES.md):
+  EFEITOS (39 tipos; origem completa em THIRD_PARTY_NOTICES.md):
     Dinamica: Compressor (ZamComp), Gate (Airwindows Gatelope), Limiter/
       SoftClip (ClipSoftly). Drive: Overdrive (Drive), Tube (Tube2),
       Distortion, Density (Density2), LoFi (Pockey2). Fita: TapeSim (CHOW

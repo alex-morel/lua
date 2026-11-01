@@ -4,9 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Manual do Mare Tranquillitatis</title>
-<meta name="description" content="Guia de uso do Mare Tranquillitatis: instalação, tocar notas, entender a interface e desenhar patches FM.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Archivo:ital,wght@0,700;0,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<meta name="description" content="Manual do Mare Tranquillitatis: instalação, tocar, interface, criação de sons e referência completa.">
 <style>
   :root { color-scheme: light dark; }
   img { max-width: 100%; }
@@ -412,6 +410,13 @@
   /* Archivo Expanded nao existe como familia separada no Google Fonts v2;
      usa Archivo com letter-spacing negativo pra aproximar o efeito "expanded" */
   h1, h2, h3, .eyebrow, nav.toc .brand span { font-stretch: expanded; letter-spacing: -0.005em; }
+  .shot { margin: 16px 0; }
+  .shot img { display: block; width: 100%; border: 1px solid var(--border); border-radius: var(--radius); }
+  .shot.narrow { max-width: 560px; }
+  .shot figcaption { margin-top: 6px; font-size: 13.5px; color: var(--text-muted); }
+  .terms dt { font-weight: 600; margin-top: 10px; }
+  .terms dd { margin: 2px 0 0; color: var(--text-muted); }
+  h4 { margin: 18px 0 6px; }
 </style>
 </head>
 <body>
@@ -421,17 +426,27 @@
     <div class="brand"><span class="mark"></span><span>Mare Tranquillitatis</span></div>
     <button class="toggle" id="tocToggle">Índice ▾</button>
     <ol>
-      <li><a href="#intro">O que é o Mare Tranquillitatis</a></li>
+      <li><a href="#intro">O que é</a></li>
       <li><a href="#instalacao">Instalação</a></li>
-      <li><a href="#primeira-execucao">Primeira execução</a></li>
-      <li><a href="#tocando">Tocando notas</a></li>
-      <li><a href="#interface">Anatomia da interface</a></li>
+      <li><a href="#inicio">Primeiros minutos</a></li>
+      <li><a href="#tocando">Tocando</a></li>
+      <li><a href="#interface">A interface</a></li>
       <li><a href="#conceitos">Conceitos de FM</a></li>
-      <li><a href="#tutorial">Tutorial: seu primeiro patch</a></li>
-      <li><a href="#salvando">Salvando e carregando</a></li>
-      <li><a href="#referencia">Referência rápida</a></li>
+      <li><a href="#tutoriais">Tutoriais</a></li>
+      <li><a href="#patches">Patches</a></li>
+      <li><a href="#partes">Partes</a></li>
+      <li><a href="#operadores">Operadores</a></li>
+      <li><a href="#ondas">Formas de onda</a></li>
+      <li><a href="#efeito-op">Efeito do operador</a></li>
+      <li><a href="#algoritmos">Algoritmos</a></li>
+      <li><a href="#modulacao">Modulação</a></li>
+      <li><a href="#arpejador">Arpejador</a></li>
+      <li><a href="#rack">Efeitos (pedaleira)</a></li>
+      <li><a href="#configuracoes">Configurações</a></li>
+      <li><a href="#arquivos">Onde ficam os arquivos</a></li>
       <li><a href="#problemas">Solução de problemas</a></li>
-      <li><a href="#limites">Limitações conhecidas</a></li>
+      <li><a href="#limites">Limitações</a></li>
+      <li><a href="#fabrica">Anexo: banco de fábrica</a></li>
     </ol>
     <button class="themebtn" id="themeBtn">Alternar tema</button>
   </nav>
@@ -440,87 +455,97 @@
     <header class="hero">
       <p class="eyebrow">Manual do usuário</p>
       <h1>Mare Tranquillitatis</h1>
-      <p>Synth de síntese FM/PM de 8 operadores, com áudio e MIDI em tempo real via ALSA e uma interface leve que roda sem GPU — pensado pra funcionar numa distro Linux minimal. Este manual cobre o aplicativo standalone: instalar, tocar, entender a interface e montar um patch do zero.</p>
+      <p>Sintetizador FM de 8 operadores para Linux, com aditiva, wavetable, 4 partes e uma pedaleira de efeitos. Este manual explica como instalar, tocar, entender a interface e criar os seus próprios sons.</p>
       <div class="tagrow">
         <span class="tag">8 operadores</span>
-        <span class="tag">64 vozes / 4 partes</span>
-        <span class="tag">ALSA audio + MIDI</span>
-        <span class="tag">Dear ImGui + SDL2</span>
-        <span class="tag">Linux</span>
+        <span class="tag">64 vozes</span>
+        <span class="tag">4 partes</span>
+        <span class="tag">39 efeitos</span>
+        <span class="tag">MIDI e MPE</span>
       </div>
     </header>
 
     <section id="intro">
-      <h2><span class="num">01</span>O que é o Mare Tranquillitatis</h2>
-      <p class="lede">Um motor de síntese FM inspirado no Yamaha DX7, mas deliberadamente estendido.</p>
-      <p>Cada voz tem <strong>8 operadores</strong> (o DX7 original tinha 6) ligados numa matriz de roteamento livre — não os 32 algoritmos fixos do hardware original, mas conexões que você desenha (ou monta a partir de um preset). Cada operador pode usar uma entre 12 formas de onda, ter seu próprio filtro/distorção, e o motor inteiro toca 64 vozes ao mesmo tempo, divididas em até 4 "partes" com timbres independentes — como ter 4 DX7 tocando juntos, cada um num canal MIDI.</p>
-      <p>O aplicativo standalone que este manual descreve é a parte "tocável": ele abre um dispositivo de áudio de verdade, aceita um teclado MIDI ou o teclado do seu computador, e mostra uma interface gráfica leve o bastante pra rodar sem placa de vídeo dedicada.</p>
+      <h2><span class="num">01</span>O que é</h2>
+      <p class="lede">Um motor FM inspirado no Yamaha DX7, mas bem mais livre.</p>
+      <p>Cada voz tem <strong>8 operadores</strong> ligados como você quiser: use um dos 32 algoritmos prontos ou desenhe o seu arrastando conexões. Cada operador pode tocar 14 formas de onda, incluindo aditiva de 64 parciais e wavetable, e tem o próprio efeito, como filtro, wavefolder ou waveshaper.</p>
+      <p>São até <strong>64 vozes</strong> divididas em <strong>4 partes</strong> independentes, como ter 4 sintetizadores juntos, cada um no seu canal MIDI. A soma das partes passa por uma <strong>pedaleira</strong> de 2 cadeias com 4 pedais cada.</p>
+      <p>O programa é distribuído sob a GNU GPL v3. Origem e licença de cada componente estão em <code>THIRD_PARTY_NOTICES.md</code>.</p>
     </section>
 
     <section id="instalacao">
       <h2><span class="num">02</span>Instalação</h2>
-      <p class="lede">Duas dependências de sistema, depois um build com CMake.</p>
-
-      <h3>Dependências</h3>
-      <div class="tablewrap">
-        <table>
-          <tr><th>Pacote</th><th>Arch / EndeavourOS</th><th>Debian / Ubuntu</th></tr>
-          <tr><td>SDL2</td><td><code>sdl2-compat</code></td><td><code>libsdl2-dev</code></td></tr>
-          <tr><td>ALSA</td><td><code>alsa-lib</code></td><td><code>libasound2-dev</code></td></tr>
-          <tr><td>Toolchain</td><td><code>cmake gcc</code></td><td><code>cmake g++</code></td></tr>
-        </table>
-      </div>
-      <p>Precisa de um compilador com suporte a C++20 (testado com g++ 16) e CMake 3.16+. O Dear ImGui já vem incluído no repositório — nada pra baixar à parte.</p>
-
-      <h3>Build</h3>
+      <p class="lede">Instale as dependências e compile com CMake.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Pacote</th><th>Arch / EndeavourOS</th><th>Debian / Ubuntu</th></tr>
+        <tr><td>SDL2</td><td class="mono">sdl2-compat</td><td class="mono">libsdl2-dev</td></tr>
+        <tr><td>ALSA</td><td class="mono">alsa-lib</td><td class="mono">libasound2-dev</td></tr>
+        <tr><td>Compilador</td><td class="mono">cmake gcc</td><td class="mono">cmake g++</td></tr>
+      </table></div>
+      <p>É preciso um compilador com C++20 e CMake 3.16 ou mais novo. O processador precisa ser x86-64. A interface (Dear ImGui) e os efeitos já vêm no repositório.</p>
+      <p>Na pasta do repositório:</p>
       <pre><code>cmake -S dx7fm -B dx7fm/build -DCMAKE_BUILD_TYPE=Release
-cmake --build dx7fm/build -j$(nproc)</code></pre>
-      <p>Isso gera dois executáveis em <code>dx7fm/build/</code>: <code>demo</code> (roda a suíte de testes do motor) e <code>mare_tranquillitatis</code> (o aplicativo).</p>
-
+cmake --build dx7fm/build -j$(nproc)
+cd dx7fm
+./build/mare_tranquillitatis</code></pre>
       <div class="callout">
-        <strong>Sem SDL2/ALSA instalados?</strong>
-        <p>O CMake ainda builda o motor e os testes normalmente — só avisa e pula o <code>mare_tranquillitatis</code>. Você pode desenvolver/testar o motor sem instalar nada de áudio.</p>
+        <strong>Abra sempre da mesma pasta</strong>
+        <p>Os seus patches e presets ficam em pastas relativas a onde o programa foi aberto (<a href="#arquivos">veja a lista</a>). Se abrir de outro lugar, eles não aparecem nas listas.</p>
       </div>
     </section>
 
-    <section id="primeira-execucao">
-      <h2><span class="num">03</span>Primeira execução</h2>
-      <pre><code>./dx7fm/build/mare_tranquillitatis</code></pre>
-      <p>Uma janela abre com um cabeçalho no topo:</p>
-      <div class="panel">
-        <div class="panel-label">Cabeçalho</div>
-        <table>
-          <tr><td class="mono" style="width:1%;white-space:nowrap">Audio</td><td>ponto verde/vermelho + taxa de amostra, tamanho do buffer, formato (float32 ou s16) e contador de xruns (falhas de buffer)</td></tr>
-          <tr><td class="mono">MIDI</td><td>ponto verde se a porta ALSA sequencer abriu — se não, o app continua funcionando só com o teclado do PC</td></tr>
-          <tr><td class="mono">Teclado do PC</td><td>oitava base atual e o <strong>canal MIDI</strong> (1–16, padrão 1) em que o teclado do computador toca</td></tr>
-          <tr><td class="mono">Vozes ativas</td><td>quantas das 64 vozes do pool estão soando</td></tr>
-          <tr><td class="mono">L / R</td><td>medidores de pico em dB (verde até −12 dB, amarelo até −3 dB, vermelho acima)</td></tr>
-          <tr><td class="mono">Volume</td><td>knob do volume master, de −60 dB (mudo) a +6 dB, aplicado depois do rack de efeitos; o limitador de saída continua protegendo contra clipping</td></tr>
-        </table>
-      </div>
-      <p>Logo abaixo do cabeçalho fica a faixa <strong>Osciloscópio / Espectrograma</strong> (clique no título pra recolher), que mostra a saída de áudio final:</p>
-      <ul>
-        <li><strong>Osciloscópio</strong> — a forma de onda. Com <strong>Disparo</strong> ligado a onda fica parada na tela (alinhada na subida do zero); <strong>Ganho auto</strong> amplia sinais baixos (o fator aparece no canto, ex. <em>x4.0</em>); o combo escolhe a janela de tempo (5 a 50 ms).</li>
-        <li><strong>Espectrograma</strong> — as frequências ao longo do tempo (últimos ~3,4 s, mais recente à direita), de 20 Hz a 20 kHz em escala logarítmica; cores mais claras = mais forte. Passe o mouse pra ver a frequência, a nota mais próxima e o nível em dB naquele ponto. O combo ajusta a faixa dinâmica (60/90/120 dB).</li>
-      </ul>
-      <p>Abaixo disso, abas: <strong>Parte A</strong> a <strong>Parte D</strong> (os 4 timbres independentes) e <strong>Efeitos</strong> (a pedaleira: duas cadeias de efeitos aplicadas na mixagem final).</p>
+    <section id="inicio">
+      <h2><span class="num">03</span>Primeiros minutos</h2>
+      <p class="lede">Do programa aberto ao primeiro som, sem ler o resto.</p>
+      <ol class="steps">
+        <li><strong>Toque uma nota</strong>Pressione <span class="kbd">A</span> no teclado do computador. Deve soar um dó. As teclas de <span class="kbd">A</span> a <span class="kbd">;</span> são um piano; <span class="kbd">Z</span> e <span class="kbd">X</span> mudam a oitava.</li>
+        <li><strong>Carregue um som pronto</strong>No card <strong>Patch</strong>, clique em <strong>Fábrica</strong> e depois em qualquer patch da lista. Dá para ir trocando enquanto toca.</li>
+        <li><strong>Acrescente efeitos</strong>Abra a aba <strong>Efeitos</strong> e escolha um preset no menu do topo, como <em>Ambient shimmer</em> ou <em>Lead de estadio</em>.</li>
+        <li><strong>Ligue o seu teclado MIDI</strong>Se tiver um, escolha-o no menu <strong>MIDI</strong>, no topo da janela.</li>
+        <li><strong>Mude algo</strong>Mexa num knob. Se não gostar, <span class="kbd">Ctrl+Z</span> desfaz.</li>
+      </ol>
+      <figure class="shot"><a href="img/visao-geral.png" title="Abrir em tamanho real"><img src="img/visao-geral.png" alt="Janela do programa com a tabela de operadores, os envelopes, o card Patch e o card Parte"></a><figcaption>A aba de uma parte, com o patch de fábrica Piano Eletrico FM.</figcaption></figure>
     </section>
 
     <section id="tocando">
-      <h2><span class="num">04</span>Tocando notas</h2>
-      <p class="lede">Duas formas de tocar, simultâneas: um controlador MIDI de verdade, ou o teclado do computador.</p>
-
-      <h3>MIDI</h3>
-      <p>O app cria uma porta ALSA sequencer de entrada chamada <span class="kbd">Mare Tranquillitatis:input</span>. Conecte seu controlador com:</p>
-      <p>O jeito mais simples é o menu <strong>MIDI</strong> no topo da janela: escolha o seu controlador, ou <strong>Todos os dispositivos</strong>. A escolha fica salva, e o dispositivo volta sozinho se for desconectado e reconectado; enquanto estiver fora, aparece <em>(desconectado)</em> e a luz fica laranja. Com um dispositivo escolhido, o synth só ouve esse dispositivo. A luz ao lado acende quando chega MIDI (o clock não conta). Em <strong>Nenhum (conexão externa)</strong>, o padrão, o app não conecta nada, e você pode ligar a porta por fora:</p>
-      <pre><code>aconnect -l                 # lista as portas disponíveis
-aconnect '&lt;seu controlador&gt;' 'Mare Tranquillitatis'</code></pre>
-      <p>Por padrão <strong>só a Parte A vem habilitada</strong>. B, C e D começam desligadas: marque <strong>Habilitada</strong> na aba delas pra empilhar camadas (layer) ou, com faixas de teclas diferentes, dividir o teclado (split).</p>
-      <p>Depois de conectado, cada parte habilitada recebe as notas de acordo com o <strong>canal MIDI</strong> configurado nela (0 = omni, recebe de qualquer canal; 1–16 = só daquele canal). CC1 (mod wheel), CC64 (sustain), CC66 (sostenuto), CC120/CC123 (all sound/notes off), CC121 (reset controllers), pitch bend, aftertouch de canal e aftertouch polifônico também são traduzidos automaticamente.</p>
-
+      <h2><span class="num">04</span>Tocando</h2>
+      <p class="lede">Um controlador MIDI e o teclado do computador funcionam ao mesmo tempo.</p>
+      <h3>Escolher o dispositivo MIDI</h3>
+      <figure class="shot"><a href="img/menu-midi.png" title="Abrir em tamanho real"><img src="img/menu-midi.png" alt="Menu MIDI aberto no topo da janela, com as opções Nenhum, Todos os dispositivos e a lista de dispositivos"></a></figure>
+      <p>Use o menu <strong>MIDI</strong> no topo da janela:</p>
+      <ul>
+        <li><strong>Nenhum (conexão externa):</strong> é o padrão. O programa não conecta nada; você liga a porta por fora, como no exemplo abaixo.</li>
+        <li><strong>Todos os dispositivos:</strong> ouve tudo o que estiver plugado, inclusive o que entrar depois.</li>
+        <li><strong>Um dispositivo:</strong> ouve só esse. A escolha fica salva. Se ele for desplugado, o menu mostra <em>(desconectado)</em>, a luz fica laranja, e ele volta sozinho quando for reconectado.</li>
+      </ul>
+      <p>A luz ao lado do menu acende quando chega MIDI (o clock não conta). Para conectar por fora:</p>
+      <pre><code>aconnect -l
+aconnect 'Seu controlador' 'Mare Tranquillitatis'</code></pre>
+      <h3>O que o MIDI controla</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Mensagem</th><th>Efeito</th></tr>
+        <tr><td>Notas, velocity</td><td>Tocam nas partes habilitadas daquele canal, ou em omni</td></tr>
+        <tr><td>Pitch bend</td><td>Afina a parte, na faixa de Bend range</td></tr>
+        <tr><td>CC1</td><td>Mod wheel (fonte da matriz)</td></tr>
+        <tr><td>CC2, CC4, CC11</td><td>Sopro, Pé e Expressão (fontes da matriz)</td></tr>
+        <tr><td>CC64, CC66</td><td>Sustain e sostenuto; o CC64 também é fonte da matriz</td></tr>
+        <tr><td>CC74</td><td>Slide por nota, com MPE ligado</td></tr>
+        <tr><td>CC120, CC123, CC121</td><td>Calar o som, soltar as notas, zerar os controladores</td></tr>
+        <tr><td>Aftertouch de canal e polifônico</td><td>Fontes ChannelAT e PolyAT da matriz</td></tr>
+        <tr><td>Clock, Start, Continue, Stop</td><td>Tempo e início do compasso (<a href="#bpm">BPM</a>)</td></tr>
+      </table></div>
+      <p>Aftertouch e os CCs só fazem efeito se houver uma rota para eles na <a href="#matriz">matriz de modulação</a>. Um CC aprendido no <a href="#macros">MIDI learn</a> tem prioridade e deixa de ter a função da tabela.</p>
+      <h3>MPE</h3>
+      <p>Controladores MPE (Seaboard, LinnStrument, Osmose, Push 3…) mandam cada nota num canal próprio, com bend, pressão e slide só dela. Ligue em <strong>Configurações → MPE (zona inferior)</strong>, ou deixe o controlador ligar sozinho, como a maioria faz ao conectar. O canal 1 é o mestre, e as notas chegam nos canais 2 a 16 e tocam nas partes do canal 1 ou em omni.</p>
+      <ul>
+        <li><strong>Bend por nota:</strong> vai direto na afinação da nota; a faixa padrão é de 48 semitons.</li>
+        <li><strong>Pressão:</strong> chega como fonte <em>PolyAT</em>.</li>
+        <li><strong>Slide (CC74):</strong> chega como fonte <em>Slide (MPE)</em>.</li>
+      </ul>
+      <p>Só a zona inferior é suportada. O patch de fábrica <em>Expressivo MPE</em> já vem com as rotas prontas.</p>
       <h3>Teclado do computador</h3>
-      <p>Sem controlador MIDI? O teclado do PC vira um piano — mapeamento por <em>posição física</em> da tecla, então funciona igual em qualquer layout de idioma.</p>
-      <div class="piano-wrap">
+      <p>O mapeamento segue a posição física das teclas, então funciona em qualquer layout.</p>
+<div class="piano-wrap">
         <div class="piano">
           <div class="pkey white"><span class="k">A</span><span class="n">C</span></div>
           <div class="pkey black"><span class="k">W</span><span class="n">C♯</span></div>
@@ -543,348 +568,659 @@ aconnect '&lt;seu controlador&gt;' 'Mare Tranquillitatis'</code></pre>
           <div class="pkey white"><span class="k">;</span><span class="n">E</span></div>
         </div>
       </div>
-      <p><span class="kbd">Z</span> desce uma oitava, <span class="kbd">X</span> sobe uma oitava (a barra de status mostra a nota base atual). O teclado do PC funciona <strong>igual a um controlador MIDI</strong>: toca todas as partes habilitadas que estão em omni (canal 0) ou no canal escolhido na barra de status (padrão 1) — não importa qual aba está aberta.</p>
-      <div class="callout">
-        <strong>Dica</strong>
-        <p>O teclado do PC não envia velocity real — toda nota sai com velocity fixa (100). Pra dinâmica de verdade, use um controlador MIDI.</p>
-      </div>
+      <p><span class="kbd">Z</span> desce e <span class="kbd">X</span> sobe uma oitava. O teclado toca as partes habilitadas em omni ou no canal escolhido no topo da janela, qualquer que seja a aba aberta. Toda nota sai com velocity 100 e sem aftertouch; para dinâmica, use um controlador.</p>
     </section>
 
     <section id="interface">
-      <h2><span class="num">05</span>Anatomia da interface</h2>
-      <p class="lede">Cada aba de parte (A–D) é dividida em cards, em duas colunas: à esquerda o som dos operadores (tabela, envelopes, detalhe do operador, pitch EG, matriz), à direita patch, configuração da parte, algoritmo, LFOs e matriz de modulação. Em janelas estreitas (menos de ~1000 px) vira uma coluna só.</p>
-
-      <div class="panel">
-        <div class="panel-label">Knobs</div>
-        <p>Os parâmetros contínuos são knobs: <strong>arraste pra cima/baixo</strong> (com <span class="kbd">Shift</span> o ajuste fica fino), use a <strong>roda do mouse</strong> por cima deles, <strong>duplo clique</strong> volta ao valor padrão e o <strong>botão direito</strong> abre um campo pra digitar o valor exato. Cada operador tem uma cor fixa (Op1 verde-água, Op2 laranja, Op3 azul, Op4 rosa, Op5 verde, Op6 roxo, Op7 vermelho, Op8 amarelo), usada na tabela, no gráfico de envelopes, nos knobs do operador selecionado e no diagrama do algoritmo.</p>
-      </div>
-
-      <div class="panel">
-        <div class="panel-label">Envelopes de amplitude</div>
-        <p>Um gráfico com o <strong>Amp EG dos 8 operadores sobrepostos</strong>, cada um na sua cor. À esquerda, do início da nota até o sustain; depois da linha tracejada <em>note off</em>, o release. O eixo de tempo é comprimido (10 ms, 100 ms, 1 s, 10 s), pra ataques de milissegundos e caudas de vários segundos caberem juntos.</p>
-        <ul>
-          <li>A curva do operador selecionado fica em destaque, com área preenchida e <strong>4 pontos arrastáveis</strong>: fim do ataque, do decai 1, do decai 2 (início do sustain) e do release. <strong>Vertical</strong> muda o level do estágio; <strong>horizontal</strong>, o tempo (o app converte em rate). Segure <span class="kbd">Shift</span> pra mudar só o level.</li>
-          <li>Clique perto de outra curva pra selecionar aquele operador.</li>
-          <li>Na legenda, clique num chip <strong>OpN</strong> pra selecionar, botão direito pra esconder/mostrar a curva; <strong>Todos</strong> e <strong>Só usados</strong> (só os operadores que chegam na saída).</li>
-          <li>Abaixo do gráfico, os 8 knobs (rates e levels) do Amp EG do operador selecionado, pra ajuste fino.</li>
-        </ul>
-      </div>
-
-      <div class="panel">
-        <div class="panel-label">Configuração da parte</div>
-        <p>Habilitada, canal MIDI, modo de voz (<strong>Poly</strong> / <strong>Mono</strong> / <strong>Unison</strong>), transpose, nível, pan, faixa de pitch bend, faixa de teclas, vozes reservadas do pool de 64. Em Mono/Unison aparecem também os controles de <em>glide</em> (portamento) e, em Unison, quantidade de vozes e espalhamento/detune entre elas.</p>
-      </div>
-
-      <div class="panel">
-        <div class="panel-label">Patch</div>
-        <p>No topo de cada aba: nome do patch, <strong>Salvar</strong>, <strong>Init</strong>, indicador de alterações não salvas e a lista de patches da pasta <code>patches/</code> (com filtro, <strong>Carregar</strong> e <strong>Excluir</strong>) — ver <a href="#salvando">Salvando e carregando</a>. O botão <strong>Pânico</strong> (all notes off da parte) fica logo abaixo, junto dos controles da parte.</p>
-      </div>
-
-      <div class="panel">
-        <div class="panel-label">Operadores</div>
-        <p>Em cada linha, <strong>On/Off</strong> liga e desliga o operador: desligado, ele não soa nem modula, aparece apagado no diagrama e não gasta CPU; os ajustes ficam guardados, e o estado vai no patch e entra no desfazer. <strong>S</strong> (solo) deixa ouvir só aquele operador, com os moduladores dele, mesmo que seja um modulador; o solo só vale na edição e não é salvo.</p>
-        <p>Tabela com as 8 linhas (um operador por linha, número na cor do operador): forma de onda, ratio ou frequência fixa, nível de saída, feedback, tipo de efeito e seu primeiro parâmetro. Clique numa linha (ou numa curva do gráfico, ou numa caixa do diagrama) pra selecionar o operador: o card <strong>Operador N</strong> mostra em knobs tudo que não cabe na tabela — afinação fina/detune, phase distortion, profundidade do pitch envelope, sensibilidades (velocity, rate scaling, LFO), segundo parâmetro do efeito, key scaling — e o FX EG do operador.</p>
-      </div>
-
-      <div class="panel blue">
-        <div class="panel-label">Algoritmo</div>
-        <p>Um combo com 32 topologias prontas (ver seção 6) — escolher uma já troca o algoritmo (Ctrl+Z desfaz) —, e logo abaixo um <strong>diagrama ao vivo</strong> da matriz de roteamento atual: cada caixa na cor do operador (preenchida = portadora, vai pro som final), setas na cor de quem modula, círculo laranja = feedback. Clique numa caixa pra selecionar o operador. O diagrama reflete qualquer edição, seja de um preset ou da matriz avançada.</p>
-      </div>
-
-      <div class="panel">
-        <div class="panel-label">Matriz de algoritmo (avançado)</div>
-        <p>Recolhida por padrão (clique no título pra abrir). A representação numérica da mesma matriz do diagrama: uma célula por par de operadores (quanto <code>j</code> modula <code>i</code>, mais uma caixa pra ligar ring modulation), e 8 knobs de output mix — quanto de cada operador vai pro barramento de saída.</p>
-      </div>
-
-      <div class="panel">
-        <div class="panel-label">Pitch EG, LFOs, Envelopes de modulação, Matriz de modulação</div>
-        <p>O envelope de pitch da voz inteira (knobs em laranja); <strong>4 LFOs</strong> (forma de onda — inclusive <em>SmoothRandom</em>, aleatório suave —, key sync, velocidade, delay, profundidade de pitch/amplitude). Com <strong>Sync</strong> ligado, a velocidade vira uma divisão do <strong>BPM</strong> (knob no topo da janela, vale pra todas as partes): de 4/1 a 1/32, com pontuadas (“.”) e tercinas (“T”). O card <strong>Envelopes de modulação</strong> tem 3 envelopes (Env 1–3, no estilo dos envelopes do DX: 4 rates e 4 levels) que só servem de fonte na matriz — ex.: Env 1 → OperatorFx1 abre o filtro de um operador no ataque e fecha depois. A <strong>matriz</strong> tem 16 rotas (fonte → destino → operador ou LFO → profundidade); ela mostra só as rotas em uso e uma vazia, e “Mostrar as 16” mostra todas. Destinos: nível, FX1 e FX2 do efeito, feedback, afinação e morph de um operador; afinação, pan e volume da voz inteira; velocidade e profundidade de um LFO (um LFO ou envelope pode acelerar ou abrir outro LFO); e <strong>AlgoMorph</strong>, a posição do morph entre algoritmos. Destinos pensados pra FM e envelopes: <strong>OperatorFmIn</strong> e <strong>VoiceFmIn</strong> (quanta FM o operador, ou a voz inteira, recebe: o brilho do som; −1 tira a FM), <strong>OperatorPhaseDist</strong> (phase distortion), <strong>OperatorEgSpeed</strong> e <strong>ModEnvSpeed</strong> (velocidade dos envelopes, até 8× mais rápidos ou mais lentos), <strong>VoiceFx1</strong> e <strong>VoiceFx2</strong> (o efeito de todos os operadores de uma vez) e <strong>PegDepth</strong> (profundidade do envelope de pitch). Cada LFO tem <strong>Degraus</strong>: 0 = suave; 2 a 32 = quantizado numa escada com esse número de níveis. Cada envelope de modulação tem <strong>Loop</strong> (enquanto a nota está presa, repete L3 → L1 → L2 → L3; o note off sai do loop e faz o release) e <strong>Sync</strong> (o envelope acelera ou desacelera pra esse ciclo durar uma divisão do BPM). Além de LFOs, mod wheel, aftertouch e pitch bend, as fontes incluem <strong>Nota</strong> (0 no C4, +1 cinco oitavas acima, −1 cinco abaixo) e <strong>Velocity</strong> (0 a 1), e também <strong>Sopro</strong> (CC2), <strong>Pé</strong> (CC4), <strong>Expressão</strong> (CC11) e <strong>Pedal de sustain</strong> (0 ou 1), <strong>Aleatório/nota</strong> (sorteia −1 a +1 em cada nota), <strong>Alternado</strong> (+1 e −1 a cada nota), <strong>Tempo da nota</strong> (sobe de 0 a 1 em 5 s), <strong>Env amplitude</strong>, <strong>Env pitch</strong> e <strong>Constante</strong> (sempre 1, um ajuste fixo) — ex.: Velocity → OperatorFx1 abre o filtro quando você toca mais forte; Nota → OperatorLevel com profundidade negativa amansa um modulador nos agudos.</p>
-      </div>
-
-      <h3>Aba Efeitos (pedaleira)</h3>
-      <p>Funciona como uma pedaleira multiefeitos: <strong>duas cadeias de 4 pedais</strong>, e qualquer efeito pode ir em qualquer pedal (inclusive o mesmo efeito duas vezes). Os efeitos atuam na mixagem das partes, não por operador.</p>
+      <h2><span class="num">05</span>A interface</h2>
+      <p class="lede">Um topo fixo, um visualizador e 5 abas.</p>
+      <h3>Topo da janela</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Item</th><th>O que mostra ou faz</th></tr>
+        <tr><td>Configurações</td><td>Oversampling, clock, MPE e MIDI learn (<a href="#configuracoes">detalhes</a>)</td></tr>
+        <tr><td>Audio</td><td>Estado, taxa de amostragem, buffer, formato e xruns (falhas de áudio)</td></tr>
+        <tr><td>MIDI</td><td>Dispositivo de entrada e luz de atividade</td></tr>
+        <tr><td>Teclado do PC</td><td>Nota base e canal</td></tr>
+        <tr><td>Vozes</td><td>Quantas das 64 vozes estão soando</td></tr>
+        <tr><td>L / R</td><td>Medidores de pico: verde até −12 dB, amarelo até −3 dB, vermelho acima</td></tr>
+        <tr><td>BPM</td><td>Tempo de tudo o que tem Sync (<a href="#bpm">detalhes</a>)</td></tr>
+        <tr><td>Volume</td><td>Volume geral, de −60 a +6 dB (<a href="#volumes">onde ele age</a>)</td></tr>
+      </table></div>
+      <h3>Osciloscópio e espectrograma</h3>
+      <p>Mostram a saída final. Clique no título da faixa para recolher e ganhar espaço.</p>
       <ul>
-        <li><strong>Pedais</strong> — o menu no topo do pedal escolhe o efeito, agrupado por categoria (Dinâmica, Drive, Fita, Filtro, Modulação, Pitch, Delay, Reverb, Granular); passe o mouse num efeito pra ver em que código aberto ele se baseia. Os knobs mudam conforme o efeito; <strong>Mix</strong> é o seco/molhado dentro do pedal. O <strong>footswitch</strong> (com LED) liga e desliga: desligado, o sinal passa direto e os knobs ficam esmaecidos, mas continuam editáveis. No compressor, uma barra mostra a redução de ganho.</li>
-        <li><strong>Reordenar</strong> — arraste a alça <strong>::</strong> de um pedal pra outro pra trocar os dois de lugar, inclusive entre cadeias. Segure <strong>Ctrl</strong> ao soltar pra copiar por cima em vez de trocar.</li>
-        <li><strong>Envios por parte</strong> (à esquerda) — cada parte (A–D) tem três knobs: <strong>Seco</strong> (direto pra saída), <strong>→ 1</strong> e <strong>→ 2</strong> (quanto vai pra cada cadeia). Assim dá pra ter, por exemplo, o lead com drive e delay na cadeia 1, o pad só no reverb da cadeia 2 e o baixo seco. Padrão: tudo entra na cadeia 1.</li>
-        <li><strong>Algoritmo de cada cadeia</strong> — como os algoritmos do FM, mas de efeitos: no cabeçalho de cada cadeia, o menu escolhe como os 4 pedais dela se ligam, e o diagrama ao lado mostra o caminho com os nomes dos efeitos (passe o mouse num item da lista pra ver o diagrama dele; as setas trocam pro anterior/próximo). São 10: <strong>Série</strong> (1 → 2 → 3 → 4), <strong>Dois pares</strong> ((1 → 2) | (3 → 4)), <strong>Divide e junta</strong> (1 → (2 | 3) → 4), <strong>Pré + 3 ramos</strong> (1 → (2 | 3 | 4)), <strong>3 ramos + pós</strong> ((1 | 2 | 3) → 4), <strong>Par + 2 ramos</strong> (1 → 2 → (3 | 4)), <strong>2 ramos + par</strong> ((1 | 2) → 3 → 4), <strong>Três e um</strong> ((1 → 2 → 3) | 4), <strong>Ramos desiguais</strong> ((1 | 2 → 3) → 4) e <strong>Quatro paralelos</strong>. Onde ramos se juntam, o sinal é a média deles (não fica mais alto por ter mais ramos); um pedal vazio ou desligado num ramo deixa esse ramo seco. Cada cadeia tem o seu algoritmo. Os presets da categoria <em>Algoritmos</em> mostram alguns.</li>
-        <li><strong>Ligação entre as cadeias</strong> (card Cadeias) — <strong>Paralelo</strong> (lado a lado), <strong>Série</strong> (a cadeia 1 entra na 2 e só a 2 sai) ou <strong>Série + direto</strong> (a 1 sai e também alimenta a 2 — ex.: drive na 1 e um reverb 100% molhado na 2).</li>
-        <li><strong>Cadeias</strong> — nível, pan e medidor na saída de cada cadeia.</li>
-        <li><strong>Knobs que recriam o reverb</strong> (tamanho e pre-delay de Hall, Room, Plate…) só valem quando você solta o knob, pra não picotar a cauda enquanto arrasta.</li>
+        <li><strong>Osciloscópio:</strong> <em>Disparo</em> mantém a onda parada; <em>Ganho auto</em> amplia sinais baixos; o menu escolhe a janela de 5 a 50 ms.</li>
+        <li><strong>Espectrograma:</strong> as frequências dos últimos 3,4 s, com a mais recente à direita. Passe o mouse para ver frequência, nota e nível. O menu ajusta a faixa dinâmica.</li>
       </ul>
-      <p><strong>Reverbs</strong> — 12 "máquinas", no espírito das pedaleiras de reverb: <strong>Hall</strong>, <strong>Room</strong>, <strong>Plate</strong> e <strong>Reflections</strong> (primeiras reflexões de 8 salas; base: Dragonfly Reverb), <strong>Cloud</strong> (cauda longa e modulada; Cloud Seed), <strong>Spring</strong> (mola; Surge), <strong>Swell</strong> (o volume sobe sozinho a cada nota), <strong>Bloom</strong> (a cauda "floresce" depois do ataque), <strong>Chorale</strong> (a cauda canta uma vogal), <strong>Shimmer</strong> (a cauda sobe uma oitava, ou o intervalo escolhido, a cada volta), <strong>Magneto</strong> (eco de várias cabeças de fita difuso) e <strong>Nonlinear</strong> (Reverse, Swoosh, Ramp e Gate). O reverb antigo (Room/Hall/Plate com freeze) continua como <em>Reverb clássico</em>.</p>
-      <p><strong>Micro (granular)</strong> — grava continuamente os últimos segundos e toca pedaços: <em>Mosaic</em>, <em>Seq</em> e <em>Glide</em> (micro-loops em camadas, em sequência no tempo, deslizando de altura), <em>Haze</em>, <em>Tunnel</em> e <em>Strum</em> (nuvem de grãos, drone que segue a entrada, grãos disparados por ataques), <em>Blocks</em>, <em>Interrupt</em> e <em>Arp</em> (cortes, interrupções, grãos em arpejo) e <em>Pattern</em>/<em>Warp</em> (delays múltiplos em padrão rítmico ou entortando a altura). <strong>Hold</strong> congela o que foi gravado.</p>
-      <p><strong>Fita</strong> — <em>Simulador de fita</em> (CHOW Tape: saturação magnética, bias, velocidade, perdas da cabeça, wow, flutter, fita amassada e degradação) e <em>Fita leve</em> (Airwindows ToTape, mais barato de CPU). Delays e efeitos com <strong>Sync</strong> seguem o BPM do topo (1/4, 1/8 pontuada, tercinas…).</p>
-      <p><strong>Presets</strong> (barra no topo da aba) — o menu traz os 28 presets de fábrica (básicos, delays e fita, reverbs, granular, roteamento por parte e algoritmos) e os seus, salvos em <code>fxpresets/</code> (um JSON por preset, como os patches). <strong>Salvar</strong> grava o rack inteiro com o nome ao lado; <strong>Init</strong> esvazia o rack; <strong>Desfazer/Refazer</strong> (Ctrl+Z / Ctrl+Y) valem pra tudo na aba. O estado do rack volta sozinho quando o app reabre (fica em <code>~/.config/mare-tranquillitatis/fxrack.json</code>). Os efeitos não vão no patch: os patches guardam o som das partes.</p>
-      <p><strong>Pedal de expressão</strong> — o botão <strong>EXP</strong> de um pedal escolhe o parâmetro que o pedal controla (ex.: a posição do wah, a velocidade do rotary, o Hold do Micro). No card <strong>Pedal de expressão</strong> ficam a faixa (<em>Calcanhar</em> → <em>Ponta</em>), o botão de MIDI learn do CC do pedal e um controle pra testar pela tela.</p>
-      <p>Depois dos efeitos vem o <strong>Volume geral</strong> e o limitador de saída.</p>
-      <div class="callout">
-        <strong>Licença</strong>
-        <p>Vários efeitos vêm de projetos GPL (MVerb, ZamComp, CHOW Tape, Dragonfly/freeverb3, Surge), então o Mare Tranquillitatis é distribuído sob a <strong>GNU GPL v3</strong>. Origem e licença de cada componente em <code>THIRD_PARTY_NOTICES.md</code>.</p>
-      </div>
+      <h3>Abas</h3>
+      <p><strong>Parte A</strong> a <strong>Parte D</strong> têm o som de cada parte, em cards. <strong>Efeitos</strong> tem a <a href="#rack">pedaleira</a>. Em janelas estreitas, os cards ficam em uma coluna só.</p>
+      <h3>Como usar os knobs</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Gesto</th><th>Ação</th></tr>
+        <tr><td>Arrastar para cima ou para baixo</td><td>Muda o valor; com <span class="kbd">Shift</span>, ajuste fino</td></tr>
+        <tr><td>Roda do mouse</td><td>Muda o valor</td></tr>
+        <tr><td>Duplo clique</td><td>Volta ao padrão</td></tr>
+        <tr><td>Botão direito</td><td>Abre um campo para digitar</td></tr>
+      </table></div>
+      <p>Campos numéricos, como Ratio, se ajustam arrastando; <span class="kbd">Ctrl</span>+clique permite digitar. Cada operador tem cor fixa em toda a interface.</p>
     </section>
 
     <section id="conceitos">
-      <h2><span class="num">06</span>Conceitos de síntese FM</h2>
-      <p class="lede">O mínimo pra entender o que os controles fazem, se você nunca mexeu num synth FM.</p>
-
-      <p>Um <strong>operador</strong> é um oscilador com envelope próprio. Ele pode fazer duas coisas: tocar direto (aí é uma <strong>portadora</strong>, o que você ouve) ou distorcer a fase de outro operador (aí é um <strong>modulador</strong> — é isso que dá os timbres metálicos/percussivos característicos de FM, bem diferente de somar formas de onda). Um operador pode acumular as duas funções.</p>
-
-      <p>O <strong>algoritmo</strong> é só o desenho de quem modula quem. Dois exemplos, dos 32 disponíveis:</p>
-
-      <div class="algo-diagram">
-        <figure>
-          <svg viewBox="0 0 220 150" role="img" aria-label="Diagrama de cadeia única: op8 modula op7 modula op6 e assim por diante até op1, a portadora">
-            <defs>
-              <marker id="arrow1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                <path d="M0,0 L10,5 L0,10 z" fill="var(--text-faint)"></path>
-              </marker>
-            </defs>
-            <line x1="30" y1="130" x2="190" y2="130" stroke="var(--accent-2)" stroke-width="1.5" opacity="0.5"></line>
-            <text x="190" y="145" font-family="IBM Plex Mono" font-size="9" fill="var(--accent-2)" text-anchor="end">saída</text>
-            <g font-family="IBM Plex Mono" font-size="10" text-anchor="middle">
-              <circle cx="30" cy="110" r="16" fill="var(--accent-2)"></circle>
-              <text x="30" y="114" fill="#fff">Op1</text>
-              <line x1="30" y1="110" x2="30" y2="130" stroke="var(--accent-2)" stroke-width="1.5"></line>
-              <circle cx="70" cy="86" r="14" fill="var(--surface-3)" stroke="var(--border)"></circle>
-              <text x="70" y="90" fill="var(--text)">Op2</text>
-              <line x1="62" y1="98" x2="38" y2="118" stroke="var(--text-faint)" stroke-width="1.3" marker-end="url(#arrow1)"></line>
-              <circle cx="106" cy="62" r="14" fill="var(--surface-3)" stroke="var(--border)"></circle>
-              <text x="106" y="66" fill="var(--text)">Op3</text>
-              <line x1="98" y1="72" x2="78" y2="80" stroke="var(--text-faint)" stroke-width="1.3" marker-end="url(#arrow1)"></line>
-              <circle cx="142" cy="42" r="14" fill="var(--surface-3)" stroke="var(--border)"></circle>
-              <text x="142" y="46" fill="var(--text)">…</text>
-              <line x1="134" y1="50" x2="114" y2="56" stroke="var(--text-faint)" stroke-width="1.3" marker-end="url(#arrow1)"></line>
-              <circle cx="178" cy="22" r="14" fill="var(--accent-soft)" stroke="var(--accent)"></circle>
-              <text x="178" y="26" fill="var(--accent)">Op8</text>
-              <circle cx="188" cy="12" r="6" fill="none" stroke="var(--accent)" stroke-width="1.3"></circle>
-              <line x1="170" y1="30" x2="150" y2="36" stroke="var(--text-faint)" stroke-width="1.3" marker-end="url(#arrow1)"></line>
-            </g>
-          </svg>
-          <figcaption>Algoritmo 1 — cadeia única. Sete moduladores empilhados sobre uma portadora: som denso, inarmônico, o "clássico FM agressivo".</figcaption>
-        </figure>
-        <figure>
-          <svg viewBox="0 0 220 150" role="img" aria-label="Diagrama de 8 portadoras em paralelo, todas independentes">
-            <line x1="20" y1="130" x2="200" y2="130" stroke="var(--accent-2)" stroke-width="1.5" opacity="0.5"></line>
-            <text x="200" y="145" font-family="IBM Plex Mono" font-size="9" fill="var(--accent-2)" text-anchor="end">saída</text>
-            <g font-family="IBM Plex Mono" font-size="9" text-anchor="middle">
-              <circle cx="30" cy="95" r="13" fill="var(--accent-2)"></circle><text x="30" y="98" fill="#fff">1</text><line x1="30" y1="108" x2="30" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
-              <circle cx="55" cy="85" r="13" fill="var(--accent-2)"></circle><text x="55" y="88" fill="#fff">2</text><line x1="55" y1="98" x2="55" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
-              <circle cx="80" cy="78" r="13" fill="var(--accent-2)"></circle><text x="80" y="81" fill="#fff">3</text><line x1="80" y1="91" x2="80" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
-              <circle cx="105" cy="72" r="13" fill="var(--accent-2)"></circle><text x="105" y="75" fill="#fff">4</text><line x1="105" y1="85" x2="105" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
-              <circle cx="130" cy="72" r="13" fill="var(--accent-2)"></circle><text x="130" y="75" fill="#fff">5</text><line x1="130" y1="85" x2="130" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
-              <circle cx="155" cy="78" r="13" fill="var(--accent-2)"></circle><text x="155" y="81" fill="#fff">6</text><line x1="155" y1="91" x2="155" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
-              <circle cx="180" cy="85" r="13" fill="var(--accent-2)"></circle><text x="180" y="88" fill="#fff">7</text><line x1="180" y1="98" x2="180" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
-              <circle cx="205" cy="95" r="13" fill="var(--accent-2)"></circle><text x="205" y="98" fill="#fff">8</text><line x1="205" y1="108" x2="200" y2="130" stroke="var(--accent-2)" stroke-width="1.3"></line>
-            </g>
-          </svg>
-          <figcaption>Algoritmo 22 — 8 portadoras em paralelo. Nenhum modula o outro: som aditivo, tipo órgão.</figcaption>
-        </figure>
-      </div>
-
-      <p>O <strong>feedback</strong> é um caso especial: um operador modulando a si mesmo (com o valor da amostra anterior, já que não dá pra usar "o próprio valor de agora"). Em quantidade pequena, dá mais brilho/harmônicos; em quantidade alta, vira ruído caótico. No Mare Tranquillitatis cada operador tem seu próprio feedback (0 a 1) — o DX7 original restringia isso a um único operador por algoritmo.</p>
+      <h2><span class="num">06</span>Conceitos de FM</h2>
+      <p class="lede">O mínimo para entender os controles, se você nunca usou um sintetizador FM.</p>
+      <dl class="terms">
+        <dt>Operador</dt><dd>Um oscilador com envelope próprio.</dd>
+        <dt>Portadora</dt><dd>Operador que vai para a saída: é o que você ouve.</dd>
+        <dt>Modulador</dt><dd>Operador que altera a fase de outro. Você não o ouve diretamente: ouve o timbre que ele cria. Um operador pode ser as duas coisas.</dd>
+        <dt>Algoritmo</dt><dd>O desenho de quem modula quem.</dd>
+        <dt>Ratio</dt><dd>A frequência do operador em relação à nota. Ratios inteiros soam harmônicos; quebrados, como 3,5, soam metálicos, de sino.</dd>
+        <dt>Nível do modulador</dt><dd>Quanto mais alto, mais brilho. Por isso o envelope do modulador desenha o <em>timbre</em> ao longo da nota, e o da portadora, o <em>volume</em>.</dd>
+        <dt>Feedback</dt><dd>Um operador modulando a si mesmo. Pouco dá mais harmônicos; muito vira ruído. Aqui, cada operador tem o seu.</dd>
+      </dl>
+      <h3>Como funciona um envelope</h3>
+      <p>Os envelopes seguem o estilo do DX7: 4 <strong>rates</strong> (velocidades) e 4 <strong>levels</strong> (níveis). Ao tocar a nota, ele vai até <em>Level 1</em> na velocidade <em>Rate 1</em>, depois a <em>Level 2</em> e a <em>Level 3</em>, onde fica enquanto a tecla estiver presa. Ao soltar, vai a <em>Level 4</em> na velocidade <em>Rate 4</em>. <strong>Rate alto é rápido</strong>: 99 é quase instantâneo, e valores perto de 0 levam muitos segundos.</p>
     </section>
 
-    <section id="tutorial">
-      <h2><span class="num">07</span>Tutorial: seu primeiro patch</h2>
-      <p class="lede">Um sino FM simples, do zero, em 6 passos.</p>
+    <section id="tutoriais">
+      <h2><span class="num">07</span>Tutoriais</h2>
+      <p class="lede">Quatro receitas curtas, cada uma mostrando uma parte do programa.</p>
+      <h3>1. Um sino, do zero</h3>
       <ol class="steps">
-        <li><strong>Escolha a parte</strong>Clique na aba <span class="kbd">Parte A</span> e confirme que <strong>Habilitada</strong> está marcado.</li>
-        <li><strong>Aplique um algoritmo de 2 portadoras</strong>No card Algoritmo, escolha algo como <em>"2 cadeias: 4+4"</em> no combo — a troca é imediata. Isso monta duas cadeias de 4 operadores cada, com feedback no topo de cada uma.</li>
-        <li><strong>Toque uma nota e ouça o cru</strong>Pressione <span class="kbd">A</span> no teclado (nota C). Vai soar denso — é o feedback default (0.3) em todo mundo.</li>
-        <li><strong>Ajuste os moduladores</strong>Na tabela de operadores, baixe o <strong>Feedback</strong> dos operadores de topo pra algo como 0.1, e mude o <strong>Ratio</strong> de um dos moduladores pra um valor não-inteiro (tipo 1.41 ou 3.5) — proporções não-inteiras entre portadora e modulador são o que dá o caráter metálico/de sino em FM.</li>
-        <li><strong>Modele o envelope</strong>No gráfico de envelopes, clique na curva do operador portador (a caixa preenchida no diagrama) e arraste os pontos: o do ataque bem pra esquerda (instantâneo) e o do release pra direita (cauda longa) — é o formato clássico de sino. Os knobs logo abaixo do gráfico fazem o mesmo com precisão.</li>
-        <li><strong>Salve</strong>Digite um nome no campo <strong>Nome</strong> da seção Patch (ex.: <code>Sino</code>) e clique <strong>Salvar</strong> — vira <code>patches/Sino.json</code> e aparece na lista.</li>
+        <li><strong>Comece limpo</strong>Na aba <strong>Parte A</strong>, clique em <strong>Init</strong> no card Patch. Toque <span class="kbd">A</span>: é um timbre simples, em que o Op2 modula o Op1.</li>
+        <li><strong>Torne o modulador inarmônico</strong>Na tabela de operadores, na linha do Op2, ajuste <strong>Ratio</strong> para <strong>3,5</strong> e <strong>Nível</strong> para <strong>90</strong>. O som fica metálico.</li>
+        <li><strong>Faça a portadora decair</strong>Clique na linha do Op1. Nos knobs abaixo do gráfico de envelopes, ponha <strong>Rate 2, 3 e 4 em 15</strong> e <strong>Level 2 e 3 em 0</strong>. Agora a nota morre sozinha, em uns 3 segundos.</li>
+        <li><strong>Faça o brilho sumir antes</strong>Clique na linha do Op2 e use <strong>Rate 2, 3 e 4 em 25</strong> e <strong>Level 2 e 3 em 0</strong>. O ataque fica metálico e a cauda, pura. Esse é o som de sino.</li>
+        <li><strong>Salve</strong>Digite <em>Sino</em> no campo <strong>Nome</strong> do card Patch e clique em <strong>Salvar</strong>.</li>
       </ol>
-      <div class="callout">
-        <strong>Por que a edição funciona com a nota ainda soando</strong>
-        <p>Toda mudança nos controles só "vale" depois que a parte é recompilada — o app faz isso automaticamente a cada quadro em que algo mudou, então o efeito é imediato mesmo com uma nota já tocando. Você pode girar os controles enquanto ouve o resultado ao vivo.</p>
-      </div>
+      <h3>2. Desenhe um algoritmo</h3>
+      <ol class="steps">
+        <li><strong>Abra o editor</strong>No card Algoritmo, clique em <strong>Editor grafico</strong>. Com o sino do tutorial 1, aparece o Op2 sobre o Op1.</li>
+        <li><strong>Conecte</strong>Arraste da bolinha de baixo do <strong>Op3</strong> até o <strong>Op1</strong>. O Op3 passa a modular o Op1, e o sino ganha outra camada de brilho.</li>
+        <li><strong>Crie uma portadora</strong>Arraste da bolinha do <strong>Op5</strong> até a barra <strong>SAIDA</strong>. Agora há duas portadoras.</li>
+        <li><strong>Ajuste</strong>Clique no fio do Op3 e mude a quantidade no painel da direita, ou gire a roda do mouse sobre o fio.</li>
+        <li><strong>Salve como preset</strong>Dê um nome e clique em <strong>Salvar</strong>. Ele aparece em <em>Meus algoritmos</em>.</li>
+      </ol>
+      <h3>3. Controle o brilho com um knob</h3>
+      <ol class="steps">
+        <li><strong>Crie a rota</strong>No card <strong>Matriz de modulação</strong>, na primeira linha livre, escolha fonte <strong>Macro1</strong>, destino <strong>VoiceFmIn</strong> e profundidade <strong>+1,00</strong>.</li>
+        <li><strong>Toque e gire</strong>Segure uma nota e gire o knob <strong>Macro 1</strong> no card Macros. A FM de toda a voz vai até o dobro.</li>
+        <li><strong>Ligue ao seu controlador</strong>Clique em <strong>aprender</strong>, embaixo do knob, e mova um knob do seu controlador.</li>
+      </ol>
+      <h3>4. Efeitos diferentes para cada parte</h3>
+      <ol class="steps">
+        <li><strong>Prepare duas partes</strong>Na aba <strong>Parte B</strong>, marque <strong>Habilitada</strong> e carregue um patch de pad. Para separar os timbres, use os Key range (<a href="#partes">split</a>).</li>
+        <li><strong>Crie as cadeias</strong>Na aba <strong>Efeitos</strong>, ponha um <em>Overdrive</em> e um <em>Delay digital</em> na cadeia 1 e um <em>Hall</em> na cadeia 2.</li>
+        <li><strong>Mande cada parte para a sua</strong>Em <strong>Envios por parte</strong>, deixe A em <em>→ 1</em> = 1 e <em>→ 2</em> = 0, e B em <em>→ 1</em> = 0 e <em>→ 2</em> = 1. O preset <em>Partes separadas</em> já vem assim.</li>
+      </ol>
     </section>
 
-    <section id="salvando">
-      <h2><span class="num">08</span>Salvando e carregando</h2>
-      <p>Os patches ficam na pasta <code>patches/</code> (relativa a onde o app foi aberto; o caminho completo aparece ao lado da lista), um arquivo JSON legível por patch — dá pra abrir num editor de texto, versionar num repositório git ou compartilhar. A lista é compartilhada pelas 4 partes: qualquer patch pode ser carregado em qualquer parte.</p>
-      <ul>
-        <li><strong>Salvar</strong> — grava o som da parte em <code>patches/&lt;nome&gt;.json</code>, usando o campo <strong>Nome</strong>. Salvar de novo sobre o próprio arquivo é direto; se já existir <em>outro</em> patch com esse nome, o app pergunta antes de substituir.</li>
-        <li><strong>Carregar</strong> — selecione na lista e clique <strong>Carregar</strong>, ou dê duplo clique. O filtro acima da lista ajuda quando há muitos patches. O patch em uso aparece marcado com <em>(atual)</em>.</li>
-        <li><strong>Excluir...</strong> — apaga o arquivo selecionado, sempre com confirmação.</li>
-        <li><strong>Init</strong> — volta o som da parte pro patch inicial.</li>
-        <li>Ao lado dos botões, <span style="color:var(--accent)">* alterações não salvas</span> avisa quando o som mudou desde o último salvar/carregar (desfazer uma edição tira o aviso). Com alterações pendentes, carregar outro patch ou clicar Init pede confirmação antes de descartar.</li>
-        <li>Mensagens de sucesso ou erro (arquivo inválido, sem permissão…) aparecem logo abaixo da lista.</li>
-      </ul>
-      <ul>
-        <li><strong>Desfazer / Refazer</strong> (Ctrl+Z, Ctrl+Y ou Ctrl+Shift+Z): cada edição vira um passo quando você solta o controle (arrastar um knob é um passo só). Carregar, Init e importar do DX7 também podem ser desfeitos. O histórico é por parte e guarda até 100 passos.</li>
-        <li><strong>A | B</strong>: guarda duas versões do som da parte pra comparar. Clique no outro lado pra ouvir; cada lado tem o seu próprio desfazer. <strong>Copiar A → B</strong> copia o lado atual pro outro. O roteamento da parte (canal, faixas, nível) não muda.</li>
-        <li><strong>Fábrica</strong>: abre o banco de fábrica — 39 patches prontos em quatro famílias, com filtro por família e categoria e busca no nome/descrição. Clicar num patch carrega na parte na hora (dá pra ir trocando enquanto toca; Ctrl+Z volta). <em>Demonstração</em> mostra um recurso por patch; <em>Estilo DX7</em> foi programado em parâmetros do DX7 (os 32 algoritmos originais), inspirado nos timbres clássicos da ROM; <em>Estilo SY77</em> usa ondas AFM, filtros e camadas de ataque + sustain; <em>Originais</em> mostram MPE, LFO sincronizado no filtro, gate global, ring mod, frequency shifter, bitcrusher, laços na matriz, aditiva inarmônica, arpejo aleatório e ruído num comb. Salvar grava uma cópia editável em <code>patches/</code>.</li>
-        <li><strong>Volume</strong> (ao lado de Init): volume do patch em dB. Vai junto com o som — diferente do Nível da parte (o mix), que fica como está quando se troca de patch.</li>
-        <li><strong>Mutar</strong> (com a porcentagem ao lado): varia o som atual ao acaso — níveis e razões dos moduladores, envelopes, efeito, LFOs e profundidades da matriz — mantendo o algoritmo, as formas de onda e o volume das portadoras. 10% retoca, 50% muda bastante. Cada clique é um passo de desfazer; junto com <strong>A | B</strong> dá pra mutar até achar algo bom e comparar com o original.</li>
-        <li><strong>Importar DX7 (.syx)</strong>: abre bancos de 32 vozes ou vozes únicas do Yamaha DX7 (os mesmos arquivos do Dexed). Clique numa voz da lista pra carregar na parte; dá pra ir tocando e trocando, e Ctrl+Z volta ao som anterior. A conversão é aproximada: os 6 operadores do DX7 viram os operadores 1–6 (7 e 8 ficam desligados), e algoritmo, envelopes, níveis, level scaling, LFO e pitch EG são convertidos pras escalas deste motor.</li>
-      </ul>
+    <section id="patches">
+      <h2><span class="num">08</span>Patches</h2>
+      <p class="lede">Um patch é o som de uma parte, guardado num arquivo JSON legível.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Controle</th><th>O que faz</th></tr>
+        <tr><td>Nome + Salvar</td><td>Grava em <code>patches/&lt;nome&gt;.json</code>; pergunta antes de substituir outro patch</td></tr>
+        <tr><td>Lista + Carregar</td><td>Carrega na parte, inclusive com duplo clique; o filtro ajuda a achar</td></tr>
+        <tr><td>Excluir…</td><td>Apaga o arquivo, com confirmação</td></tr>
+        <tr><td>Init</td><td>Volta ao patch inicial</td></tr>
+        <tr><td>Volume</td><td>Volume do patch em dB; vai junto com o som</td></tr>
+        <tr><td>Desfazer, Refazer</td><td><span class="kbd">Ctrl+Z</span> e <span class="kbd">Ctrl+Y</span>; por parte, até 100 passos. Arrastar um knob é um passo só</td></tr>
+        <tr><td>A | B</td><td>Duas versões do som para comparar; <em>Copiar A → B</em> copia o lado atual para o outro</td></tr>
+        <tr><td>Fábrica</td><td>Os <a href="#fabrica">39 patches prontos</a>, com filtro e busca. Clicar já carrega</td></tr>
+        <tr><td>Mutar</td><td>Varia o som ao acaso, sem mudar algoritmo, ondas e volume das portadoras: 10% retoca, 50% muda bastante</td></tr>
+        <tr><td>Importar DX7 (.syx)</td><td>Bancos de 32 vozes ou vozes únicas, como os do Dexed. Os 6 operadores viram Op1 a Op6; a conversão é aproximada</td></tr>
+      </table></div>
+      <p>O aviso <em>* alterações não salvas</em> aparece quando o som mudou. Com alterações pendentes, carregar outro patch ou clicar em Init pede confirmação.</p>
       <div class="callout">
         <strong>O que um patch guarda</strong>
-        <p>O <em>som</em> da parte: os 8 operadores, matriz, envelopes, LFOs, matriz de modulação, macros, arpejador, modo de voz, glide, unison, bend range, transpose e o nome. Carregar <strong>não muda o roteamento</strong> da parte — habilitada, canal MIDI, faixas de tecla/velocity, vozes reservadas, nível, pan e afinação ficam como estão. Assim dá pra carregar o mesmo patch em partes diferentes de um split sem desmontar o split.</p>
+        <p><strong>Guarda:</strong> operadores (com On/Off), algoritmos, envelopes, LFOs, matriz de modulação, macros, arpejador, modo de voz, glide, unison, faixa de bend, transpose e nome.</p>
+        <p><strong>Não guarda:</strong> canal MIDI, faixas de tecla e velocity, vozes reservadas, nível, pan e afinação da parte; solo; e os efeitos da pedaleira. Assim, trocar de patch não desmonta um split nem muda os efeitos.</p>
       </div>
     </section>
 
-    <section id="referencia">
-      <h2><span class="num">09</span>Referência rápida</h2>
+    <section id="partes">
+      <h2><span class="num">09</span>Partes</h2>
+      <p class="lede">Quatro sons independentes. Só a Parte A vem ligada.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Controle</th><th>O que faz</th></tr>
+        <tr><td>Habilitada</td><td>Liga a parte</td></tr>
+        <tr><td>Canal MIDI</td><td>Omni (recebe todos) ou de 1 a 16</td></tr>
+        <tr><td>Modo de voz</td><td><strong>Poly</strong>, <strong>Mono</strong> ou <strong>Unison</strong> (várias vozes por nota, com detune e espalhamento). Mono e Unison mostram os controles de glide</td></tr>
+        <tr><td>Panico</td><td>Solta todas as notas da parte</td></tr>
+        <tr><td>Nível, Pan</td><td>Mix da parte</td></tr>
+        <tr><td>Transpose, Bend range</td><td>Em semitons</td></tr>
+        <tr><td>Key range</td><td>Faixa de notas que a parte toca</td></tr>
+        <tr><td>Vozes reservadas</td><td>Vozes garantidas para esta parte, do total de 64</td></tr>
+        <tr><td>Afinação</td><td>Escala Scala (<a href="#afinacao">detalhes</a>)</td></tr>
+      </table></div>
+      <p><strong>Camadas:</strong> habilite duas partes no mesmo canal. <strong>Split:</strong> habilite duas partes com Key range diferentes, por exemplo <em>de 0 até 59</em> e <em>de 60 até 127</em>.</p>
+      <h3 id="afinacao">Microafinação</h3>
+      <p>Na linha <strong>Afinação</strong>, carregue uma escala Scala (<code>.scl</code>) e, se quiser, um mapa de teclado (<code>.kbm</code>). Sem <code>.kbm</code>, cada tecla é um grau da escala a partir do C4, e a nota 69 fica na frequência do campo <strong>A4</strong>. <strong>12-TET</strong> volta ao temperamento igual. O programa lembra os arquivos ao reabrir.</p>
+      <h3 id="volumes">Onde cada volume age</h3>
+      <p>A ordem do sinal explica o comportamento dos efeitos:</p>
+      <pre><code>voz → Volume do patch → Nível e Pan da parte → Seco / → 1 / → 2 → Efeitos → Volume geral → limitador</code></pre>
+      <p>O <strong>Volume geral</strong> vem depois dos efeitos, então não muda quanto um drive satura nem quando o compressor age. Para "bater mais forte" nos efeitos, suba o <strong>Nível da parte</strong> ou os envios.</p>
+    </section>
 
-      <h3>Formas de onda (14)</h3>
-      <div class="chiplist">
-        <span class="chip">Sine</span><span class="chip">Triangle</span><span class="chip">Saw</span><span class="chip">Square</span><span class="chip">Noise</span>
-        <span class="chip">HalfSine</span><span class="chip">AbsSine</span><span class="chip">QuarterSine</span><span class="chip">AlternatingSine</span><span class="chip">CamelSine</span><span class="chip">SquaredSine</span><span class="chip">LogSaw</span>
-        <span class="chip">Additive</span><span class="chip">Wavetable</span>
-      </div>
-      <p style="font-size:13.5px;color:var(--text-muted)">HalfSine…LogSaw são uma reconstrução própria inspirada nas formas de onda extras do motor AFM da Yamaha SY77/TX81Z — não uma cópia bit-exata da ROM original.</p>
-      <p><strong>Additive</strong> (síntese aditiva): o operador vira a soma de <strong>64 osciladores senoidais</strong> (parciais), cada um com sua <strong>amplitude</strong> e sua <strong>razão de frequência</strong> (× a frequência do operador, de 0,01 a 128). Razões inteiras (1, 2, 3…) dão harmônicos; razões fracionárias (2,76, 5,40…) dão parciais inarmônicos — sinos, barras, tambores. Ao escolher Additive, o painel de detalhe do operador mostra o editor:</p>
-      <ul>
-        <li><strong>Gráfico de barras</strong>, uma barra por parcial: <strong>clique e arraste pra pintar</strong> o espectro (arrastar rápido preenche todas as barras do caminho). <strong>Botão direito</strong> desliga o parcial.</li>
-        <li>Três vistas: <strong>Amplitude</strong>, <strong>Amplitude dB</strong> (de −60 a 0 dB, bom pra mexer nos parciais fracos) e <strong>Razão</strong> (escala logarítmica; segure <strong>Shift</strong> pra encaixar em harmônicos inteiros; botão direito volta a barra pro harmônico da posição). Na vista de razão, parciais desligados aparecem em cinza.</li>
-        <li>Abaixo do gráfico, os <strong>valores exatos do parcial selecionado</strong> (o último clicado): amplitude, razão (Ctrl+clique pra digitar) e o botão <strong>= harmônico</strong>.</li>
-        <li>Dois espectros, <strong>A</strong> e <strong>B</strong> (escolha qual editar; o outro aparece como uma marca branca em cada barra). O knob <strong>Morph</strong> define quanto o <em>envelope de FX</em> leva de A até B — ex.: ataque metálico (B) que assenta num som mais puro (A). O morph interpola amplitudes <em>e</em> razões, então um parcial pode deslizar de frequência durante a nota. Na matriz de modulação, o destino <strong>OperatorMorph</strong> também move o morph (ex.: mod wheel).</li>
-        <li><strong>Presets</strong> aplicados no espectro em edição: Seno, Serra, Quadrada, Triângulo, Órgão (drawbars), Vogal (formantes do “a”), Sino (modos de uma barra livre) e Tambor (64 modos de uma membrana circular). <strong>Copiar A→B</strong>, <strong>Copiar B→A</strong>, <strong>Trocar A↔B</strong>, <strong>Razões harmônicas</strong> e <strong>Limpar</strong> ajudam a montar a transição.</li>
-        <li><strong>Ressintetizar WAV…</strong>: monta o operador a partir de um som gravado (veja abaixo).</li>
-        <li>Parciais acima da metade da taxa de amostragem são desligados automaticamente (sem aliasing). Um operador aditivo continua podendo modular ou ser modulado em FM, e passar pelo efeito de FX.</li>
-        <li>Custo: o motor calcula os parciais em grupos de 8 com instruções vetoriais (AVX2) e só até o último parcial ligado — um espectro de 8 parciais custa bem menos que um de 64. As vozes são divididas entre os núcleos do processador, então dezenas de vozes aditivas cabem em tempo real num PC atual.</li>
-      </ul>
-      <h3>Wavetable (duas ondas com morph)</h3>
-      <p>Com a forma de onda <strong>Wavetable</strong>, o operador toca duas ondas de um ciclo, <strong>A</strong> e <strong>B</strong>, e passeia entre elas. O editor aparece no card do operador:</p>
-      <ul>
-        <li>Os mini-gráficos <strong>A</strong> e <strong>B</strong> mostram as duas ondas; clique em um pra escolher qual editar. O gráfico maior mostra a onda na posição do knob <strong>Posição</strong> (0% = A, 100% = B).</li>
-        <li><strong>Morph EG</strong>: quanto o envelope de FX empurra o morph na direção de B ao longo da nota. Na matriz de modulação, o destino <strong>OperatorMorph</strong> também move o morph — com LFO, mod wheel, aftertouch, Nota ou Velocity. Os três se somam.</li>
-        <li><strong>Espectral</strong> ou <strong>Crossfade</strong>: no espectral, cada harmônico vai de A até B, então o meio do caminho é uma onda intermediária e duas ondas de fase oposta não se anulam. No crossfade as amostras são misturadas, (1−m)·A + m·B — mais previsível, mas uma serra misturada com a serra invertida some no meio.</li>
-        <li>Quatro jeitos de criar a onda em edição: <strong>Formas</strong> (seno, triângulo, serra, quadrada, ruído, as 7 formas AFM e pulso com largura ajustável), <strong>Desenhar</strong> (clique e arraste; Suavizar, Normalizar, Inverter, Remover DC), <strong>Harmônicos</strong> (as barras do editor aditivo, com os harmônicos 1–64) e <strong>WAV</strong> (um arquivo de wavetable do Serum/Vital — escolha o frame — ou um período de qualquer som gravado, no instante escolhido).</li>
-        <li><strong>Copiar A→B</strong> e <strong>Trocar A↔B</strong> ajudam a montar a transição.</li>
-        <li>As ondas não geram aliasing: cada uma é guardada em várias versões com menos harmônicos, e o motor escolhe a que cabe abaixo da metade da taxa de amostragem pra nota tocada. Phase distortion, FM e os efeitos do operador funcionam como nas outras formas de onda. Custa cerca de 1,3× um operador senoidal.</li>
-      </ul>
+    <section id="operadores">
+      <h2><span class="num">10</span>Operadores</h2>
+      <p class="lede">A tabela mostra os 8; clicar numa linha abre o resto no card Operador.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Coluna</th><th>O que faz</th></tr>
+        <tr><td>On / Off</td><td>Desligado, o operador não soa nem modula e não gasta CPU. Os ajustes ficam guardados, e o estado vai no patch</td></tr>
+        <tr><td>S (solo)</td><td>Ouve só este operador, com os moduladores dele, no nível real; um modulador de nível baixo soa baixo. Não vai no patch. Enquanto ativo, um aviso laranja aparece abaixo da tabela, com o botão <em>Tirar solo</em></td></tr>
+        <tr><td>Onda</td><td>Uma das <a href="#ondas">14 formas de onda</a></td></tr>
+        <tr><td>Ratio/Hz, Fixo</td><td>Razão com a nota, ou frequência fixa em Hz</td></tr>
+        <tr><td>Nível</td><td>De 0 a 99; cada passo vale 0,75 dB</td></tr>
+        <tr><td>Feedback</td><td>Auto-modulação</td></tr>
+        <tr><td>FX, Ajuste do FX</td><td><a href="#efeito-op">Efeito do operador</a> e seu ajuste principal; <em>…</em> leva ao card completo</td></tr>
+      </table></div>
+      <h3>Envelopes de amplitude</h3>
+      <p>O gráfico sobrepõe os 8 envelopes, com o tempo comprimido para caber de milissegundos a vários segundos. A curva do operador selecionado tem 4 pontos arrastáveis: na vertical muda o level; na horizontal, o tempo. Com <span class="kbd">Shift</span>, muda só o level. Na legenda, clique num chip para selecionar, use o botão direito para esconder a curva, e <em>Só usados</em> para ver só os operadores que chegam à saída. Os knobs abaixo fazem o mesmo com precisão.</p>
+      <h3>Card Operador</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Knob</th><th>O que faz</th></tr>
+        <tr><td>Fine, Detune</td><td>Afinação fina, em cents</td></tr>
+        <tr><td>Phase dist</td><td>Distorce a fase da onda; mais harmônicos, como em Casio CZ</td></tr>
+        <tr><td>PEG depth</td><td>Quanto o Pitch EG afeta este operador</td></tr>
+        <tr><td>Vel sens</td><td>Quanto a velocity muda o nível</td></tr>
+        <tr><td>Rate scal</td><td>Envelopes mais rápidos em notas agudas</td></tr>
+        <tr><td>LFO pitch, LFO amp</td><td>Quanto os LFOs afetam a afinação e o volume deste operador</td></tr>
+        <tr><td>Breakpoint, Esq, Dir</td><td>Key scaling: nível em função da nota, em volta do breakpoint</td></tr>
+      </table></div>
+      <h3>Pitch EG</h3>
+      <p>Envelope de afinação da voz, com 4 rates, 4 levels e Range. O nível 50 é o centro, sem desvio. Só afeta os operadores com <em>PEG depth</em> acima de 0.</p>
+    </section>
 
+    <section id="ondas">
+      <h2><span class="num">11</span>Formas de onda</h2>
+      <p class="lede">14 ondas, incluindo dois modos com editor próprio.</p>
+      <div class="chiplist"><span class="chip">Sine</span><span class="chip">Triangle</span><span class="chip">Saw</span><span class="chip">Square</span><span class="chip">Noise</span><span class="chip">HalfSine</span><span class="chip">AbsSine</span><span class="chip">QuarterSine</span><span class="chip">AlternatingSine</span><span class="chip">CamelSine</span><span class="chip">SquaredSine</span><span class="chip">LogSaw</span><span class="chip">Additive</span><span class="chip">Wavetable</span></div>
+      <p>De <em>HalfSine</em> a <em>LogSaw</em> são reconstruções próprias inspiradas nas ondas AFM da Yamaha SY77/TX81Z, não cópias da ROM.</p>
+      <h3>Additive</h3>
+      <p>O operador vira a soma de <strong>64 parciais</strong>, cada um com amplitude e razão de frequência próprias (de 0,01 a 128). Razões inteiras são harmônicos; fracionárias soam como sinos e tambores. O operador continua podendo modular e ser modulado.</p>
+      <ul>
+        <li><strong>Pintar:</strong> clique e arraste nas barras. Botão direito desliga o parcial.</li>
+        <li><strong>Vistas:</strong> Amplitude, Amplitude dB e Razão. Na vista Razão, <span class="kbd">Shift</span> encaixa em harmônicos.</li>
+        <li><strong>Dois espectros, A e B:</strong> o knob <strong>Morph</strong> define quanto o FX EG leva de A a B. A matriz também move o morph, pelo destino <em>OperatorMorph</em>.</li>
+        <li><strong>Presets:</strong> Seno, Serra, Quadrada, Triângulo, Órgão, Vogal, Sino e Tambor.</li>
+      </ul>
+      <p>Parciais acima da metade da taxa de amostragem são desligados sozinhos, então não há aliasing. O custo depende do último parcial ligado: 8 parciais custam bem menos que 64.</p>
       <h3>Ressíntese (a partir de um WAV)</h3>
-      <p>No editor da forma de onda Additive, o botão <strong>Ressintetizar WAV…</strong> abre um diálogo que transforma um som gravado em parciais. Funciona melhor com <strong>uma nota só, isolada</strong> (sem reverb longo nem outras notas por cima).</p>
-      <ol>
-        <li>Escolha o arquivo na lista à esquerda (pastas e arquivos <span class="mono">.wav</span>) ou digite o caminho e clique em <strong>Abrir</strong>. Aceita mono ou estéreo, PCM de 8/16/24/32 bits ou float.</li>
-        <li>Na forma de onda aparecem dois instantes: <strong>A</strong> (ataque, em azul) e <strong>B</strong> (sustain, em laranja). Arraste-os. A faixa sombreada em volta de cada um é o trecho analisado. O gráfico abaixo mostra os parciais encontrados em A e B.</li>
-        <li>Ajuste se precisar: <strong>Janela FFT</strong> (maior separa melhor parciais próximos, útil em notas graves, mas borra o tempo); <strong>Limiar</strong> (ignora picos mais fracos que isso); <strong>Máx parciais</strong>; e a <strong>Referência</strong>, que é a frequência que vira a razão 1× (detectada automaticamente; marque <em>manual</em> pra digitar).</li>
-        <li>Opções: <strong>Morph A → B</strong> (o envelope de FX leva o timbre do ataque ao do sustain no mesmo tempo que no som original), <strong>Ajustar o Amp EG</strong> (copia o envelope de volume: ataque, decaimento e, se o som morre, o decaimento até o silêncio) e <strong>Operador em 1×</strong>.</li>
-        <li><strong>Aplicar no operador</strong>. Toque a nota indicada no diálogo (ex.: “Toque C4”) pra ouvir na altura original; outras notas transpõem o som.</li>
+      <p>No editor Additive, <strong>Ressintetizar WAV…</strong> transforma um som gravado em parciais. Funciona melhor com uma nota só, sem reverb longo.</p>
+      <ol class="steps">
+        <li><strong>Abra o arquivo</strong>Mono ou estéreo, PCM de 8 a 32 bits ou float.</li>
+        <li><strong>Marque dois instantes</strong>Arraste <strong>A</strong> (ataque) e <strong>B</strong> (sustain) na forma de onda.</li>
+        <li><strong>Ajuste, se precisar</strong><em>Janela FFT</em> maior separa parciais próximos, mas borra o tempo. Há também <em>Limiar</em>, <em>Máx parciais</em> e <em>Referência</em>, a frequência que vira 1×.</li>
+        <li><strong>Aplique</strong>Clique em <strong>Aplicar no operador</strong> e toque a nota indicada para ouvir na altura original.</li>
       </ol>
-      <p style="font-size:13.5px;color:var(--text-muted)">Limites: só existem dois retratos do espectro (A e B) com uma transição linear entre eles, então sons cujos parciais morrem em tempos bem diferentes (piano, sino longo) ficam aproximados. O envelope de FX passa a ser usado pelo morph: se o operador tiver um efeito FX ligado, ele também segue essa curva.</p>
-
-      <h3>Efeitos por operador (12)</h3>
-      <p>Cada operador tem um efeito, ajustado no card <strong>EFEITO DO OPERADOR</strong> (abaixo do card do operador selecionado). Escolha o efeito nos botões; o gráfico mostra o que ele faz com os valores atuais, e os knobs têm o nome e a unidade de cada parâmetro. Na tabela de operadores, a coluna <em>Ajuste do FX</em> edita o parâmetro principal do efeito direto ali (corte, taxa, afinação, drive ou o operador fonte do ring mod); o botão <strong>…</strong> ao lado seleciona o operador e rola a tela até o card completo.</p>
-      <div class="tablewrap">
-        <table>
-          <tr><th>Efeito</th><th>Ajustes</th><th>O gráfico mostra</th></tr>
-          <tr><td>Passa-baixa / Passa-banda / Passa-alta</td><td>Modelo, Corte (Hz), Q (ressonância; 0,7 = sem pico)</td><td>Resposta em frequência. A faixa sombreada vai do corte com o envelope de FX no nível 0 (20% do corte) até o nível 99 (100%).</td></tr>
-          <tr><td>Rejeita-faixa</td><td>Corte (Hz), Q</td><td>Resposta em frequência, com o vale no corte.</td></tr>
-          <tr><td>Ring mod</td><td>Operador fonte</td><td>As duas ondas e o produto delas.</td></tr>
-          <tr><td>Saturação</td><td>Drive</td><td>Curva entrada → saída e um seno processado.</td></tr>
-          <tr><td>Bitcrusher</td><td>Taxa (Hz), Bits (1–24)</td><td>Os degraus de quantização e o “sample &amp; hold” num seno de 220 Hz.</td></tr>
-          <tr><td>Freq shift</td><td>Deslocamento (Hz)</td><td>Os harmônicos de 220 Hz (cinza) e para onde vão: somar Hz fixos deixa o som inarmônico.</td></tr>
-          <tr><td>Comb</td><td>Afinação (Hz), Feedback</td><td>Os “dentes” de ressonância na afinação e nos múltiplos.</td></tr>
-          <tr><td>Wavefolder</td><td>Drive (1–16), Simetria</td><td>Curva e seno processado, com o drive mínimo (envelope em 0, branco) e máximo (cor do operador). Simetria 0 = só harmônicos ímpares; acima disso entram os pares. Tem antialiasing próprio (ADAA); em notas muito agudas com drive alto, o oversampling 2× ou 4× (Configurações) limpa o resto.</td></tr>
-          <tr><td>Waveshaper</td><td>Curva, Drive (1–16), Bias</td><td>Curva e seno processado, com o drive mínimo e o máximo.</td></tr>
-        </table>
-      </div>
-      <p>O <strong>envelope de FX</strong> fica no mesmo card. Ele só age nos filtros (varre o corte), no Wavefolder e no Waveshaper (varrem o drive) e no morph da forma de onda Additive. Nos outros efeitos os knobs dele ficam desativados, e o texto acima deles diz o que ele controla. Ao trocar de efeito, os ajustes voltam a valores iniciais adequados (entre os três filtros, corte e Q são mantidos).</p>
-      <p><strong>Modelos de filtro</strong> (Passa-baixa, Passa-banda e Passa-alta): <strong>SVF 12 dB</strong> (limpo, o padrão), <strong>SVF 24 dB</strong> (limpo, corte mais íngreme), <strong>Ladder 24 dB</strong> (gordo, estilo transistor), <strong>Diodo</strong> (estilo baixo ácido) e <strong>Sallen-Key</strong> (12 dB agressivo, estilo MS-20). No Ladder, no Diodo e no Sallen-Key, o Q no máximo faz o filtro auto-oscilar. O Q também muda o volume dos graves e o caráter de cada modelo, e sinal forte satura esses três modelos.</p>
-      <p><strong>Curvas do Waveshaper</strong>: <strong>Suave</strong> e <strong>Clip</strong> (harmônicos ímpares), <strong>Seno</strong> (dobra suave), <strong>Válvula</strong> (assimétrica, com harmônicos pares), <strong>Chebyshev 3</strong> (um seno em nível cheio vira o 3º harmônico) e <strong>Retificador</strong> (oitava acima). <strong>Bias</strong> desloca o sinal na curva e acrescenta harmônicos pares.</p>
-      <p><strong>Key track</strong> (nos filtros, Comb, Freq shift e Bitcrusher): faz o valor em Hz acompanhar a nota tocada, em volta do C4. Em 100%, uma oitava acima dobra o valor — o filtro mantém o mesmo brilho em toda a extensão do teclado e o Comb ressoa afinado com a nota (ajuste a afinação do Comb pra 261,6 Hz, que é o C4, ou um múltiplo dele). Em 50%, sobe meia oitava por oitava; em 0% (padrão), o valor é fixo como antes. Acompanha o glide, mas não o pitch bend nem o vibrato.</p>
-
-      <h3>Macros e MIDI learn</h3>
-      <p>O card <strong>MACROS</strong> tem 4 knobs por patch, com nome editável. Sozinhos eles não fazem nada: são fontes (<strong>Macro1–4</strong>) da matriz de modulação, então um knob pode abrir vários parâmetros de uma vez (ex.: Macro1 → morph de algoritmos + FX1 de dois operadores). O botão embaixo de cada macro é o <strong>MIDI learn</strong>: clique em “aprender” e mova um knob ou fader do seu controlador — o CC dele passa a mover a macro (botão direito esquece). No popup <strong>Configurações</strong> (no topo) dá pra aprender também o <strong>Volume</strong>, o <strong>BPM</strong> e o <strong>pedal de expressão</strong> dos efeitos. Os CCs aprendidos ficam salvos no app e valem pras partes que recebem o canal do controlador.</p>
-
-      <h3>Arpejador</h3>
-      <p>No card <strong>ARPEJADOR</strong> (salvo no patch): com <strong>Ligado</strong>, as teclas que você segura montam o padrão e o arpejador toca uma nota por passo no tempo do BPM. Modos: sobe, desce, sobe/desce (sem repetir as pontas), aleatório e como tocado; <strong>Oitavas</strong> repete o padrão até 4 oitavas acima; <strong>Divisão</strong> é o tamanho do passo (1/16 = semicolcheia); <strong>Gate</strong> é quanto do passo a nota soa (100% = legato); <strong>Swing</strong> atrasa os passos ímpares (33% = tercina); <strong>Latch</strong> mantém o arpejo depois de soltar as teclas, até a próxima tecla. Os passos caem na grade do compasso, e o Start de um clock MIDI recomeça o arpejo no 1.</p>
-
-      <h3>MPE (expressão por nota)</h3>
-      <p>Controladores MPE (Seaboard, LinnStrument, Osmose, Push 3…) mandam cada nota num canal MIDI próprio, com bend, pressão e “slide” (CC74) só daquela nota. Ligue em <strong>Configurações → MPE (zona inferior)</strong> — ou deixe o controlador ligar sozinho (a maioria manda a mensagem de configuração MPE ao conectar). O canal 1 é o mestre (bend e pedais da parte inteira); as notas chegam nos canais 2–16 e tocam nas partes que recebem o canal 1 (ou omni).</p>
+      <p>São só dois retratos do espectro com uma transição entre eles, então sons cujos parciais morrem em tempos muito diferentes, como piano, ficam aproximados.</p>
+      <h3>Wavetable</h3>
+      <p>O operador passeia entre duas ondas de um ciclo, A e B, com o knob <strong>Posição</strong>, o <strong>Morph EG</strong> (FX EG) e o destino <em>OperatorMorph</em>, que se somam.</p>
       <ul>
-        <li><strong>Bend por nota</strong>: vai direto na afinação da nota (faixa padrão 48 semitons, ajustável).</li>
-        <li><strong>Pressão</strong>: chega como <em>PolyAT</em> na matriz de modulação.</li>
-        <li><strong>Slide (CC74)</strong>: fonte <em>Slide (MPE)</em> na matriz — por exemplo, Slide → OperatorFx1 abre o filtro de um operador.</li>
+        <li><strong>Espectral ou Crossfade:</strong> o espectral leva cada harmônico de A a B, e ondas de fase oposta não se anulam. O crossfade mistura as amostras.</li>
+        <li><strong>Criar a onda:</strong> <em>Formas</em>, <em>Desenhar</em>, <em>Harmônicos</em> ou <em>WAV</em> (wavetable do Serum/Vital, ou um período de qualquer som).</li>
       </ul>
-      <p>Só a zona inferior é suportada (a superior, com mestre no canal 16, não).</p>
+      <p>Não gera aliasing e custa cerca de 1,3× um operador senoidal.</p>
+    </section>
 
-      <h3>BPM, clock MIDI e LFO global</h3>
-      <p>O knob <strong>BPM</strong> (topo) é o tempo dos LFOs e envelopes com Sync e do arpejador. Se um teclado, sequenciador ou DAW mandar <strong>clock MIDI</strong> pra porta do Mare Tranquillitatis, o BPM passa a seguir o clock (o knob mostra “BPM (MIDI)”); dá pra desligar isso em Configurações. Cada LFO tem a opção <strong>Global</strong>: em vez de um LFO por nota, a parte inteira usa um só — num acorde, todas as notas ondulam juntas. Um LFO global com Sync fica alinhado ao compasso (e ao Start do clock). A velocidade de um LFO global pode ser modulada na matriz (destino “LFO rate”) pelo mod wheel, aftertouch, pitch bend, macros ou outro LFO global — fontes que mudam de nota pra nota (velocity, nota, envelopes) não valem pra ele, já que ele é um só pra parte.</p>
+    <section id="efeito-op">
+      <h2><span class="num">12</span>Efeito do operador</h2>
+      <p class="lede">Cada operador tem um efeito, com gráfico ao vivo do que ele faz.</p>
+      <figure class="shot"><a href="img/efeito-operador.png" title="Abrir em tamanho real"><img src="img/efeito-operador.png" alt="Card Efeito do Operador com o filtro Passa-baixa no modelo Ladder 24 dB, gráfico da resposta e knobs de corte e Q"></a></figure>
+      <div class="tablewrap"><table>
+        <tr><th>Efeito</th><th>Ajustes</th><th>O que faz</th></tr>
+        <tr><td>Passa-baixa, Passa-banda, Passa-alta</td><td>Modelo, Corte, Q</td><td>Filtros. Q 0,7 não tem pico. O FX EG varre o corte de 20% a 100%</td></tr>
+        <tr><td>Rejeita-faixa</td><td>Corte, Q</td><td>Remove uma faixa em volta do corte</td></tr>
+        <tr><td>Ring mod</td><td>Operador fonte</td><td>Multiplica pela saída de outro operador</td></tr>
+        <tr><td>Saturação</td><td>Drive</td><td>Arredonda os picos; harmônicos ímpares</td></tr>
+        <tr><td>Bitcrusher</td><td>Taxa, Bits</td><td>Reduz taxa de amostragem e bits</td></tr>
+        <tr><td>Freq shift</td><td>Deslocamento</td><td>Soma Hz fixos: harmônicos viram inarmônicos</td></tr>
+        <tr><td>Comb</td><td>Afinação, Feedback</td><td>Ressoa na afinação e nos múltiplos; soa metálico</td></tr>
+        <tr><td>Wavefolder</td><td>Drive, Simetria</td><td>Dobra o sinal que passa do limite. O FX EG varre o drive</td></tr>
+        <tr><td>Waveshaper</td><td>Curva, Drive, Bias</td><td>Passa o sinal por uma curva. O FX EG varre o drive</td></tr>
+      </table></div>
+      <h3>Modelos de filtro</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Modelo</th><th>Caráter</th><th>Auto-oscila no Q máximo</th></tr>
+        <tr><td>SVF 12 dB</td><td>Limpo; o padrão</td><td>Não</td></tr>
+        <tr><td>SVF 24 dB</td><td>Limpo, corte mais íngreme</td><td>Não</td></tr>
+        <tr><td>Ladder 24 dB</td><td>Gordo, estilo transistor</td><td>Sim</td></tr>
+        <tr><td>Diodo</td><td>Estilo baixo ácido</td><td>Sim</td></tr>
+        <tr><td>Sallen-Key</td><td>12 dB agressivo, estilo MS-20</td><td>Sim</td></tr>
+      </table></div>
+      <p>Nos três últimos, o Q alto reduz os graves, e sinal forte satura. Esses "estilos" são aproximações pela topologia, não emulações de um aparelho específico.</p>
+      <h3>Curvas do Waveshaper</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Curva</th><th>Som</th></tr>
+        <tr><td>Suave, Clip</td><td>Harmônicos ímpares; mais fortes com drive</td></tr>
+        <tr><td>Seno</td><td>Dobra suave</td></tr>
+        <tr><td>Válvula</td><td>Assimétrica, com harmônicos pares</td></tr>
+        <tr><td>Chebyshev 3</td><td>Um seno em nível cheio vira o 3º harmônico</td></tr>
+        <tr><td>Retificador</td><td>Oitava acima</td></tr>
+      </table></div>
+      <p><strong>Bias</strong> desloca o sinal na curva e acrescenta harmônicos pares.</p>
+      <h3>Key track e FX EG</h3>
+      <p><strong>Key track</strong> (filtros, Comb, Freq shift e Bitcrusher) faz o valor em Hz acompanhar a nota, em volta do C4. Em 100%, uma oitava acima dobra o valor: o filtro mantém o brilho em todo o teclado, e um Comb em 261,6 Hz fica afinado com a nota. Segue o glide, mas não o bend nem o vibrato.</p>
+      <p>O <strong>FX EG</strong> só age nos filtros, no Wavefolder, no Waveshaper e no morph de Additive e Wavetable; o texto acima dos knobs diz o que ele controla. Trocar de efeito volta os ajustes a valores iniciais, exceto entre filtros, que mantêm corte e Q.</p>
+    </section>
 
-      <h3>Microafinação (Scala)</h3>
-      <p>No card <strong>PARTE</strong>, a linha <strong>Afinação</strong> carrega uma escala no formato Scala (<span class="mono">.scl</span>, milhares de escalas disponíveis gratuitamente) e, opcionalmente, um mapeamento de teclado (<span class="mono">.kbm</span>: quais teclas tocam quais graus, a nota e a frequência de referência, e teclas sem som). Sem <span class="mono">.kbm</span>, cada tecla é um grau da escala a partir do C4 e o lá (nota 69) fica no <strong>A4</strong> escolhido (380–500 Hz). <strong>12-TET</strong> volta ao temperamento igual. A afinação é da parte (trocar de patch não muda) e o app lembra os arquivos no próximo início.</p>
-
-      <h3>Configurações</h3>
-      <p>O botão <strong>Configurações</strong> (embaixo do logo) abre: <strong>oversampling</strong> 1×/2×/4× (menos aliasing em FM agressiva e notas agudas, ao custo de ~2×/~4× de CPU nas vozes; trocar corta as notas que estiverem soando), <strong>seguir o clock MIDI</strong> e a lista do <strong>MIDI learn</strong>. Ficam salvas em <span class="mono">~/.config/mare-tranquillitatis/settings.json</span>.</p>
-
-      <h3>Editor gráfico de algoritmos</h3>
-      <p>O botão <strong>Editor gráfico</strong>, no card Algoritmo, abre uma janela flutuante: dá para tocar enquanto edita, e cada mudança vale na hora.</p>
-      <ul>
-        <li><strong>Conectar:</strong> arraste da bolinha de baixo de um operador até outro; o primeiro passa a modular o segundo.</li>
-        <li><strong>Portadora:</strong> arraste a bolinha até a barra <strong>SAÍDA</strong>.</li>
-        <li><strong>Feedback:</strong> clique no círculo do canto do operador.</li>
-        <li><strong>Ajustar:</strong> clique numa conexão ou no fio de saída e use o painel da direita (quantidade, FM ou Ring, nível), ou a roda do mouse em cima do fio.</li>
-        <li><strong>Apagar:</strong> botão direito no fio, ou selecione e tecle Delete.</li>
-        <li><strong>Organizar:</strong> arraste os operadores à vontade; o botão <strong>Organizar</strong> põe as portadoras embaixo e os moduladores acima. <strong>Limpar</strong> tira tudo.</li>
-      </ul>
-      <p>Conexão tracejada fecha um laço e usa a amostra anterior. "Sem efeito" no operador significa que ele não chega à saída. Tudo entra no Ctrl+Z.</p>
-      <p><strong>Presets:</strong> dê um nome e clique em <strong>Salvar</strong>. O preset fica em <code>algorithms/&lt;nome&gt;.json</code> (relativo a onde o app foi aberto) e guarda conexões, feedback, níveis de saída e a posição dos operadores; não guarda timbre nem o liga/desliga dos operadores. Os seus presets aparecem em <em>Meus algoritmos</em>, no menu do editor e no do card Algoritmo, junto com os 32 de fábrica. Com vários algoritmos de morph, editar e carregar valem para o algoritmo em edição.</p>
-
+    <section id="algoritmos">
+      <h2><span class="num">13</span>Algoritmos</h2>
+      <p class="lede">Quem modula quem: escolha um pronto, desenhe o seu ou faça morph entre vários.</p>
+      <h3>Card Algoritmo</h3>
+      <p>Escolher no menu já troca o algoritmo (<span class="kbd">Ctrl+Z</span> desfaz). O menu traz os seus presets em <em>Meus algoritmos</em> e os 32 de fábrica:</p>
+      <div class="tablewrap"><table>
+        <tr><th>Algoritmos</th><th>Forma</th></tr>
+        <tr><td>1</td><td>Cadeia única de 8: uma portadora, som mais denso</td></tr>
+        <tr><td>2 a 22</td><td>Combinações de cadeias menores, de 2 a 8 portadoras. O 22 tem 8 portadoras e soa como um órgão</td></tr>
+        <tr><td>23 a 32</td><td>Variações em que um modulador alimenta várias portadoras, ou uma portadora recebe de várias cadeias</td></tr>
+      </table></div>
+      <p>É um conjunto próprio para 8 operadores, não a lista oficial do DX7 nem do Montage. O diagrama abaixo do menu mostra a ligação atual: preenchido é portadora, setas são modulação, círculo laranja é feedback, seta laranja é ring mod e apagado é desligado. Clique numa caixa para selecionar o operador.</p>
+      <h3 id="editor">Editor gráfico</h3>
+      <p>O botão <strong>Editor grafico</strong> abre uma janela flutuante. Dá para tocar enquanto edita, e tudo entra no <span class="kbd">Ctrl+Z</span>.</p>
+      <figure class="shot"><a href="img/editor-algoritmo.png" title="Abrir em tamanho real"><img src="img/editor-algoritmo.png" alt="Editor de algoritmo com duas cadeias de quatro operadores ligadas à barra SAIDA e o painel de ajustes à direita"></a></figure>
+      <div class="tablewrap"><table>
+        <tr><th>Para</th><th>Faça</th></tr>
+        <tr><td>Conectar</td><td>Arraste da bolinha de baixo de um operador até outro: o primeiro modula o segundo</td></tr>
+        <tr><td>Criar portadora</td><td>Arraste a bolinha até a barra <strong>SAIDA</strong></td></tr>
+        <tr><td>Ligar feedback</td><td>Clique no círculo do canto do operador</td></tr>
+        <tr><td>Ajustar</td><td>Clique no fio e use o painel da direita (quantidade, FM ou Ring, nível), ou a roda do mouse sobre o fio</td></tr>
+        <tr><td>Apagar</td><td>Botão direito no fio, ou selecione e tecle <span class="kbd">Delete</span></td></tr>
+        <tr><td>Arrumar a tela</td><td>Arraste os operadores, ou use <strong>Organizar</strong>: portadoras embaixo, moduladores acima</td></tr>
+        <tr><td>Recomeçar</td><td><strong>Limpar</strong> tira todas as conexões e saídas</td></tr>
+      </table></div>
+      <p>Conexão <strong>tracejada</strong> fecha um laço e usa a amostra anterior. Um operador marcado <strong>sem efeito</strong> não chega à saída. Sem nenhuma portadora, um aviso laranja lembra que o algoritmo não soa.</p>
+      <p><strong>Presets de algoritmo:</strong> dê um nome e clique em <strong>Salvar</strong>. O arquivo fica em <code>algorithms/&lt;nome&gt;.json</code> e guarda conexões, feedback, níveis de saída e posição dos operadores; não guarda timbre nem On/Off. <strong>Excluir</strong> pede um segundo clique para confirmar.</p>
       <h3>Morph entre algoritmos</h3>
-      <p>No card <strong>Algoritmo</strong>, a fileira <strong>Algoritmos 1 2 …</strong> guarda até <strong>8 algoritmos</strong> no mesmo patch. Clique num número pra editar aquele algoritmo (o combo de algoritmos e a matriz avançada passam a valer pra ele); <strong>+</strong> cria um novo, copiando o que está em edição, e <strong>−</strong> remove o que está em edição. Com dois ou mais, aparece a <strong>régua do morph</strong>: arraste o marcador laranja pra escolher a posição — ela passa pelos algoritmos em ordem, e no meio do caminho as conexões são misturadas (uma modulação que só existe num deles vai sumindo aos poucos, como um índice de FM diminuindo). <strong>Saltar</strong> pula de algoritmo em algoritmo em vez de passar pelo meio. <strong>Ver posição</strong> faz o diagrama mostrar o ponto do morph, com as setas mais grossas onde a conexão é mais forte. Pra mover o morph durante a nota, use o destino <strong>AlgoMorph</strong> na matriz de modulação (com um LFO, um envelope com loop, a mod wheel…).</p>
-      <p style="font-size:13.5px;color:var(--text-muted)">O <em>Feedback</em> de cada operador na tabela vale em todos os algoritmos; o feedback que vem dos presets fica dentro de cada algoritmo e faz morph junto. Ring mod não tem meio-termo: a conexão liga ou desliga no ponto mais próximo.</p>
+      <p>A fileira <strong>Algoritmos 1 2 …</strong> guarda até <strong>8 algoritmos</strong> no patch. Clique num número para editá-lo; <strong>+</strong> cria um novo, copiando o atual, e <strong>−</strong> remove. O menu e o editor gráfico valem para o algoritmo em edição.</p>
+      <p>Com dois ou mais, aparece a <strong>régua do morph</strong>. No meio do caminho, as conexões são misturadas: uma modulação que só existe num deles vai sumindo aos poucos. <strong>Saltar</strong> pula de um algoritmo a outro, e <strong>Ver posição</strong> mostra o ponto atual no diagrama. Para mover durante a nota, use o destino <em>AlgoMorph</em> da matriz.</p>
+      <p>O Feedback da tabela vale em todos os algoritmos; o que está dentro de um algoritmo faz morph junto. Ring mod não tem meio-termo: liga ou desliga no ponto mais próximo.</p>
+      <h3>Matriz de algoritmo (avançado)</h3>
+      <p>Recolhida por padrão, é a versão numérica do mesmo desenho: quanto cada operador modula cada outro, uma caixa para ring mod e o output mix de cada operador.</p>
+    </section>
 
-      <h3>32 algoritmos — famílias</h3>
-      <div class="tablewrap">
-        <table>
-          <tr><th>Algoritmos</th><th>Forma</th></tr>
-          <tr><td>1</td><td>Cadeia única de 8 — 1 portadora, som mais denso/inarmônico</td></tr>
-          <tr><td>2–22</td><td>Combinações de cadeias menores (2 a 8 portadoras) — cobrem todas as formas possíveis de dividir 8 operadores em cadeias</td></tr>
-          <tr><td>23–32</td><td>Variações com <em>fork</em> (um modulador alimentando várias portadoras) e <em>merge</em> (uma portadora recebendo de cadeias separadas)</td></tr>
-        </table>
-      </div>
-      <p style="font-size:13.5px;color:var(--text-muted)">Conjunto próprio desenhado pros 8 operadores deste motor — não é a lista oficial do DX7 (6 operadores) nem do Montage/MODX.</p>
+    <section id="modulacao">
+      <h2><span class="num">14</span>Modulação</h2>
+      <p class="lede">LFOs, envelopes e controladores movem os parâmetros pela matriz de 16 rotas.</p>
+      <h3>LFOs</h3>
+      <p>Cada parte tem 4, com as formas Triangle, SawUp, SawDown, Square, Sine, SampleHold e SmoothRandom.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Controle</th><th>O que faz</th></tr>
+        <tr><td>Rate, Delay</td><td>Velocidade e tempo até começar</td></tr>
+        <tr><td>Pitch, Amp</td><td>Vibrato e tremolo diretos, sem usar a matriz</td></tr>
+        <tr><td>Key sync</td><td>Reinicia o ciclo a cada nota</td></tr>
+        <tr><td>Sync</td><td>A velocidade vira uma divisão do BPM, de 4/1 a 1/32, com pontuadas e tercinas</td></tr>
+        <tr><td>Degraus</td><td>Suave, ou quantizado de 2 a 32 níveis</td></tr>
+        <tr><td>Global</td><td>Um só LFO para a parte inteira: num acorde, todas as notas ondulam juntas</td></tr>
+      </table></div>
+      <h3>Envelopes de modulação</h3>
+      <p>Env 1 a Env 3 servem só de fonte para a matriz. <strong>Loop</strong> repete L3 → L1 → L2 → L3 enquanto a nota estiver presa. <strong>Sync</strong> ajusta a velocidade para o ciclo durar uma divisão do BPM.</p>
+      <h3 id="matriz">Matriz de modulação</h3>
+      <figure class="shot narrow"><a href="img/matriz-modulacao.png" title="Abrir em tamanho real"><img src="img/matriz-modulacao.png" alt="Matriz de modulação com rotas de Slide, PolyAT, ChannelAT e ModWheel para os parâmetros OperatorFx1, OperatorLevel e VoiceLevel"></a></figure>
+      <p>Cada rota tem fonte, destino, alvo (operador, LFO ou envelope, quando o destino pede) e profundidade de −1 a +1. A tabela mostra só as rotas em uso; <em>Mostrar as 16</em> mostra todas. Passe o mouse num destino para ver a explicação.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Fonte</th><th>Faixa</th><th>O que é</th></tr>
+        <tr><td>LFO1 a LFO4</td><td>−1 a +1</td><td>Saída do LFO</td></tr>
+        <tr><td>Env1 a Env3</td><td>0 a 1</td><td>Envelopes de modulação</td></tr>
+        <tr><td>Env amplitude</td><td>0 a 1</td><td>Maior envelope de amplitude entre as portadoras</td></tr>
+        <tr><td>Env pitch</td><td>−1 a +1</td><td>Pitch EG</td></tr>
+        <tr><td>ModWheel</td><td>0 a 1</td><td>CC1</td></tr>
+        <tr><td>Sopro, Pé, Expressão</td><td>0 a 1</td><td>CC2, CC4 e CC11; valem 0 até o primeiro CC chegar</td></tr>
+        <tr><td>Pedal sustain</td><td>0 ou 1</td><td>CC64</td></tr>
+        <tr><td>ChannelAT, PolyAT</td><td>0 a 1</td><td>Aftertouch de canal e por nota</td></tr>
+        <tr><td>Slide (MPE)</td><td>0 a 1</td><td>CC74 por nota</td></tr>
+        <tr><td>PitchBend</td><td>−1 a +1</td><td>Alavanca de bend</td></tr>
+        <tr><td>Macro1 a Macro4</td><td>0 a 1</td><td>Knobs do card Macros</td></tr>
+        <tr><td>Nota</td><td>−1 a +1</td><td>0 no C4, +1 cinco oitavas acima</td></tr>
+        <tr><td>Velocity</td><td>0 a 1</td><td>Fixa durante a nota</td></tr>
+        <tr><td>Aleatório/nota</td><td>−1 a +1</td><td>Sorteada no note on, fixa durante a nota</td></tr>
+        <tr><td>Alternado</td><td>+1 ou −1</td><td>Troca a cada nota</td></tr>
+        <tr><td>Tempo da nota</td><td>0 a 1</td><td>Sobe nos 5 s depois do note on</td></tr>
+        <tr><td>Constante</td><td>1</td><td>Um ajuste fixo do destino</td></tr>
+      </table></div>
+      <div class="tablewrap"><table>
+        <tr><th>Destino</th><th>Alvo</th><th>Efeito da quantidade</th></tr>
+        <tr><td>OperatorLevel</td><td>Operador</td><td>Nível × (1 + q)</td></tr>
+        <tr><td>OperatorFx1</td><td>Operador</td><td>Corte, taxa, afinação ou drive × (1 + q)</td></tr>
+        <tr><td>OperatorFx2</td><td>Operador</td><td>Q, bits, feedback, simetria ou bias × (1 + q)</td></tr>
+        <tr><td>OperatorFeedback</td><td>Operador</td><td>Feedback + q</td></tr>
+        <tr><td>OperatorPitch</td><td>Operador</td><td>q × 12 semitons</td></tr>
+        <tr><td>OperatorMorph</td><td>Operador</td><td>Morph de Additive ou Wavetable + q</td></tr>
+        <tr><td>OperatorFmIn</td><td>Operador</td><td>FM recebida × (1 + q); −1 tira a FM</td></tr>
+        <tr><td>OperatorPhaseDist</td><td>Operador</td><td>Phase distortion + q</td></tr>
+        <tr><td>OperatorEgSpeed</td><td>Operador</td><td>Velocidade dos envelopes × 2<sup>3q</sup>: até 8× mais rápidos ou mais lentos</td></tr>
+        <tr><td>VoicePitch</td><td>—</td><td>q × 12 semitons na voz inteira</td></tr>
+        <tr><td>VoicePan</td><td>—</td><td>Pan + q</td></tr>
+        <tr><td>VoiceLevel</td><td>—</td><td>Volume × (1 + q)</td></tr>
+        <tr><td>VoiceFmIn</td><td>—</td><td>FM de todos os operadores × (1 + q): o brilho geral</td></tr>
+        <tr><td>VoiceFx1, VoiceFx2</td><td>—</td><td>FX1 ou FX2 de todos os operadores × (1 + q)</td></tr>
+        <tr><td>PegDepth</td><td>—</td><td>Pitch EG × (1 + q)</td></tr>
+        <tr><td>AlgoMorph</td><td>—</td><td>Posição do morph de algoritmos + q</td></tr>
+        <tr><td>LfoRate</td><td>LFO</td><td>Velocidade × 2<sup>3q</sup></td></tr>
+        <tr><td>LfoDepth</td><td>LFO</td><td>Saída do LFO × (1 + q)</td></tr>
+        <tr><td>ModEnvSpeed</td><td>Env</td><td>Velocidade do envelope × 2<sup>3q</sup></td></tr>
+      </table></div>
+      <p><strong>Exemplos:</strong> <em>Velocity → OperatorFx1</em> abre o filtro quando você toca mais forte. <em>Nota → OperatorLevel</em> com profundidade negativa amansa um modulador nos agudos. <em>Aleatório/nota → OperatorPitch</em>, com pouca profundidade, desafina cada nota de leve.</p>
+      <p>Um <strong>LFO global</strong> é um só para a parte, então a velocidade dele só aceita fontes da parte: mod wheel, os CCs, aftertouch de canal, bend, macros, Constante e outros LFOs globais.</p>
+      <h3 id="macros">Macros e MIDI learn</h3>
+      <p>O card <strong>Macros</strong> tem 4 knobs por patch, com nome editável. Sozinhos não fazem nada: são fontes da matriz, então um knob pode mover vários parâmetros. Clique em <strong>aprender</strong> e mova um controle do seu teclado para ligá-lo; botão direito esquece. Em <strong>Configurações</strong> dá para aprender também Volume, BPM e o pedal de expressão.</p>
+      <h3 id="bpm">BPM e clock MIDI</h3>
+      <p>O knob <strong>BPM</strong> é o tempo de LFOs e envelopes com Sync, do arpejador e dos efeitos com Sync. Se chegar clock MIDI, o BPM segue o clock e o knob mostra <em>BPM (MIDI)</em>; dá para desligar em Configurações.</p>
+    </section>
 
-      <h3>Teclas de controle</h3>
-      <div class="tablewrap">
-        <table>
-          <tr><th>Tecla</th><th>Ação</th></tr>
-          <tr><td class="mono">Z</td><td>Oitava do teclado do PC uma abaixo</td></tr>
-          <tr><td class="mono">X</td><td>Oitava do teclado do PC uma acima</td></tr>
-          <tr><td class="mono">A W S E D F T G Y H U J</td><td>Uma oitava cromática (C a B)</td></tr>
-          <tr><td class="mono">K O L P ;</td><td>Mais 5 semitons acima (C a E)</td></tr>
-        </table>
-      </div>
+    <section id="arpejador">
+      <h2><span class="num">15</span>Arpejador</h2>
+      <p class="lede">As teclas seguradas viram um padrão no tempo do BPM. Fica salvo no patch.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Controle</th><th>O que faz</th></tr>
+        <tr><td>Ligado</td><td>Liga o arpejador</td></tr>
+        <tr><td>Modo</td><td>Sobe, desce, sobe/desce, aleatório, como tocado</td></tr>
+        <tr><td>Divisão</td><td>Tamanho do passo; 1/16 é semicolcheia</td></tr>
+        <tr><td>Oitavas</td><td>Repete o padrão até 4 oitavas acima</td></tr>
+        <tr><td>Gate</td><td>Quanto do passo a nota soa; 100% é legato</td></tr>
+        <tr><td>Swing</td><td>Atrasa os passos ímpares; 33% é tercina</td></tr>
+        <tr><td>Latch</td><td>Mantém o arpejo depois de soltar, até a próxima tecla</td></tr>
+      </table></div>
+      <p>Os passos caem na grade do compasso, e o Start de um clock MIDI recomeça o arpejo.</p>
+    </section>
+
+    <section id="rack">
+      <h2><span class="num">16</span>Efeitos (pedaleira)</h2>
+      <p class="lede">Duas cadeias de 4 pedais, com qualquer efeito em qualquer pedal.</p>
+      <figure class="shot"><a href="img/pedaleira.png" title="Abrir em tamanho real"><img src="img/pedaleira.png" alt="Aba Efeitos com os envios por parte à esquerda e duas fileiras de pedais, cada uma com seletor de algoritmo e diagrama"></a><figcaption>O preset Delays em ramos: a cadeia 1 usa o algoritmo Pré + 3 ramos.</figcaption></figure>
+      <h3>Pedais</h3>
+      <ul>
+        <li><strong>Menu do pedal:</strong> escolhe o efeito, por categoria. Passe o mouse para ver em que código aberto ele se baseia.</li>
+        <li><strong>Mix:</strong> seco e molhado dentro do pedal.</li>
+        <li><strong>Footswitch com LED:</strong> liga e desliga. Desligado, o sinal passa direto, e os knobs continuam editáveis.</li>
+        <li><strong>Alça <span class="kbd">::</span>:</strong> arraste até outro pedal para trocá-los de lugar; com <span class="kbd">Ctrl</span> ao soltar, copia por cima.</li>
+        <li><strong>EXP:</strong> liga o <a href="#expressao">pedal de expressão</a> a um parâmetro.</li>
+      </ul>
+      <p>Tamanho e pre-delay de alguns reverbs só valem ao soltar o knob, para não picotar a cauda enquanto você arrasta.</p>
+      <h3>Envios por parte</h3>
+      <p>Cada parte tem <strong>Seco</strong> (direto para a saída), <strong>→ 1</strong> e <strong>→ 2</strong> (quanto vai para cada cadeia). O padrão é tudo na cadeia 1.</p>
+      <h3>Algoritmo de cada cadeia</h3>
+      <p>Assim como os operadores, os pedais de uma cadeia podem se ligar de várias formas. Cada cadeia escolhe o seu no cabeçalho, com o diagrama ao lado:</p>
+      <div class="tablewrap"><table>
+        <tr><th>#</th><th>Nome</th><th>Ligação</th></tr>
+        <tr><td>1</td><td>Série</td><td class="mono">1 → 2 → 3 → 4</td></tr>
+        <tr><td>2</td><td>Dois pares</td><td class="mono">(1 → 2) | (3 → 4)</td></tr>
+        <tr><td>3</td><td>Divide e junta</td><td class="mono">1 → (2 | 3) → 4</td></tr>
+        <tr><td>4</td><td>Pré + 3 ramos</td><td class="mono">1 → (2 | 3 | 4)</td></tr>
+        <tr><td>5</td><td>3 ramos + pós</td><td class="mono">(1 | 2 | 3) → 4</td></tr>
+        <tr><td>6</td><td>Par + 2 ramos</td><td class="mono">1 → 2 → (3 | 4)</td></tr>
+        <tr><td>7</td><td>2 ramos + par</td><td class="mono">(1 | 2) → 3 → 4</td></tr>
+        <tr><td>8</td><td>Três e um</td><td class="mono">(1 → 2 → 3) | 4</td></tr>
+        <tr><td>9</td><td>Ramos desiguais</td><td class="mono">(1 | 2 → 3) → 4</td></tr>
+        <tr><td>10</td><td>Quatro paralelos</td><td class="mono">1 | 2 | 3 | 4</td></tr>
+      </table></div>
+      <p>Onde ramos se juntam, o sinal é a média deles, então não fica mais alto por ter mais ramos. Um pedal vazio ou desligado num ramo deixa esse ramo seco.</p>
+      <h3>Ligação entre as cadeias</h3>
+      <ul>
+        <li><strong>Paralelo:</strong> as duas lado a lado.</li>
+        <li><strong>Série:</strong> a cadeia 1 entra na 2, e só a 2 sai. O envio 2 também entra na 2.</li>
+        <li><strong>Série + direto:</strong> a 1 sai e também alimenta a 2. Por exemplo, drive na 1 e reverb 100% molhado na 2.</li>
+      </ul>
+      <p>O card <strong>Cadeias</strong> traz também nível, pan e medidor de saída de cada cadeia.</p>
+      <h3 id="expressao">Pedal de expressão</h3>
+      <p>O botão <strong>EXP</strong> de um pedal escolhe o parâmetro a controlar, como a posição do wah ou o Hold do Micro. No card <strong>Pedal de expressão</strong> ficam a faixa (<em>Calcanhar</em> e <em>Ponta</em>), o MIDI learn do CC e um controle para testar pela tela.</p>
+      <h3>Presets</h3>
+      <p>A barra do topo tem 28 presets de fábrica e os seus, salvos em <code>fxpresets/</code>. <strong>Salvar</strong> grava o rack inteiro, <strong>Init</strong> esvazia, e <span class="kbd">Ctrl+Z</span> vale em toda a aba. O estado volta sozinho ao reabrir o programa.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Categoria</th><th>Preset</th><th>O que tem</th></tr>
+        <tr><td>Basicos</td><td>Sala limpa</td><td>so uma sala pequena, discreta</td></tr>
+        <tr><td>Basicos</td><td>Lead de estadio</td><td>overdrive -&gt; delay ping-pong em 1/4. -&gt; hall</td></tr>
+        <tr><td>Basicos</td><td>Orgao rotary</td><td>valvula -&gt; caixa rotativa (expressao: lento/rapido) -&gt; sala</td></tr>
+        <tr><td>Basicos</td><td>Funk wah</td><td>compressor -&gt; auto-wah -&gt; sala curta</td></tr>
+        <tr><td>Basicos</td><td>Wah no pedal</td><td>wah classico controlado pelo pedal de expressao</td></tr>
+        <tr><td>Basicos</td><td>Bateria comprimida</td><td>compressor rapido + densidade + sala</td></tr>
+        <tr><td>Delays e fita</td><td>Dub delay</td><td>eco de fita realimentado + mola no retorno</td></tr>
+        <tr><td>Delays e fita</td><td>Surf spring</td><td>mola bem molhada + slapback</td></tr>
+        <tr><td>Delays e fita</td><td>Fita cassete</td><td>CHOW Tape com wow/flutter e degradacao + filtro lento</td></tr>
+        <tr><td>Delays e fita</td><td>Eco magnetico</td><td>Magneto: varias cabecas difusas, no tempo (1/4)</td></tr>
+        <tr><td>Delays e fita</td><td>Reverso</td><td>delay reverso em 1/2 + reverb Nonlinear reverse</td></tr>
+        <tr><td>Reverbs</td><td>Ambient shimmer</td><td>chorus + Shimmer (+12/+7) no retorno</td></tr>
+        <tr><td>Reverbs</td><td>Pad lavado</td><td>Cloud longo -&gt; Bloom: a cauda floresce devagar</td></tr>
+        <tr><td>Reverbs</td><td>Swell de cordas</td><td>volume sobe sozinho em cada nota, dentro de um reverb</td></tr>
+        <tr><td>Reverbs</td><td>Coral</td><td>Chorale: cauda cantando a vogal O</td></tr>
+        <tr><td>Reverbs</td><td>Plate vocal</td><td>plate brilhante com pre-delay</td></tr>
+        <tr><td>Reverbs</td><td>Bateria gated</td><td>Nonlinear Gate: cauda cortada anos 80</td></tr>
+        <tr><td>Reverbs</td><td>Sala de concerto</td><td>Reflections (Concert Venue) + hall grande no retorno</td></tr>
+        <tr><td>Granular</td><td>Mosaico</td><td>Micro Mosaic: micro-loops em camadas + hall</td></tr>
+        <tr><td>Granular</td><td>Nevoa</td><td>Micro Haze: nuvem de graos (expressao: Hold congela)</td></tr>
+        <tr><td>Granular</td><td>Arpejo granular</td><td>Micro Arp no tempo + delay 1/8.</td></tr>
+        <tr><td>Roteamento</td><td>Partes separadas</td><td>A: drive+delay na cadeia 1; B: hall na cadeia 2; C/D secas</td></tr>
+        <tr><td>Roteamento</td><td>Serie: lo-fi no reverb</td><td>cadeia 1 (reverb) em serie com a 2 (fita + lo-fi)</td></tr>
+        <tr><td>Algoritmos</td><td>Divide e junta</td><td>cadeia 1 em 1 -&gt; (2 | 3) -&gt; 4: compressor -&gt; (delay | chorus) -&gt; hall</td></tr>
+        <tr><td>Algoritmos</td><td>Drive com reverb ao lado</td><td>ligacao Serie + direto: o drive sai e alimenta um Cloud 100% molhado</td></tr>
+        <tr><td>Algoritmos</td><td>Tres ramos num plate</td><td>cadeia 1 em (1 | 2 | 3) -&gt; 4: fita | tremolo | chorus -&gt; plate</td></tr>
+        <tr><td>Algoritmos</td><td>Quatro paralelos</td><td>cadeia 1 com 4 efeitos lado a lado (a saida e a media)</td></tr>
+        <tr><td>Algoritmos</td><td>Delays em ramos</td><td>cadeia 1 em 1 -&gt; (2 | 3 | 4): drive -&gt; delay 1/4 | delay 1/8. | reverso; cadeia 2 = shimmer</td></tr>
+      </table></div>
+      <h3>Lista dos efeitos</h3>
+      <h4>Dinâmica</h4>
+      <div class="tablewrap"><table>
+        <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
+        <tr><td>Compressor</td><td>Compressor com medidor de redução de ganho</td><td>Threshold, Ratio, Attack, Release, Knee, Makeup</td></tr>
+        <tr><td>Noise gate</td><td>Fecha no silêncio</td><td>Threshold, Sust. agudo, Sust. grave, Ataque</td></tr>
+        <tr><td>Limiter (clip suave)</td><td>Limita os picos abaixo de um teto</td><td>Teto</td></tr>
+      </table></div>
+      <h4>Drive</h4>
+      <div class="tablewrap"><table>
+        <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
+        <tr><td>Overdrive</td><td>Drive de pedal</td><td>Drive, Highpass, Saida</td></tr>
+        <tr><td>Valvula</td><td>Saturação de válvula</td><td>Entrada, Valvula</td></tr>
+        <tr><td>Distorcao</td><td>Distorção com 5 curvas</td><td>Entrada, Curva, Saida</td></tr>
+        <tr><td>Saturacao</td><td>Densidade, do leve ao forte</td><td>Densidade, Highpass, Saida</td></tr>
+        <tr><td>Lo-fi</td><td>Reduz taxa e bits</td><td>Taxa, Bits</td></tr>
+      </table></div>
+      <h4>Fita</h4>
+      <div class="tablewrap"><table>
+        <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
+        <tr><td>Simulador de fita</td><td>Fita magnética completa: saturação, perdas, wow, flutter e desgaste</td><td>Drive, Saturacao, Bias, Tom, Velocidade, Espacamento, Gap, Espessura, Wow, Flutter, Desgaste, Intens.</td></tr>
+        <tr><td>Fita leve</td><td>Fita simples, mais barata de CPU</td><td>Entrada, Suavizar, Head bump, Flutter, Saida</td></tr>
+      </table></div>
+      <h4>Filtro</h4>
+      <div class="tablewrap"><table>
+        <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
+        <tr><td>EQ 3 bandas</td><td>Graves, médios e agudos, ±18 dB</td><td>Grave, Ganho, Medio, Ganho, Q, Agudo, Ganho</td></tr>
+        <tr><td>Wah</td><td>Pedal, automático pelo nível, ou por LFO</td><td>Modo, Posicao, Sensib., Rate, Faixa</td></tr>
+        <tr><td>Filtro com LFO</td><td>Filtro varrido, com sync no BPM</td><td>Tipo, Corte, Resson., Forma, Rate, Sync, Profund.</td></tr>
+      </table></div>
+      <h4>Modulação</h4>
+      <div class="tablewrap"><table>
+        <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
+        <tr><td>Chorus</td><td>Chorus denso e largo, de &quot;string machine&quot;</td><td>Rate, Depth</td></tr>
+        <tr><td>Phaser</td><td>Vales varridos por LFO</td><td>Notches, Rate, Min, Max, Razao, Largura, Depth, Feedback</td></tr>
+        <tr><td>Flanger</td><td>Atraso curto varrido, som de jato</td><td>Rate, Delay, Sweep, Depth, Feedback, Fase</td></tr>
+        <tr><td>Tremolo</td><td>Volume oscilando</td><td>Velocidade, Profund.</td></tr>
+        <tr><td>Auto-pan</td><td>Som indo de um lado a outro</td><td>Velocidade, Fase, Largura</td></tr>
+        <tr><td>Vibrato</td><td>Altura oscilando</td><td>Velocidade, Profund., FM vel., FM prof.</td></tr>
+        <tr><td>Ring mod</td><td>Multiplica por um oscilador</td><td>Freq E, Freq D, Soar</td></tr>
+        <tr><td>Rotary (Leslie)</td><td>Caixa rotativa, com chave lento/rápido e inércia</td><td>Velocidade, Lento, Rapido, Doppler, Tremolo, Drive, Largura</td></tr>
+      </table></div>
+      <h4>Pitch</h4>
+      <div class="tablewrap"><table>
+        <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
+        <tr><td>Pitch shifter</td><td>Muda a altura de −24 a +24 semitons</td><td>Semitons, Cents, Janela</td></tr>
+      </table></div>
+      <h4>Delay</h4>
+      <div class="tablewrap"><table>
+        <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
+        <tr><td>Delay de fita</td><td>Eco com filtros, saturação e wow no laço</td><td>Tempo E, Tempo D, Feedback, Ping-pong, Low cut, High cut, Drive, Wow</td></tr>
+        <tr><td>Delay digital</td><td>Repetições limpas, ping-pong e sync</td><td>Tempo, Sync, Feedback, Ping-pong, High cut, Low cut</td></tr>
+        <tr><td>Delay reverso</td><td>Pedaços tocados de trás para frente</td><td>Tempo, Sync, Feedback</td></tr>
+      </table></div>
+      <h4>Reverb</h4>
+      <div class="tablewrap"><table>
+        <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
+        <tr><td>Reverb classico</td><td>Room, Hall ou Plate, com freeze</td><td>Tipo, Tamanho, Damping, Largura, Pre-delay, Freeze</td></tr>
+        <tr><td>Hall</td><td>Sala grande</td><td>Decay, Pre-delay, Tamanho, Tom, Difusao, Mod, Reflexoes</td></tr>
+        <tr><td>Room</td><td>Sala pequena</td><td>Decay, Pre-delay, Tamanho, Tom, Difusao, Grave, Reflexoes</td></tr>
+        <tr><td>Plate</td><td>Placa metálica</td><td>Placa, Decay, Pre-delay, Tom</td></tr>
+        <tr><td>Reflections</td><td>Primeiras reflexões de 8 salas</td><td>Sala, Tamanho, Largura, Tom</td></tr>
+        <tr><td>Cloud</td><td>Cauda longa e modulada</td><td>Decay, Tamanho, Mod, Difusao, Tom, Pre-delay</td></tr>
+        <tr><td>Spring</td><td>Mola de amplificador</td><td>Tamanho, Decay, Reflexoes, Spin, Escuro, Caos</td></tr>
+        <tr><td>Swell</td><td>O volume sobe sozinho a cada nota</td><td>Subida, Sensib., Decay, Tom, Reverb</td></tr>
+        <tr><td>Bloom</td><td>A cauda floresce depois do ataque</td><td>Decay, Laco, Florescer, Tom</td></tr>
+        <tr><td>Chorale</td><td>A cauda canta uma vogal</td><td>Decay, Vogal, Resson., Coro, Tom, Tamanho</td></tr>
+        <tr><td>Shimmer</td><td>A cauda sobe de altura a cada volta</td><td>Decay, Voz 1, Voz 2, Brilho, Tom, Tamanho</td></tr>
+        <tr><td>Magneto</td><td>Eco de 4 cabeças difuso</td><td>Tempo, Sync, Cabecas, Feedback, Difusao, Decay, Tom, Wow</td></tr>
+        <tr><td>Nonlinear</td><td>Reverse, Swoosh, Ramp e Gate</td><td>Forma, Tempo, Difusao, Tom</td></tr>
+      </table></div>
+      <h4>Granular</h4>
+      <div class="tablewrap"><table>
+        <tr><th>Efeito</th><th>O que faz</th><th>Ajustes</th></tr>
+        <tr><td>Micro (granular)</td><td>Grãos e micro-loops em 11 variações</td><td>Variacao, Atividade, Forma, Repeticoes, Tempo, Sync, Altura, Abertura, Filtro, Espaco, Hold, Variar</td></tr>
+      </table></div>
+      <h3>As variações do Micro</h3>
+      <p>O Micro grava continuamente os últimos 6 segundos e toca pedaços. <strong>Hold</strong> congela o que foi gravado.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Variação</th><th>O que faz</th></tr>
+        <tr><td>Mosaic</td><td>Micro-loops em camadas</td></tr>
+        <tr><td>Seq</td><td>Micro-loops em sequência, no tempo</td></tr>
+        <tr><td>Glide</td><td>Micro-loops deslizando de altura</td></tr>
+        <tr><td>Haze</td><td>Nuvem de grãos</td></tr>
+        <tr><td>Tunnel</td><td>Drone que segue a entrada</td></tr>
+        <tr><td>Strum</td><td>Grãos disparados por ataques</td></tr>
+        <tr><td>Blocks</td><td>Repetições cortadas</td></tr>
+        <tr><td>Interrupt</td><td>Interrupções no som</td></tr>
+        <tr><td>Arp</td><td>Grãos em arpejo</td></tr>
+        <tr><td>Pattern</td><td>Delays múltiplos em padrão rítmico</td></tr>
+        <tr><td>Warp</td><td>Delays múltiplos entortando a altura</td></tr>
+      </table></div>
+    </section>
+
+    <section id="configuracoes">
+      <h2><span class="num">17</span>Configurações</h2>
+      <p class="lede">O botão embaixo do logo. Tudo fica salvo no programa, não no patch.</p>
+      <div class="tablewrap"><table>
+        <tr><th>Opção</th><th>O que faz</th></tr>
+        <tr><td>Oversampling 1×, 2×, 4×</td><td>Menos aliasing em FM agressiva e notas agudas, por ~2× ou ~4× de CPU nas vozes. Trocar corta as notas que estão soando</td></tr>
+        <tr><td>Seguir o clock MIDI</td><td>O BPM segue o clock quando ele chega</td></tr>
+        <tr><td>MPE (zona inferior)</td><td>Liga o MPE e a faixa de bend por nota</td></tr>
+        <tr><td>MIDI learn</td><td>CCs de macros, Volume, BPM e Expressão</td></tr>
+      </table></div>
+    </section>
+
+    <section id="arquivos">
+      <h2><span class="num">18</span>Onde ficam os arquivos</h2>
+      <div class="tablewrap"><table>
+        <tr><th>Conteúdo</th><th>Local</th></tr>
+        <tr><td>Patches</td><td class="mono">patches/*.json</td></tr>
+        <tr><td>Presets de efeitos</td><td class="mono">fxpresets/*.json</td></tr>
+        <tr><td>Presets de algoritmo</td><td class="mono">algorithms/*.json</td></tr>
+        <tr><td>Configurações</td><td class="mono">~/.config/mare-tranquillitatis/settings.json</td></tr>
+        <tr><td>Último estado dos efeitos</td><td class="mono">~/.config/mare-tranquillitatis/fxrack.json</td></tr>
+      </table></div>
+      <p>As três primeiras pastas são relativas a onde o programa foi aberto. São JSON legível, fáceis de copiar e compartilhar. Se você usou uma versão antiga, a configuração de <code>~/.config/dx7fm</code> é copiada na primeira execução, e a pasta original fica intacta.</p>
     </section>
 
     <section id="problemas">
-      <h2><span class="num">10</span>Solução de problemas</h2>
-
+      <h2><span class="num">19</span>Solução de problemas</h2>
       <h3>Sem áudio</h3>
-      <p>Confira a barra de status: se aparecer "Audio: PARADO" com uma mensagem de erro, o ALSA não conseguiu abrir o dispositivo <code>default</code>. Rode <code>aplay -l</code> num terminal pra ver os dispositivos disponíveis — se o seu não for o default do sistema, isso ainda não é configurável direto na interface nesta versão (ver seção 11).</p>
-
-      <h3>MIDI não conecta</h3>
-      <p>Confirme que a porta apareceu: <code>aconnect -l</code> deve listar um cliente chamado <span class="kbd">Mare Tranquillitatis</span>. Se não aparecer, o ALSA sequencer pode não ter permissão — verifique se seu usuário está no grupo <code>audio</code>.</p>
-
-      <h3>Estalos ou cortes no áudio (xruns)</h3>
-      <p>O contador de <strong>xruns</strong> na barra de status sobe quando o buffer de áudio não é preenchido a tempo. Costuma indicar CPU sobrecarregada — feche outros programas pesados, ou reduza o número de vozes/partes ativas simultaneamente.</p>
-      <p>O áudio usa vários núcleos: as vozes são divididas entre algumas threads (cerca de uma por núcleo físico, até 7 além da thread de áudio). Pra mudar isso, abra o app com a variável <span class="mono">DX7FM_THREADS</span> (ex.: <span class="mono">DX7FM_THREADS=0 ./mare_tranquillitatis</span> pra usar uma thread só). As threads de áudio tentam prioridade de tempo real; se o seu usuário não tiver permissão (<span class="mono">rtprio</span> em <span class="mono">/etc/security/limits.conf</span>, ou o grupo <span class="mono">audio</span>/<span class="mono">realtime</span>), elas rodam com prioridade normal — funciona, só fica mais sujeito a xruns com o PC carregado.</p>
-
-      <h3>Nenhum som ao tocar uma nota</h3>
-      <p>Confira: a parte está <strong>Habilitada</strong>? O <strong>output mix</strong> de pelo menos um operador está acima de zero (ele precisa ser uma portadora)? O <strong>nível</strong> da parte não está em zero?</p>
+      <p>Se o topo mostrar <em>Audio PARADO</em> com um erro, o ALSA não abriu o dispositivo <code>default</code>. Rode <code>aplay -l</code> para ver os dispositivos. Por enquanto não dá para escolher outro dentro do programa.</p>
+      <h3>Não soa ao tocar</h3>
+      <ul>
+        <li>A parte está <strong>Habilitada</strong>? O canal MIDI confere?</li>
+        <li>O algoritmo tem uma portadora? O operador dela está em <strong>On</strong>, com nível acima de 0?</li>
+        <li>O aviso de <strong>Solo</strong> está aparecendo? Tire o solo.</li>
+        <li>A nota está dentro do <strong>Key range</strong>? Nível da parte e Volume estão acima do mínimo?</li>
+        <li>Na aba Efeitos, a parte tem <strong>Seco</strong> ou um <strong>envio</strong> acima de 0? A cadeia sai pela ligação escolhida?</li>
+      </ul>
+      <h3>O MIDI não chega</h3>
+      <ul>
+        <li>Olhe a luz ao lado do menu MIDI. Se não acender, confira o dispositivo escolhido no menu.</li>
+        <li>Se o topo mostrar <em>MIDI indisponível</em>, o sequencer do ALSA não abriu. Confira se seu usuário está no grupo <code>audio</code>.</li>
+        <li>Um dispositivo escolhido no menu bloqueia todos os outros, inclusive conexões feitas com <code>aconnect</code>. Para usá-las, escolha <strong>Nenhum</strong>.</li>
+      </ul>
+      <h3>Um controle não faz nada</h3>
+      <p>Aftertouch, mod wheel, macros e CCs só agem com uma rota na <a href="#matriz">matriz</a>. O FX EG só age em <a href="#efeito-op">alguns efeitos</a>. Um CC aprendido no MIDI learn deixa de ter a função normal.</p>
+      <h3>Estalos (xruns)</h3>
+      <p>O contador de xruns sobe quando o buffer não é preenchido a tempo, em geral por falta de CPU. Feche programas pesados, use menos vozes, volte o oversampling para 1× ou troque efeitos caros: os reverbs Cloud, Swell e Bloom gastam cerca de 9% de um núcleo por pedal, e o Simulador de fita, cerca de 4,5%.</p>
+      <p>As vozes usam vários núcleos, e a variável <code>DX7FM_THREADS</code> muda isso (<code>DX7FM_THREADS=0</code> usa uma thread só). Sem permissão de tempo real (<code>rtprio</code> em <code>/etc/security/limits.conf</code>, ou o grupo <code>audio</code>/<code>realtime</code>), as threads rodam com prioridade normal e ficam mais sujeitas a xruns.</p>
+      <h3>O patch ou preset não aparece na lista</h3>
+      <p>O programa foi aberto de outra pasta (<a href="#arquivos">veja onde ficam</a>).</p>
     </section>
 
     <section id="limites">
-      <h2><span class="num">11</span>Limitações conhecidas desta versão</h2>
+      <h2><span class="num">20</span>Limitações</h2>
       <ul>
-        <li>Sem seletor de dispositivo de áudio na interface — usa sempre <code>default</code> do ALSA.</li>
-        <li>Os patches ficam só na pasta <code>patches/</code>; não há seletor de arquivos pra abrir de outro lugar (copie o arquivo pra essa pasta).</li>
-        <li>As curvas de envelope, escala por tecla e velocidade são aproximações próprias — não as tabelas exatas da ROM do hardware original.</li>
-        <li>Ainda não testado numa distro Linux verdadeiramente minimal — validado até aqui num desktop Arch/EndeavourOS com as bibliotecas já instaladas.</li>
+        <li>O áudio usa sempre o dispositivo <code>default</code> do ALSA.</li>
+        <li>Só há entrada MIDI. Não há saída MIDI nem entrada de áudio.</li>
+        <li>Não há reprodução de samples: o granular Micro é um efeito, não um oscilador.</li>
+        <li>A matriz não alcança os efeitos da pedaleira; só o pedal de expressão controla um parâmetro de efeito.</li>
+        <li>Dois aparelhos MIDI idênticos, com o mesmo nome, não são diferenciados no menu.</li>
+        <li>Envelopes, key scaling e velocity são aproximações próprias, não as tabelas exatas do hardware original.</li>
+        <li>Os patches ficam só em <code>patches/</code>; para abrir um de outro lugar, copie o arquivo para lá.</li>
       </ul>
-      <p style="font-size:13.5px;color:var(--text-muted)">Para detalhes técnicos de implementação, decisões de arquitetura e o roteiro completo de desenvolvimento, veja <code>dx7fm/docs/ARQUITETURA.txt</code> no repositório.</p>
+      <p>Detalhes técnicos e decisões de projeto estão em <code>docs/ARQUITETURA.txt</code>.</p>
+    </section>
+
+    <section id="fabrica">
+      <h2><span class="num">21</span>Anexo: banco de fábrica</h2>
+      <p class="lede">Os 39 patches do botão Fábrica. As descrições são as que o programa mostra.</p>
+      <p><em>Estilo DX7</em> foi programado em parâmetros do DX7, inspirado nos timbres clássicos; <em>Estilo SY77</em> usa ondas AFM, filtros e camadas. Nenhum é cópia dos sons originais.</p>
+      <h3>Demonstracao</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Patch</th><th>Categoria</th><th>Descrição</th></tr>
+        <tr><td>Piano Eletrico FM</td><td>Teclas</td><td>dois pares portadora/modulador + tine de razao 14 que some rapido</td></tr>
+        <tr><td>Baixo Filtrado</td><td>Baixo</td><td>mono com glide legato, passa-baixa por operador que fecha no ataque, sub-oitava</td></tr>
+        <tr><td>Sino de Vidro</td><td>Sinos</td><td>aditiva com modos de barra livre; morph pros modos graves com o FX EG</td></tr>
+        <tr><td>Pad Wavetable</td><td>Pad</td><td>2 wavetables serra/seno com morph espectral num LFO global sincronizado; unison</td></tr>
+        <tr><td>Arpejo Pluck Comb</td><td>Movimento</td><td>comb filter afinado na nota + arpejador sobe/desce 2 oitavas com swing</td></tr>
+        <tr><td>Algoritmos em Movimento</td><td>Movimento</td><td>morph entre 3 algoritmos varrido por envelope em loop no tempo</td></tr>
+        <tr><td>Lead Dobrado</td><td>Lead</td><td>wavefolder que abre no ataque, vibrato com atraso, mod wheel dobra mais</td></tr>
+        <tr><td>Metais FM</td><td>Metais</td><td>moduladores com ataque lento, velocity abre o brilho, pitch EG no ataque</td></tr>
+        <tr><td>Coro de Vogais</td><td>Pad</td><td>aditiva de formantes &#x27;a&#x27; -&gt; &#x27;o&#x27; na Macro 1 (Vogal)</td></tr>
+        <tr><td>Bleeps Sample-Hold</td><td>Movimento</td><td>LFO sample &amp; hold quantizado em semitons, sincronizado</td></tr>
+        <tr><td>Orgao Drawbar</td><td>Orgao</td><td>aditiva com drawbars + tremolo</td></tr>
+        <tr><td>Tambor de Membrana</td><td>Percussao</td><td>modos da membrana circular na aditiva + queda de afinacao no pitch EG</td></tr>
+      </table></div>
+      <h3>Estilo DX7</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Patch</th><th>Categoria</th><th>Descrição</th></tr>
+        <tr><td>DX Piano Eletrico</td><td>Teclas</td><td>algoritmo 5 do DX7: par do tom, par do tine (razao 14) e par desafinado com feedback</td></tr>
+        <tr><td>DX Metais</td><td>Metais</td><td>algoritmo 22: um modulador com feedback em 3 portadoras desafinadas; pitch EG sobe no ataque</td></tr>
+        <tr><td>DX Cordas</td><td>Cordas</td><td>algoritmo 2: duas pilhas de ataque lento desafinadas, vibrato que entra depois</td></tr>
+        <tr><td>DX Baixo</td><td>Baixo</td><td>algoritmo 16: uma portadora com tres ramos de modulacao; estalo de razao 5 no ataque</td></tr>
+        <tr><td>DX Marimba</td><td>Sinos</td><td>algoritmo 5: portadora + parcial em 3.98 (o modo de uma barra de madeira) + clique</td></tr>
+        <tr><td>DX Sinos Tubulares</td><td>Sinos</td><td>algoritmo 5: moduladores de razao 3.5 (inarmonico), decaimento longo e um hum uma oitava abaixo</td></tr>
+        <tr><td>DX Cravo</td><td>Teclas</td><td>algoritmo 5: tres pares brilhantes (razoes 3, 5 e 7), rate scaling faz as agudas decairem antes</td></tr>
+        <tr><td>DX Clavinete</td><td>Teclas</td><td>algoritmo 3: duas pilhas de 3 operadores, velocity abre o brilho, release seco</td></tr>
+        <tr><td>DX Vibrafone</td><td>Sinos</td><td>algoritmo 5: ding de razao 4, decaimento longo e tremolo de motor (LFO na amplitude)</td></tr>
+        <tr><td>DX Flauta</td><td>Sopros</td><td>algoritmo 5: tom quase senoidal + sopro (o 6 virou ruido, que modula o 5 em volta da nota)</td></tr>
+        <tr><td>DX Koto</td><td>Cordas</td><td>algoritmo 5: pluck brilhante (moduladores que somem rapido) com corpo levemente desafinado</td></tr>
+      </table></div>
+      <h3>Estilo SY77</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Patch</th><th>Categoria</th><th>Descrição</th></tr>
+        <tr><td>SY Pad Cristal</td><td>Pad</td><td>ataque de sino FM sobre um pad de onda meio-seno (AFM) com filtro que abre devagar</td></tr>
+        <tr><td>SY Cordas Analogicas</td><td>Cordas</td><td>4 serras (wavetable sem aliasing) desafinadas, filtro com envelope lento e vibrato atrasado</td></tr>
+        <tr><td>SY Piano AFM</td><td>Teclas</td><td>portadoras com ondas AFM (seno retificado e meio seno) + martelo de razao 7; velocity abre o brilho</td></tr>
+        <tr><td>SY Baixo Ressonante</td><td>Baixo</td><td>serra com passa-baixa ressonante (Q 6) que fecha rapido + sub quadrado; mono com glide</td></tr>
+        <tr><td>SY Coro Etereo</td><td>Pad</td><td>serras em dois passa-bandas fixos (formantes ~750 e ~1200 Hz), unison e pan girando num LFO global</td></tr>
+        <tr><td>SY Varredura Metalica</td><td>Movimento</td><td>FM inarmonico (razoes 2.01 e 7) num passa-baixa ressonante varrido por LFO lento; pan em movimento</td></tr>
+      </table></div>
+      <h3>Originais</h3>
+      <div class="tablewrap"><table>
+        <tr><th>Patch</th><th>Categoria</th><th>Descrição</th></tr>
+        <tr><td>Expressivo MPE</td><td>Lead</td><td>slide (CC74) abre o filtro, pressao abre o brilho; sem MPE, aftertouch e mod wheel fazem o mesmo</td></tr>
+        <tr><td>Baixo Wobble</td><td>Baixo</td><td>LFO sincronizado (1/8 tercina) varre o passa-baixa ressonante; mono</td></tr>
+        <tr><td>Pad Gate Ritmico</td><td>Movimento</td><td>LFO quadrado global em 1/16 no volume: o acorde pulsa junto, na grade do compasso</td></tr>
+        <tr><td>Sinos em Anel</td><td>Sinos</td><td>ring mod (efeito do operador) com um seno de razao 2.76: soma e diferenca inarmonicas</td></tr>
+        <tr><td>Pad Desvio de Frequencia</td><td>Pad</td><td>duas serras, uma deslocada 1.3 Hz por frequency shifter: batimento tipo phaser, sem LFO</td></tr>
+        <tr><td>Teclas Lo-Fi</td><td>Teclas</td><td>piano eletrico FM num bitcrusher (8 bits, ~11 kHz) nas portadoras</td></tr>
+        <tr><td>Feedback Cruzado</td><td>Movimento</td><td>operadores 1 e 2 se modulam em laco (a matriz permite); Macro 1 &#x27;Caos&#x27; leva do tom ao ruido</td></tr>
+        <tr><td>Kalimba Aditiva</td><td>Sinos</td><td>aditiva com modos de lingueta (1, 5.9, 12.1): os agudos somem em ~0.3 s pelo morph, a fundamental fica</td></tr>
+        <tr><td>Arpejo Aleatorio S&amp;H</td><td>Movimento</td><td>arpejador aleatorio (2 oitavas) + LFO S&amp;H sincronizado no filtro: cada passo com outro brilho</td></tr>
+        <tr><td>Sopro no Tubo</td><td>Sopros</td><td>ruido passando num comb filter afinado na nota (key track 100%): ar num tubo ressonante</td></tr>
+      </table></div>
     </section>
 
     <footer>
-      Mare Tranquillitatis — motor de síntese FM de 8 operadores e app standalone para Linux. Manual gerado em 2026-09-21.
+      Mare Tranquillitatis: sintetizador FM de 8 operadores para Linux. Manual atualizado em 1 de novembro de 2026.
     </footer>
   </main>
 </div>
