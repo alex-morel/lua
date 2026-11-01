@@ -25,6 +25,7 @@
 #include "../app/fx_factory.h"
 #include "../app/fx_rack_logic.h"
 #include "../app/algo_graph.h"
+#include "../app/midi_select.h"
 #include "dx7_fxrack_io.h"
 
 #include <algorithm>
@@ -3360,6 +3361,43 @@ static void testAlgoGraph() {
     }
 }
 
+// [2026-11-01] escolha da entrada MIDI
+static void testMidiInputPlan() {
+    using namespace dx7fm_app;
+    const std::vector<MidiSource> src = {{{20, 0}, "Teclado", "MIDI 1"}, {{24, 0}, "Pads", "MIDI 1"}, {{24, 1}, "Pads", "MIDI 2"}};
+    const MidiAddr kb{20, 0}, pads{24, 0}, ext{30, 0};
+    {
+        auto p = planMidiInputs(src, {ext}, {}, "");
+        check(p.connect.empty() && p.disconnect.empty() && p.acceptAll, "MIDI: Nenhum nao mexe em conexoes externas");
+        auto q = planMidiInputs(src, {kb, ext}, {kb}, "");
+        check(q.disconnect.size() == 1 && q.disconnect[0] == kb && q.acceptAll, "MIDI: Nenhum tira so o que o app conectou");
+    }
+    {
+        auto p = planMidiInputs(src, {pads}, {}, kMidiAllDevices);
+        check(p.connect.size() == 2 && p.disconnect.empty() && p.acceptAll, "MIDI: Todos conecta o que falta");
+    }
+    {
+        auto p = planMidiInputs(src, {pads, ext}, {pads}, "Teclado:MIDI 1");
+        const bool both = std::find(p.disconnect.begin(), p.disconnect.end(), pads) != p.disconnect.end() && std::find(p.disconnect.begin(), p.disconnect.end(), ext) != p.disconnect.end();
+        check(p.connect.size() == 1 && p.connect[0] == kb && both && !p.acceptAll && p.accept == kb && !p.selectedMissing, "MIDI: escolher um dispositivo deixa so ele");
+        auto q = planMidiInputs(src, {kb}, {kb}, "Teclado:MIDI 1");
+        check(q.connect.empty() && q.disconnect.empty(), "MIDI: ja conectado, nada a fazer");
+        auto r = planMidiInputs(src, {}, {}, "Pads:MIDI 2");
+        check(r.connect.size() == 1 && r.connect[0] == MidiAddr{24, 1}, "MIDI: portas do mesmo aparelho sao separadas");
+    }
+    {
+        auto p = planMidiInputs(src, {kb}, {kb}, "Sumiu:MIDI 1");
+        check(p.selectedMissing && !p.acceptAll && p.connect.empty() && p.disconnect.size() == 1, "MIDI: escolhido fora do ar nao cai em outro dispositivo");
+        // reconectou com outro numero: acha pelo nome
+        const std::vector<MidiSource> back = {{{33, 0}, "Teclado", "MIDI 1"}};
+        auto q = planMidiInputs(back, {}, {}, "Teclado:MIDI 1");
+        check(q.connect.size() == 1 && q.connect[0] == MidiAddr{33, 0} && !q.selectedMissing, "MIDI: reconectado com outro numero, acha pelo nome");
+    }
+    AppSettings a;
+    a.midiDevice = "Teclado:MIDI 1";
+    check(settingsFromJson(settingsToJson(a)).midiDevice == "Teclado:MIDI 1" && settingsFromJson("{}").midiDevice.empty(), "MIDI: escolha salva; settings antigo = Nenhum");
+}
+
 static void testOpFxCombCurveMatchesDsp() {
     using dx7fm_app::opfx::combMagnitudeDb;
     float worst = 0.0f;
@@ -5902,6 +5940,7 @@ int main() {
     testModMatrixExpansion();
     testOperatorEnableSolo();
     testAlgoGraph();
+    testMidiInputPlan();
     testOpFxCombCurveMatchesDsp();
     testOpFxDefaultsAndSummary();
     testFxKeyTrackMovesFilterWithNote();

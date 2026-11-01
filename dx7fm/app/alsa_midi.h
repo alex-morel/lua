@@ -1,10 +1,12 @@
 #pragma once
 #include "midi_event.h"
+#include "midi_select.h"
 #include <alsa/asoundlib.h>
 #include <poll.h>
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
+#include <ctime>
 #include <functional>
 #include <string>
 #include <thread>
@@ -69,6 +71,58 @@ public:
     int portId() const { return port_; }
     const std::string& lastError() const { return lastError_; }
 
+    // [2026-11-01] Portas que podem mandar MIDI pra gente. Chamadas da thread da
+    // UI: consultas e inscricoes sao ioctls, nao tocam no buffer de entrada que
+    // a threadLoop le.
+    std::vector<MidiSource> listSources() const {
+        std::vector<MidiSource> out;
+        if (!seq_) return out;
+        snd_seq_client_info_t* ci;
+        snd_seq_port_info_t* pi;
+        snd_seq_client_info_alloca(&ci);
+        snd_seq_port_info_alloca(&pi);
+        const int self = snd_seq_client_id(seq_);
+        const unsigned need = SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ;
+        snd_seq_client_info_set_client(ci, -1);
+        while (snd_seq_query_next_client(seq_, ci) >= 0) {
+            const int c = snd_seq_client_info_get_client(ci);
+            if (c == self || c == SND_SEQ_CLIENT_SYSTEM) continue;
+            snd_seq_port_info_set_client(pi, c);
+            snd_seq_port_info_set_port(pi, -1);
+            while (snd_seq_query_next_port(seq_, pi) >= 0) {
+                const unsigned caps = snd_seq_port_info_get_capability(pi);
+                if ((caps & need) != need || (caps & SND_SEQ_PORT_CAP_NO_EXPORT)) continue;
+                out.push_back({{c, snd_seq_port_info_get_port(pi)}, snd_seq_client_info_get_name(ci), snd_seq_port_info_get_name(pi)});
+            }
+        }
+        return out;
+    }
+    // quem esta inscrito na nossa porta (inclusive por aconnect)
+    std::vector<MidiAddr> subscribers() const {
+        std::vector<MidiAddr> out;
+        if (!seq_) return out;
+        snd_seq_query_subscribe_t* q;
+        snd_seq_query_subscribe_alloca(&q);
+        snd_seq_addr_t root{static_cast<unsigned char>(snd_seq_client_id(seq_)), static_cast<unsigned char>(port_)};
+        snd_seq_query_subscribe_set_root(q, &root);
+        snd_seq_query_subscribe_set_type(q, SND_SEQ_QUERY_SUBS_WRITE);
+        snd_seq_query_subscribe_set_index(q, 0);
+        while (snd_seq_query_port_subscribers(seq_, q) >= 0) {
+            const snd_seq_addr_t* a = snd_seq_query_subscribe_get_addr(q);
+            out.push_back({a->client, a->port});
+            snd_seq_query_subscribe_set_index(q, snd_seq_query_subscribe_get_index(q) + 1);
+        }
+        return out;
+    }
+    bool connectFrom(const MidiAddr& a) { return seq_ && snd_seq_connect_from(seq_, port_, a.client, a.port) >= 0; }
+    bool disconnectFrom(const MidiAddr& a) { return seq_ && snd_seq_disconnect_from(seq_, port_, a.client, a.port) >= 0; }
+    // so aceita eventos desta porta (desconectar nao basta: um app pode mandar direto)
+    void acceptOnly(const MidiAddr& a) { accept_.store((a.client << 8) | (a.port & 0xFF), std::memory_order_relaxed); }
+    void acceptNone() { accept_.store(kAcceptNone, std::memory_order_relaxed); }
+    void acceptAll() { accept_.store(kAcceptAll, std::memory_order_relaxed); }
+    // quando chegou o ultimo evento (segundos, relogio monotonico), pra luz de atividade
+    double lastEventSec() const { return lastEventSec_.load(std::memory_order_relaxed); }
+
 private:
     void threadLoop() {
         int npfd = snd_seq_poll_descriptors_count(seq_, POLLIN);
@@ -91,6 +145,13 @@ private:
     }
 
     void dispatch(const snd_seq_event_t* ev) {
+        const int accept = accept_.load(std::memory_order_relaxed);
+        if (accept != kAcceptAll && accept != ((ev->source.client << 8) | ev->source.port)) return;
+        if (ev->type != SND_SEQ_EVENT_CLOCK) { // o clock chega sem parar: a luz nao diria nada
+            timespec ts{};
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            lastEventSec_.store(static_cast<double>(ts.tv_sec) + 1e-9 * static_cast<double>(ts.tv_nsec), std::memory_order_relaxed);
+        }
         MidiEvent me;
         bool valid = true;
         switch (ev->type) {
@@ -144,6 +205,9 @@ private:
     std::thread thread_;
     std::atomic<bool> running_{false};
     std::string lastError_;
+    static constexpr int kAcceptAll = -1, kAcceptNone = -2;
+    std::atomic<int> accept_{kAcceptAll};
+    std::atomic<double> lastEventSec_{0.0};
 };
 
 } // namespace dx7fm_app

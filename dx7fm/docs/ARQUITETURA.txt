@@ -2575,6 +2575,13 @@ snd_pcm_recover() (contabilizado em underruns(), mostrado na UI).
 
 13.3 BACKEND DE MIDI (app/alsa_midi.h -- AlsaMidiIn)
 
+[2026-11-01] Escolha da entrada: settings.midiDevice ("" nenhum, "*" todos, ou
+"cliente:porta" pelo NOME, pois os numeros mudam ao reconectar).
+planMidiInputs (app/midi_select.h, testado no demo) diz o que conectar e
+desconectar; SyncMidiInputs roda a cada 1 s e acompanha dispositivos entrando e
+saindo. Com um dispositivo escolhido, AlsaMidiIn tambem descarta eventos de
+outras fontes. Trocar a fonte manda AllNotesOff (nota presa nao receberia o off).
+
 Cria uma porta ALSA sequencer de ENTRADA ("Mare Tranquillitatis":"input") que aparece
 pra outros apps/hardware se conectarem (via `aconnect`, `qjackctl`,
 `aconnectgui`, ou automaticamente em hosts que fazem isso). Usa poll()

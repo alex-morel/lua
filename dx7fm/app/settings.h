@@ -44,6 +44,7 @@ struct AppSettings {
     std::string sclPath[4], kbmPath[4]; // por parte (A..D)
     bool mpe = false;            // [2026-10-28] MPE zona inferior (mpe.h)
     float mpeBendRange = 48.0f;  // bend por nota, semitons
+    std::string midiDevice;      // [2026-11-01] entrada MIDI; ver midi_select.h ("" = nenhum, "*" = todos)
 
     int ccFor(CcTarget t) const {
         for (const auto& m : cc) if (m.target == t) return m.cc;
@@ -108,6 +109,7 @@ inline std::string settingsToJson(const AppSettings& s) {
     j.set("tuning", std::move(tun));
     j.set("mpe", JsonValue::makeBool(s.mpe));
     j.set("mpeBendRange", JsonValue::makeNumber(s.mpeBendRange));
+    j.set("midiDevice", JsonValue::makeString(s.midiDevice));
     return j.dump();
 }
 
@@ -120,6 +122,7 @@ inline AppSettings settingsFromJson(const std::string& text) {
     s.midiClock = j.boolAt("midiClock", true);
     s.mpe = j.boolAt("mpe", false);
     s.mpeBendRange = std::clamp(static_cast<float>(j.numberAt("mpeBendRange", 48.0)), 1.0f, 96.0f);
+    s.midiDevice = j.stringAt("midiDevice", "");
     if (auto* cc = j.find("cc"))
         for (size_t i = 0; i < cc->arraySize(); ++i) {
             const JsonValue& e = cc->at(i);

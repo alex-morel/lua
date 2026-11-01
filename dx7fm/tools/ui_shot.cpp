@@ -16,6 +16,7 @@
 //   drag:X1,Y1,X2,Y2  arrasta com o botao esquerdo
 //   rclick:X,Y     clique com o botao direito
 //   ctrlz          Ctrl+Z
+//   midi:          abre a porta ALSA, pra mostrar o menu MIDI
 //   wheel:N        roda do mouse N passos pra baixo, com o mouse na lateral direita
 #define main dx7fm_app_main
 #include "../app/main.cpp"
@@ -111,6 +112,9 @@ int main(int argc, char** argv) {
             }
             io.AddMouseButtonEvent(0, false);
             frame(app, renderer);
+        } else if (kind == "midi") { // abre a porta MIDI de verdade (sem tocar nada)
+            app.midiIn.start("ui_shot", "input", [](const MidiEvent&) {});
+            SyncMidiInputs(app, true);
         } else if (kind == "ctrlz") {
             io.AddKeyEvent(ImGuiMod_Ctrl, true);
             io.AddKeyEvent(ImGuiKey_LeftCtrl, true);

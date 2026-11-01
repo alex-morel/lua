@@ -76,6 +76,13 @@ struct AppState {
     Synth synth;
     AlsaAudioOut audioOut;
     AlsaMidiIn midiIn;
+    // [2026-11-01] escolha da entrada MIDI (settings.midiDevice)
+    std::vector<dx7fm_app::MidiSource> midiSources;
+    std::vector<dx7fm_app::MidiAddr> midiOurs; // conexoes que o app fez
+    bool midiMissing = false;
+    double midiNextScan = 0.0;
+    dx7fm_app::MidiAddr midiLastAccept;
+    bool midiLastAcceptAll = true;
     EventQueue eventQueue;
     PartRoutingCache routing[kNumParts];
     NoteRouting noteRouting; // so a audio thread toca aqui
@@ -2110,6 +2117,85 @@ void DrawSettingsPopup(AppState& app) {
     ImGui::EndPopup();
 }
 
+// [2026-11-01] Aplica settings.midiDevice: conecta/desconecta conforme o plano e
+// acompanha dispositivos entrando e saindo (a cada 1 s, ou ja se force).
+void SyncMidiInputs(AppState& app, bool force) {
+    if (!app.midiIn.isOpen()) return;
+    const double now = ImGui::GetTime();
+    if (!force && now < app.midiNextScan) return;
+    app.midiNextScan = now + 1.0;
+    app.midiSources = app.midiIn.listSources();
+    std::sort(app.midiSources.begin(), app.midiSources.end(), [](const auto& a, const auto& b) { return a.key() < b.key(); });
+    const auto plan = dx7fm_app::planMidiInputs(app.midiSources, app.midiIn.subscribers(), app.midiOurs, app.settings.midiDevice);
+    for (const auto& a : plan.disconnect) {
+        app.midiIn.disconnectFrom(a);
+        app.midiOurs.erase(std::remove(app.midiOurs.begin(), app.midiOurs.end(), a), app.midiOurs.end());
+    }
+    if (plan.acceptAll) app.midiIn.acceptAll();
+    else if (plan.selectedMissing) app.midiIn.acceptNone();
+    else app.midiIn.acceptOnly(plan.accept);
+    for (const auto& a : plan.connect)
+        if (app.midiIn.connectFrom(a)) app.midiOurs.push_back(a);
+    app.midiMissing = plan.selectedMissing;
+    // a fonte de eventos mudou: uma nota presa nunca receberia o note off
+    if (plan.acceptAll != app.midiLastAcceptAll || (!plan.acceptAll && !(plan.accept == app.midiLastAccept))) {
+        for (int p = 0; p < kNumParts; ++p) {
+            AppEvent e;
+            e.kind = AppEvent::Kind::AllNotesOff;
+            e.part = p;
+            app.eventQueue.push(e);
+        }
+        app.midiLastAcceptAll = plan.acceptAll;
+        app.midiLastAccept = plan.accept;
+    }
+}
+
+// Menu da entrada MIDI no topo da janela, com a luz de atividade
+void DrawMidiInputSelector(AppState& app) {
+    SyncMidiInputs(app, false);
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const bool active = static_cast<double>(ts.tv_sec) + 1e-9 * static_cast<double>(ts.tv_nsec) - app.midiIn.lastEventSec() < 0.15;
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = ImGui::GetFrameHeight();
+    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(p.x + 6.0f, p.y + h * 0.5f), 4.5f,
+                                                app.midiMissing ? ui::col::kAccent2 : active ? ui::col::kAccent : ui::rgb(60, 66, 80), 16);
+    ImGui::Dummy(ImVec2(14.0f, h));
+    ImGui::SetItemTooltip("Acende quando chega MIDI do dispositivo escolhido");
+    ImGui::SameLine(0, 2);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("MIDI");
+    ImGui::SameLine();
+    auto& sel = app.settings.midiDevice;
+    std::string preview = sel.empty() ? "Nenhum (conexao externa)" : sel == dx7fm_app::kMidiAllDevices ? "Todos os dispositivos" : sel;
+    if (app.midiMissing) preview += " (desconectado)";
+    ImGui::SetNextItemWidth(250);
+    if (ImGui::BeginCombo("##midiin", preview.c_str(), ImGuiComboFlags_HeightLarge)) {
+        if (ImGui::IsWindowAppearing()) SyncMidiInputs(app, true);
+        auto choose = [&](const std::string& key) {
+            if (key == sel) return;
+            sel = key;
+            dx7fm_app::saveSettings(app.settings);
+            SyncMidiInputs(app, true);
+        };
+        if (ImGui::Selectable("Nenhum (conexao externa)", sel.empty())) choose("");
+        ImGui::SetItemTooltip("O app nao conecta nada. Outros programas podem ligar na porta\n\"Mare Tranquillitatis:input\", por exemplo com aconnect.");
+        if (ImGui::Selectable("Todos os dispositivos", sel == dx7fm_app::kMidiAllDevices)) choose(dx7fm_app::kMidiAllDevices);
+        ImGui::Separator();
+        if (app.midiSources.empty()) ImGui::TextDisabled("nenhum dispositivo encontrado");
+        for (const auto& s : app.midiSources)
+            if (ImGui::Selectable(s.key().c_str(), s.key() == sel)) choose(s.key());
+        if (app.midiMissing) { // lembrado, mas nao plugado: continua na lista
+            ImGui::BeginDisabled();
+            ImGui::Selectable((sel + " (desconectado)").c_str(), true);
+            ImGui::EndDisabled();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip(app.midiMissing ? "O dispositivo escolhido nao esta plugado. Ele volta sozinho quando for reconectado."
+                                          : "De onde o synth recebe MIDI. A escolha fica salva.");
+}
+
 void DrawTopBar(AppState& app) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::rgb(24, 27, 35));
     ImGui::BeginChild("##header", ImVec2(0, 92), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
@@ -2141,8 +2227,8 @@ void DrawTopBar(AppState& app) {
             ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "(%s)", app.audioOut.lastError().c_str());
         }
         ImGui::SameLine(0, 18);
-        StatusChip(app.midiIn.isOpen(), app.midiIn.isOpen() ? "MIDI: porta ALSA Mare Tranquillitatis:input" : "MIDI indisponivel");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Conecte seu controlador com 'aconnect' ou no seu patchbay");
+        if (app.midiIn.isOpen()) DrawMidiInputSelector(app);
+        else StatusChip(false, "MIDI indisponivel");
         ImGui::TextDisabled("Teclado do PC: base nota %d (Z/X oitava)  canal", app.piano.baseNote());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(80);
@@ -2414,6 +2500,7 @@ int main(int, char**) {
         app.audioOut.start("default", actualRate, kPeriodFrames, render);
     }
     app.midiIn.start("Mare Tranquillitatis", "input", [&app](const MidiEvent& ev) { onMidiEvent(app, ev); });
+    SyncMidiInputs(app, true); // reconecta o dispositivo salvo
 
     bool running = true;
     while (running) {

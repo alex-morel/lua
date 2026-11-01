@@ -512,6 +512,7 @@ cmake --build dx7fm/build -j$(nproc)</code></pre>
 
       <h3>MIDI</h3>
       <p>O app cria uma porta ALSA sequencer de entrada chamada <span class="kbd">Mare Tranquillitatis:input</span>. Conecte seu controlador com:</p>
+      <p>O jeito mais simples é o menu <strong>MIDI</strong> no topo da janela: escolha o seu controlador, ou <strong>Todos os dispositivos</strong>. A escolha fica salva, e o dispositivo volta sozinho se for desconectado e reconectado; enquanto estiver fora, aparece <em>(desconectado)</em> e a luz fica laranja. Com um dispositivo escolhido, o synth só ouve esse dispositivo. A luz ao lado acende quando chega MIDI (o clock não conta). Em <strong>Nenhum (conexão externa)</strong>, o padrão, o app não conecta nada, e você pode ligar a porta por fora:</p>
       <pre><code>aconnect -l                 # lista as portas disponíveis
 aconnect '&lt;seu controlador&gt;' 'Mare Tranquillitatis'</code></pre>
       <p>Por padrão <strong>só a Parte A vem habilitada</strong>. B, C e D começam desligadas: marque <strong>Habilitada</strong> na aba delas pra empilhar camadas (layer) ou, com faixas de teclas diferentes, dividir o teclado (split).</p>
