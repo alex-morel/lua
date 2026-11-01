@@ -135,6 +135,7 @@ struct VoiceControllers {
     float cc01[4] = {};
     float randomNote = 0.0f;
     float alternate = 1.0f;
+    float seqMod = 0.0f; // [2026-11-01] valor do passo do sequencer (ModSource::SeqMod)
 };
 
 // A voz fisica completa: 8 operadores + PEG + 2 LFOs. NAO possui o patch,
@@ -218,6 +219,7 @@ public:
             peg_.configure(patch_->peg.rate, patch_->peg.level);
             peg_.noteOn(0.0f, static_cast<float>(patch_->peg.level[3]));
             noteAge_ = 0.0f;
+            seqModFresh_ = true;
             for (float& m : modEnvRateMul_) m = 1.0f;
             for (int k = 0; k < kNumLfos; ++k) {
                 lfos_[k].configure(patch_->lfo(k));
@@ -518,6 +520,13 @@ private:
         float pegSemis = pegNorm * patch_->peg.rangeOctaves * 12.0f;
         if (numRoutes_ > 0) noteAge_ = std::min(1.0f, noteAge_ + static_cast<float>(0.2 / sampleRate_));
 
+        // sequencer: o passo troca de valor de uma vez; ~3 ms de rampa evitam o clique
+        // (nota nova parte do valor certo)
+        if (numRoutes_ > 0) {
+            if (seqModFresh_) { seqModSmooth_ = controllers_.seqMod; seqModFresh_ = false; }
+            else seqModSmooth_ += (controllers_.seqMod - seqModSmooth_) * static_cast<float>(1.0 / (0.003 * sampleRate_));
+        }
+
         // 4. fontes da matriz de modulacao -> trims
         float levelTrim[kNumOps] = {};
         float fx1Trim[kNumOps] = {};
@@ -565,6 +574,7 @@ private:
                     break;
                 case ModSource::PegEnv:       srcVal = pegNorm; break;
                 case ModSource::Constant:     srcVal = 1.0f; break;
+                case ModSource::SeqMod:       srcVal = seqModSmooth_; break;
                 default: break;
             }
             float amount = srcVal * route.depth;
@@ -925,6 +935,8 @@ private:
     float lfoRateMul_[kNumLfos] = {1.0f, 1.0f, 1.0f, 1.0f}, lfoDepthMul_[kNumLfos] = {1.0f, 1.0f, 1.0f, 1.0f};
     float modEnvRateMul_[kNumModEnvs] = {1.0f, 1.0f, 1.0f};
     float noteAge_ = 0.0f;
+    float seqModSmooth_ = 0.0f;
+    bool seqModFresh_ = true;
     int soloOp_ = -1;
     float panMod_ = 0.0f;
     float patchGain_ = 1.0f; // [2026-10-29] dbToLinear(VoiceParams::volumeDb), no rebuildCache

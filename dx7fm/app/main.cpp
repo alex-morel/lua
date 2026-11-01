@@ -28,6 +28,7 @@
 #include "fx_factory.h"
 #include "fx_rack_ui.h"
 #include "algo_editor.h"
+#include "sequencer_ui.h"
 #include <chrono>
 #include "viz.h"
 #include "patch_browser.h"
@@ -141,6 +142,7 @@ struct AppState {
     int selectedOp = 0;
     int selectedAlgo = 0; // indice (0-based) no combo de presets de algoritmo
     dx7fm_app::algoed::AlgoEditor algoEd; // [2026-10-31] editor grafico de algoritmos
+    dx7fm_app::sequi::SeqUi seqUi;        // [2026-11-01] sequencer; ultimo estado em seqStatePath()
     int algoSlot = 0;          // [2026-10-24] slot do morph de algoritmos em edicao (0 = slot 1)
     bool algoMorphView = false; // diagrama mostra a posicao do morph em vez do slot em edicao
     // [ADICIONADO em 2026-09-23] estado do navegador de patches (so UI thread)
@@ -185,6 +187,7 @@ struct AppState {
 };
 
 const std::filesystem::path kPatchDir = "patches";
+const std::filesystem::path kSeqDir = "sequences"; // [2026-11-01] padroes do sequencer (usuario)
 const std::filesystem::path kAlgoPresetDir = "algorithms"; // [2026-10-31] presets de algoritmo (usuario)
 const std::filesystem::path kFxPresetDir = "fxpresets"; // [2026-10-29] presets do rack de efeitos (usuario)
 
@@ -1120,12 +1123,13 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
     bool changed = false;
     static const char* kSrc[] = {"None", "LFO1", "LFO2", "ModWheel", "ChannelAT", "PolyAT", "PitchBend", "Nota", "Velocity",
                                  "LFO3", "LFO4", "Env1", "Env2", "Env3", "Macro1", "Macro2", "Macro3", "Macro4", "Slide (MPE)",
-                                 "Sopro (CC2)", "Pe (CC4)", "Expressao (CC11)", "Pedal sustain", "Aleatorio/nota", "Alternado", "Tempo da nota",
-                                 "Env amplitude", "Env pitch", "Constante"};
-    static const char* kSrcTip[] = {"Sopro: CC2, 0..1", "Pe: CC4, 0..1", "Expressao: CC11, 0..1", "Pedal de sustain: 0 solto, 1 apertado",
+                                 "Sopro (CC2)", "Pé (CC4)", "Expressão (CC11)", "Pedal sustain", "Aleatório/nota", "Alternado", "Tempo da nota",
+                                 "Env amplitude", "Env pitch", "Constante", "Sequencer"};
+    static const char* kSrcTip[] = {"Sopro: CC2, 0..1", "Pé: CC4, 0..1", "Expressão: CC11, 0..1", "Pedal de sustain: 0 solto, 1 apertado",
                                     "Sorteia -1..1 no note on e fica fixo durante a nota", "+1 e -1 a cada nota da parte",
                                     "Sobe de 0 a 1 nos 5 s depois do note on", "Maior envelope de amplitude das portadoras, 0..1",
-                                    "Envelope de pitch da voz, -1..1 (centro 50)", "Sempre 1: um ajuste fixo do destino (combine com a profundidade)"};
+                                    "Envelope de pitch da voz, -1..1 (centro 50)", "Sempre 1: um ajuste fixo do destino (combine com a profundidade)",
+                                    "Valor de modulação do passo atual do sequencer desta parte, -1..1 (aba Sequencer)"};
     static const char* kDst[] = {"None", "OperatorLevel", "OperatorFx1", "OperatorFeedback", "VoicePitch", "OperatorMorph",
                                  "VoicePan", "VoiceLevel", "OperatorPitch", "OperatorFx2", "LfoRate", "LfoDepth", "AlgoMorph",
                                  "OperatorFmIn", "OperatorPhaseDist", "OperatorEgSpeed", "VoiceFmIn", "VoiceFx1", "VoiceFx2", "PegDepth", "ModEnvSpeed"};
@@ -1994,6 +1998,11 @@ void DrawPartPanel(AppState& app, int partIndex) {
 }
 // [2026-10-29] salva o ultimo estado do rack (debounce de 1 s; force = na saida)
 void saveFxRackStateIfDirty(AppState& app, bool force) {
+    auto& su = app.seqUi; // [2026-11-01] o sequencer salva junto, do mesmo jeito
+    if (su.saveDirty && (force || ImGui::GetTime() - su.changedAt >= 1.0)) {
+        su.saveDirty = false;
+        dx7fm::saveSeqFile(dx7fm_app::settingsPath().parent_path() / "sequencer.json", su.edit);
+    }
     auto& ui = app.fxUi;
     if (!ui.saveDirty || (!force && ImGui::GetTime() - ui.changedAt < 1.0)) return;
     ui.saveDirty = false;
@@ -2414,6 +2423,14 @@ void DrawMainUi(AppState& app, int forceTab = -1) {
             dx7fm_app::fxui::DrawFxRackPanel(app.fxUi, app.synth, hooks);
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Sequencer", nullptr, forceTab == 5 ? ImGuiTabItemFlags_SetSelected : 0)) {
+            dx7fm_app::sequi::SeqHooks hooks;
+            hooks.dir = kSeqDir;
+            hooks.partEnabled = [&app](int p) { return app.synth.part(p).enabled; };
+            hooks.enablePart = [&app](int p) { app.synth.part(p).enabled = true; publishPart(app, p); };
+            dx7fm_app::sequi::DrawSequencerPanel(app.seqUi, app.synth, hooks, app.synth.tempoBpm());
+            ImGui::EndTabItem();
+        }
         ImGui::EndTabBar();
     }
 
@@ -2454,6 +2471,15 @@ void initAppState(AppState& app) {
         }
         app.fxUi.committed = app.fxUi.edit;
         app.fxUi.saveDirty = false;
+    }
+    { // [2026-11-01] ultimo padrao do sequencer (sempre parado ao abrir)
+        SeqParams q;
+        if (dx7fm::loadSeqFile(dx7fm_app::settingsPath().parent_path() / "sequencer.json", q)) {
+            app.seqUi.edit = q;
+            app.seqUi.committed = q;
+            app.synth.setSequence(q);
+            app.seqUi.current = "(última sessão)";
+        }
     }
     for (int p = 0; p < kNumParts; ++p) {
         app.synth.part(p).enabled = (p == 0);

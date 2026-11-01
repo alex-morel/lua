@@ -194,7 +194,8 @@ enum class ModSource : uint8_t { None, LFO1, LFO2, ModWheel, ChannelAT, PolyAT, 
                                  // [2026-10-30] por nota: RandomNote -1..1 sorteado no note on; Alternate +1/-1 a
                                  // cada nota; NoteAge 0..1 em 5 s desde o note on; AmpEnv 0..1 = maior envelope de
                                  // amplitude das portadoras; PegEnv -1..1 = envelope de pitch; Constant = 1
-                                 RandomNote, Alternate, NoteAge, AmpEnv, PegEnv, Constant };
+                                 RandomNote, Alternate, NoteAge, AmpEnv, PegEnv, Constant,
+                                 SeqMod }; // [2026-11-01] valor de modulacao do passo atual do sequencer da parte, -1..1
 // OperatorMorph: [ADICIONADO em 2026-10-18], soma na posicao do morph A->B (Additive/Wavetable).
 // [ADICIONADOS em 2026-10-22, no fim]:
 //   VoicePan      soma no pan da voz (-1..1; +1 = toda pra direita)
@@ -622,7 +623,7 @@ inline void sanitize(VoiceParams& v) {
         e.division = static_cast<uint8_t>(std::min<int>(e.division, kNumLfoDivisions - 1));
     }
     for (auto& r : v.modMatrix) {
-        r.src = sanEnum(r.src, ModSource::Constant);
+        r.src = sanEnum(r.src, ModSource::SeqMod);
         r.dest = sanEnum(r.dest, ModDest::ModEnvSpeed);
         r.opIndex = std::clamp(r.opIndex, 0, modDestPerLfo(r.dest) ? kNumLfos - 1 : kNumOps - 1);
         r.depth = sanF(r.depth, -1.0f, 1.0f, 0.0f);

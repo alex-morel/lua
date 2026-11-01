@@ -16,6 +16,7 @@
 //   drag:X1,Y1,X2,Y2  arrasta com o botao esquerdo
 //   rclick:X,Y     clique com o botao direito
 //   ctrlz          Ctrl+Z
+//   render:N       renderiza N amostras no synth (o sequencer anda)
 //   midi:          abre a porta ALSA, pra mostrar o menu MIDI
 //   wheel:N        roda do mouse N passos pra baixo, com o mouse na lateral direita
 #define main dx7fm_app_main
@@ -112,6 +113,9 @@ int main(int argc, char** argv) {
             }
             io.AddMouseButtonEvent(0, false);
             frame(app, renderer);
+        } else if (kind == "render") {
+            std::vector<float> l(4096), r(4096);
+            for (int left = std::stoi(arg); left > 0; left -= 256) app.synth.renderBlock(l.data(), r.data(), std::min(left, 256));
         } else if (kind == "midi") { // abre a porta MIDI de verdade (sem tocar nada)
             app.midiIn.start("ui_shot", "input", [](const MidiEvent&) {});
             SyncMidiInputs(app, true);

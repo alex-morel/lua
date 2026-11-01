@@ -26,6 +26,7 @@
 #include "../app/fx_rack_logic.h"
 #include "../app/algo_graph.h"
 #include "../app/midi_select.h"
+#include "dx7_sequencer_io.h"
 #include "dx7_fxrack_io.h"
 
 #include <algorithm>
@@ -5498,6 +5499,122 @@ static void testLegacyConfigMigration() {
     fs::remove_all(base);
 }
 
+// [2026-11-01] sequencer de 4 tracks
+static std::vector<float> seqRender(Synth& s, int n) {
+    std::vector<float> x(static_cast<size_t>(n)), r(static_cast<size_t>(n));
+    for (int at = 0; at < n;) { const int len = std::min(256, n - at); s.renderBlock(x.data() + at, r.data() + at, len); at += len; }
+    return x;
+}
+static int firstSoundAfter(const std::vector<float>& x, size_t from) {
+    for (size_t i = from; i < x.size(); ++i) if (x[i] != 0.0f) return static_cast<int>(i);
+    return -1;
+}
+static void testSequencer() {
+    const int stepS = 24000; // 120 BPM, 1/4 = 0.5 s
+    auto setup = [](Synth& s) {
+        s.init(48000.0, 8);
+        s.setTempoBpm(120.0f);
+        for (int p = 0; p < 2; ++p) { auto& v = s.part(p).voice; v.matrix = AlgorithmMatrix{}; v.matrix.outputMix[0] = 1.0f; v.op[0].ampEG.rate[3] = 99; s.part(p).enabled = true; s.recompile(p); }
+    };
+    auto quarters = [](SeqTrack& t, int len) { t.length = static_cast<uint8_t>(len); t.division = 6; };
+    {
+        Synth s; setup(s);
+        SeqParams q;
+        quarters(q.track[0], 4);
+        for (int i : {0, 2}) { auto& st = q.track[0].step[i]; st.on = true; st.note = i == 0 ? 69 : 81; st.gate = 0.25f; }
+        s.setSequence(q);
+        check(s.seqPlayhead(0) == -1 && !s.seqIsPlaying(), "sequencer: parado no inicio");
+        auto silent = seqRender(s, 4800);
+        check(computeRms(silent, 0, 4800) == 0.0f, "sequencer: parado nao toca");
+        s.seqPlay(true);
+        auto x = seqRender(s, stepS * 4);
+        std::printf("  (sequencer: 1a nota na amostra %d)\n", firstSoundAfter(x, 0));
+        check(firstSoundAfter(x, 0) >= 0 && firstSoundAfter(x, 0) <= 2, "sequencer: o 1o passo toca ao dar play");
+        const int third = firstSoundAfter(x, stepS + stepS / 2);
+        std::printf("  (3o passo em %d, esperado %d)\n", third, stepS * 2);
+        check(std::abs(third - stepS * 2) <= 2, "sequencer: o passo cai na amostra certa, nao no bloco");
+        std::vector<float> a(x.begin() + 500, x.begin() + 5000), b(x.begin() + stepS * 2 + 500, x.begin() + stepS * 2 + 5000);
+        check(goertzelMagnitude(a, 440.0, 48000.0) > 10.0f * goertzelMagnitude(a, 880.0, 48000.0) && goertzelMagnitude(b, 880.0, 48000.0) > 10.0f * goertzelMagnitude(b, 440.0, 48000.0),
+              "sequencer: cada passo toca a sua nota");
+        check(computeRms(x, stepS / 2, 4800) < 0.02f * computeRms(x, 500, 4800), "sequencer: o gate solta a nota (25% do passo)");
+        const auto again = seqRender(s, 480);
+        check(firstSoundAfter(again, 0) >= 0 && s.seqPlayhead(0) == 0, "sequencer: volta ao 1o passo depois do comprimento");
+        s.seqPlay(false);
+        seqRender(s, 256);
+        auto after = seqRender(s, 24000);
+        check(s.seqPlayhead(0) == -1 && s.activeVoiceCount() == 0 && computeRms(after, 12000, 12000) == 0.0f, "sequencer: stop solta as notas");
+    }
+    { // tracks independentes, cada uma na sua parte, com tamanho e divisao proprios
+        Synth s; setup(s);
+        SeqParams q;
+        quarters(q.track[0], 2); q.track[0].step[0].on = true; q.track[0].step[0].note = 69; q.track[0].step[0].gate = 1.0f;
+        q.track[1].length = 3; q.track[1].division = 9; // 1/8
+        q.track[1].step[0].on = true; q.track[1].step[0].note = 76; q.track[1].step[0].gate = 0.5f;
+        s.setSequence(q);
+        s.seqPlay(true);
+        seqRender(s, 6000);
+        check(s.activeVoiceCount(0) == 1 && s.activeVoiceCount(1) == 1 && s.seqPlayhead(0) == 0 && s.seqPlayhead(1) == 0, "sequencer: cada track toca a sua parte");
+        seqRender(s, 12000 + 12000); // 30000 amostras: 1/4 = passo 1, 1/8 = passo 2 do ciclo de 3
+        check(s.seqPlayhead(0) == 1 && s.seqPlayhead(1) == 2, "sequencer: tracks com tamanho e divisao proprios");
+    }
+    { // mudo, swing e parte desligada
+        Synth s; setup(s);
+        SeqParams q;
+        quarters(q.track[0], 4); q.track[0].mute = true; q.track[0].step[0].on = true;
+        s.setSequence(q);
+        s.seqPlay(true);
+        check(computeRms(seqRender(s, 4800), 0, 4800) == 0.0f, "sequencer: track muda nao toca");
+        Synth w; setup(w);
+        SeqParams sw;
+        quarters(sw.track[0], 2); sw.track[0].swing = 0.5f;
+        for (auto i : {0, 1}) { sw.track[0].step[i].on = true; sw.track[0].step[i].gate = 0.25f; }
+        w.setSequence(sw);
+        w.seqPlay(true);
+        auto x = seqRender(w, stepS * 2);
+        const int second = firstSoundAfter(x, stepS / 2);
+        std::printf("  (swing 50%%: 2o passo em %d, esperado %d)\n", second, stepS + stepS / 2);
+        check(std::abs(second - (stepS + stepS / 2)) <= 2, "sequencer: swing atrasa o 2o passo");
+    }
+    { // a track move a matriz da propria parte; o passo sem nota tambem conta
+        Synth s; setup(s);
+        s.part(0).voice.modMatrix[0] = ModRoute{ModSource::SeqMod, ModDest::VoiceLevel, 0, 1.0f};
+        s.recompile(0);
+        SeqParams q;
+        quarters(q.track[0], 2); q.track[0].step[0].on = true; q.track[0].step[0].gate = 1.0f; q.track[0].step[0].mod = 0.0f;
+        q.track[0].step[1].mod = -1.0f;
+        q.track[0].step[1].on = true; q.track[0].step[1].gate = 1.0f;
+        s.setSequence(q);
+        s.seqPlay(true);
+        auto x = seqRender(s, stepS * 2);
+        const float a = computeRms(x, 2400, 4800), b = computeRms(x, stepS + 2400, 4800);
+        std::printf("  (fonte Sequencer: passo 0 = %.3f, passo -1 = %.3f)\n", a, b);
+        check(a > 0.05f && b < 0.01f * a, "sequencer: o valor do passo move a matriz da parte");
+    }
+    { // transporte: Start do clock recomeca
+        Synth s; setup(s);
+        SeqParams q; quarters(q.track[0], 4); q.track[0].step[0].on = true;
+        s.setSequence(q);
+        s.seqPlay(true);
+        seqRender(s, stepS + stepS / 2);
+        check(s.seqPlayhead(0) == 1, "sequencer: andou");
+        s.resetTransport();
+        seqRender(s, 256);
+        check(s.seqPlayhead(0) == 0, "sequencer: Start do clock volta pro 1");
+    }
+    {
+        SeqParams q;
+        q.track[2].length = 7; q.track[2].division = 3; q.track[2].swing = 0.3f; q.track[2].mute = true;
+        q.track[2].step[5].on = true; q.track[2].step[5].note = 72; q.track[2].step[5].velocity = 33; q.track[2].step[5].gate = 0.8f; q.track[2].step[5].mod = -0.5f;
+        SeqParams b;
+        const bool ok = seqFromString(seqToString(q), b);
+        check(ok && seqToString(b) == seqToString(q) && b.track[2].step[5].note == 72, "sequencer: padrao sobrevive ao JSON");
+        SeqParams c;
+        check(!seqFromString("{\"kind\":\"outra\"}", c) && !seqFromString("lixo", c), "sequencer: arquivo que nao e padrao e recusado");
+        const bool odd = seqFromString(R"({"kind":"sequence","tracks":[{"length":999,"swing":9,"steps":[{"on":true,"note":999,"velocity":0,"gate":-3,"mod":7}]}]})", c);
+        check(odd && c.track[0].length == 32 && c.track[0].swing == 0.75f && c.track[0].step[0].note == 127 && c.track[0].step[0].velocity == 1 && c.track[0].step[0].mod == 1.0f, "sequencer: valores fora da faixa saturam");
+    }
+}
+
 static void testMicroGranular() {
     auto tone = [](float hz, int len) { return [hz, len](int i) { return i < len ? 0.4f * std::sin(2.0f * kPi * hz * i / 48000.0f) : 0.0f; }; };
     // Hold: a entrada acaba em 1 s; sem Hold o Mosaic some, com Hold continua
@@ -5941,6 +6058,7 @@ int main() {
     testOperatorEnableSolo();
     testAlgoGraph();
     testMidiInputPlan();
+    testSequencer();
     testOpFxCombCurveMatchesDsp();
     testOpFxDefaultsAndSummary();
     testFxKeyTrackMovesFilterWithNote();

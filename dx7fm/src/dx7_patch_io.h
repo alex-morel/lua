@@ -392,6 +392,7 @@ inline const char* modSourceName(ModSource s) {
         case ModSource::AmpEnv:    return "AmpEnv";
         case ModSource::PegEnv:    return "PegEnv";
         case ModSource::Constant:  return "Constant";
+        case ModSource::SeqMod:    return "SeqMod";
     }
     return "None";
 }
@@ -414,7 +415,7 @@ inline ModSource modSourceFromName(const std::string& s) {
     if (s == "Macro3")    return ModSource::Macro3;
     if (s == "Macro4")    return ModSource::Macro4;
     if (s == "Slide")     return ModSource::Slide;
-    for (int k = static_cast<int>(ModSource::Breath); k <= static_cast<int>(ModSource::Constant); ++k)
+    for (int k = static_cast<int>(ModSource::Breath); k <= static_cast<int>(ModSource::SeqMod); ++k)
         if (s == modSourceName(static_cast<ModSource>(k))) return static_cast<ModSource>(k);
     return ModSource::None;
 }

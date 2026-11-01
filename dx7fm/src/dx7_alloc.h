@@ -2,6 +2,7 @@
 #include "dx7_params.h"
 #include "dx7_engine.h"
 #include "dx7_fxrack.h"
+#include "dx7_sequencer.h"
 #include "dx7_threads.h"
 #include <algorithm>
 #include <array>
@@ -91,6 +92,7 @@ struct PartRuntime {
     float modWheel = 0.0f;
     float cc01[4] = {};     // [2026-10-30] CC2, CC4, CC11, pedal de sustain (fontes da matriz)
     bool alternate = false; // [2026-10-30] ModSource::Alternate
+    float seqMod = 0.0f;    // [2026-11-01] ModSource::SeqMod
     std::atomic<int> soloOp{-1}; // [2026-10-31] operador em solo (-1 = nenhum); UI -> audio
     // [2026-10-24] macros: a audio thread escreve (setMacro), a UI le pra mostrar
     std::atomic<float> macro[VoiceParams::kNumMacros] = {};
@@ -343,6 +345,87 @@ public:
         return next;
     }
 
+    // --- sequencer: mesma ideia do arp, com uma grade propria por track ---
+    static_assert(kSeqTracks == kNumParts && kFxParts == kNumParts, "uma track por parte");
+    struct SeqRun {
+        double base = 0.0;     // inicio do passo que vem, sem swing
+        double next = 0.0;     // quando ele toca
+        double off = -1.0;     // fim do gate; -1 = nenhum
+        long count = 0;        // passos ja tocados
+        int sounding = -1;     // nota presa
+    };
+    const SeqParams& seqLive() const { return seqSnap_[seqLive_.load(std::memory_order_acquire)]; }
+    void seqSetMod(int part, float v) {
+        auto& pr = parts_[part];
+        if (pr.seqMod == v) return;
+        pr.seqMod = v;
+        for (auto& s : slots_) if (s.ownerPart == part) s.voice.controllers().seqMod = v;
+    }
+    void seqStartTracks() {
+        for (auto& r : seqRun_) { r = SeqRun{}; r.base = r.next = beatPos_; }
+    }
+    void seqStopNotes() {
+        for (int t = 0; t < kSeqTracks; ++t) {
+            if (seqRun_[t].sounding >= 0) noteOff(t, seqRun_[t].sounding);
+            seqRun_[t].sounding = -1;
+            seqRun_[t].off = -1.0;
+        }
+    }
+    void seqSyncTransport() {
+        const bool want = seqWant_.load(std::memory_order_relaxed);
+        if (want == seqRunning_) return;
+        seqRunning_ = want;
+        if (want) { seqStartTracks(); return; }
+        seqStopNotes();
+        for (int t = 0; t < kSeqTracks; ++t) {
+            seqSetMod(t, 0.0f); // parado, a modulacao nao fica presa no ultimo passo
+            seqHead_[t].store(-1, std::memory_order_relaxed);
+        }
+    }
+    double seqNextEventBeat() const {
+        if (!seqRunning_) return -1.0;
+        double next = -1.0;
+        for (const auto& r : seqRun_) {
+            next = next < 0.0 ? r.next : std::min(next, r.next);
+            if (r.off >= 0.0) next = std::min(next, r.off);
+        }
+        return next;
+    }
+    void seqProcessDue() {
+        if (!seqRunning_) return;
+        const SeqParams& q = seqLive();
+        for (int t = 0; t < kSeqTracks; ++t) {
+            SeqRun& r = seqRun_[t];
+            const SeqTrack& tr = q.track[t];
+            if (r.off >= 0.0 && r.off <= beatPos_ + 1e-9) {
+                if (r.sounding >= 0) noteOff(t, r.sounding);
+                r.sounding = -1;
+                r.off = -1.0;
+            }
+            if (r.next > beatPos_ + 1e-9) continue;
+            const int idx = static_cast<int>(r.count % std::max<int>(1, tr.length));
+            const SeqStep& st = tr.step[idx];
+            const double stepLen = lfoDivisionBeats(tr.division);
+            seqSetMod(t, st.mod);
+            seqHead_[t].store(idx, std::memory_order_relaxed);
+            const bool play = st.on && !tr.mute;
+            // gate 100% com nota nova: a nova entra antes de soltar a velha, pro legato/glide dos modos mono
+            const int prev = r.sounding;
+            if (prev >= 0 && (!play || prev == st.note)) { noteOff(t, prev); r.sounding = -1; }
+            if (play) {
+                noteOn(t, st.note, st.velocity);
+                if (r.sounding >= 0 && r.sounding != st.note) noteOff(t, r.sounding);
+                r.sounding = st.note;
+                r.off = st.gate >= 1.0f ? -1.0 : beatPos_ + st.gate * stepLen;
+            } else {
+                r.off = -1.0;
+            }
+            ++r.count;
+            r.base += stepLen;
+            r.next = r.base + ((r.count % 2) ? tr.swing * stepLen : 0.0);
+        }
+    }
+
     void arpProcessDue() {
         for (int p = 0; p < kNumParts; ++p) {
             auto& pr = parts_[p];
@@ -519,9 +602,12 @@ public:
             // arpejador: corta o pedaco no instante exato do proximo passo/gate
             // (sem arp tocando, nada muda -- saida identica a antes)
             const double beatsPerSample = static_cast<double>(tempoBpm_.load(std::memory_order_relaxed)) / (60.0 * sampleRate_);
-            const double next = arpNextEventBeat();
+            seqSyncTransport();
+            double next = arpNextEventBeat();
+            const double seqNext = seqNextEventBeat();
+            if (seqNext >= 0.0) next = next < 0.0 ? seqNext : std::min(next, seqNext);
             if (next >= 0.0) {
-                if (next <= beatPos_ + 1e-9) { arpProcessDue(); continue; }
+                if (next <= beatPos_ + 1e-9) { arpProcessDue(); seqProcessDue(); continue; }
                 len = std::min(len, std::max(1, static_cast<int>(std::ceil((next - beatPos_) / beatsPerSample - 1e-9))));
             }
             renderChunk(outL + done, outR + done, len);
@@ -539,7 +625,26 @@ public:
             if (pr.arpRunning) { pr.arpNextBeat = 0.0; pr.arpStep = 0; } // arpejo recomeca no 1
             for (double& o : pr.glfoSyncOffset) o = 0.0;                 // LFO global com sync volta pra grade
         }
+        if (seqRunning_) { seqStopNotes(); seqStartTracks(); } // sequencer recomeca no 1
     }
+
+    // [2026-11-01] Sequencer (dx7_sequencer.h). setSequence e seqPlay: thread da
+    // UI; o audio le o ultimo padrao publicado (triple buffer, como o rack).
+    void setSequence(const SeqParams& in) {
+        SeqParams p = in;
+        sanitize(p);
+        int idx = 0;
+        while (idx == seqPublished_ || idx == seqPrevious_) ++idx;
+        seqSnap_[idx] = p;
+        seqPrevious_ = seqPublished_;
+        seqPublished_ = idx;
+        seqLive_.store(idx, std::memory_order_release);
+    }
+    void seqPlay(bool play) { seqWant_.store(play, std::memory_order_relaxed); }
+    bool seqIsPlaying() const { return seqWant_.load(std::memory_order_relaxed); }
+    // passo que esta tocando em cada track (-1 = parado), pra UI
+    int seqPlayhead(int track) const { return seqHead_[track].load(std::memory_order_relaxed); }
+    float seqModValue(int track) const { return parts_[track].seqMod; }
     double beatPosition() const { return beatPos_; }
 
     // Threads de audio ALEM da que chama renderBlock() (0 = tudo serial, o
@@ -673,6 +778,7 @@ private:
         for (int k = 0; k < 4; ++k) s.voice.controllers().cc01[k] = pr.cc01[k];
         pr.alternate = !pr.alternate;
         s.voice.controllers().alternate = pr.alternate ? 1.0f : -1.0f;
+        s.voice.controllers().seqMod = pr.seqMod;
         // sorteio proprio: nao consome o gerador do ruido nem newRandomSeed (reproduzivel no golden)
         noteRandom_ ^= noteRandom_ << 13; noteRandom_ ^= noteRandom_ >> 17; noteRandom_ ^= noteRandom_ << 5;
         s.voice.controllers().randomNote = static_cast<float>(noteRandom_ % 20001u) / 10000.0f - 1.0f;
@@ -1006,6 +1112,7 @@ private:
                     val = pr.cc01[static_cast<int>(r.src) - static_cast<int>(ModSource::Breath)];
                     break;
                 case ModSource::Constant:  val = 1.0f; break;
+                case ModSource::SeqMod:    val = pr.seqMod; break;
                 case ModSource::ChannelAT: val = pr.channelAT; break;
                 case ModSource::PitchBend: val = pr.bend / std::max(0.01f, pr.params.bendRangeSemis); break;
                 case ModSource::Macro1: case ModSource::Macro2: case ModSource::Macro3: case ModSource::Macro4:
@@ -1059,6 +1166,14 @@ private:
     NoteObserver arpObs_ = nullptr;
     void* arpObsCtx_ = nullptr;
     uint32_t noteRandom_ = 0x9E3779B9u;     // ModSource::RandomNote
+    // [2026-11-01] sequencer
+    SeqParams seqSnap_[3];
+    std::atomic<int> seqLive_{0};
+    int seqPublished_ = 0, seqPrevious_ = 1;  // so a thread da UI
+    std::atomic<bool> seqWant_{false};
+    bool seqRunning_ = false;                 // so a audio thread
+    SeqRun seqRun_[kSeqTracks];
+    std::atomic<int> seqHead_[kSeqTracks] = {-1, -1, -1, -1};
     float masterGain_ = 1.0f;               // valor suavizado, so a audio thread toca
 
     // renderBlock: buffers por voz (alocados em init, nunca na audio thread)
