@@ -16,15 +16,15 @@ inline ImU32 rgb(int r, int g, int b, int a = 255) { return IM_COL32(r, g, b, a)
 inline ImVec4 rgbv(int r, int g, int b, int a = 255) { return ImVec4(r / 255.f, g / 255.f, b / 255.f, a / 255.f); }
 
 namespace col {
-inline const ImU32 kBg = rgb(18, 20, 26);
-inline const ImU32 kCard = rgb(26, 29, 37);
-inline const ImU32 kCardBorder = rgb(42, 47, 59);
+inline const ImU32 kBg = rgb(15, 17, 22);
+inline const ImU32 kCard = rgb(24, 27, 34);
+inline const ImU32 kCardBorder = rgb(38, 43, 54);
 inline const ImU32 kAccent = rgb(79, 209, 197);    // teal
 inline const ImU32 kAccent2 = rgb(246, 173, 85);   // laranja (feedback, avisos)
 inline const ImU32 kText = rgb(226, 230, 238);
 inline const ImU32 kTextDim = rgb(138, 146, 162);
-inline const ImU32 kKnobBody = rgb(36, 40, 51);
-inline const ImU32 kKnobTrack = rgb(52, 58, 74);
+inline const ImU32 kKnobBody = rgb(38, 42, 54);
+inline const ImU32 kKnobTrack = rgb(48, 54, 68);
 inline const ImU32 kGrid = rgb(255, 255, 255, 18);
 } // namespace col
 
@@ -49,27 +49,28 @@ inline void ApplyTheme() {
     s.TabRounding = 6.0f;
     s.ScrollbarRounding = 8.0f;
     s.WindowPadding = ImVec2(12, 10);
-    s.FramePadding = ImVec2(8, 4);
+    s.FramePadding = ImVec2(8, 3);
     s.ItemSpacing = ImVec2(8, 6);
     s.ItemInnerSpacing = ImVec2(6, 4);
     s.CellPadding = ImVec2(6, 3);
     s.ScrollbarSize = 12.0f;
-    s.GrabMinSize = 10.0f;
+    s.GrabMinSize = 6.0f;
     s.ChildBorderSize = 1.0f;
-    s.FrameBorderSize = 0.0f;
+    s.FrameBorderSize = 1.0f;
     s.TabBorderSize = 0.0f;
+    s.TabBarBorderSize = 1.0f;
     s.SeparatorTextBorderSize = 1.0f;
 
     ImVec4* c = s.Colors;
     c[ImGuiCol_Text] = rgbv(226, 230, 238);
     c[ImGuiCol_TextDisabled] = rgbv(120, 128, 144);
-    c[ImGuiCol_WindowBg] = rgbv(18, 20, 26);
-    c[ImGuiCol_ChildBg] = rgbv(26, 29, 37);
+    c[ImGuiCol_WindowBg] = rgbv(15, 17, 22);
+    c[ImGuiCol_ChildBg] = rgbv(24, 27, 34);
     c[ImGuiCol_PopupBg] = rgbv(30, 33, 42, 250);
-    c[ImGuiCol_Border] = rgbv(42, 47, 59);
-    c[ImGuiCol_FrameBg] = rgbv(36, 40, 51);
-    c[ImGuiCol_FrameBgHovered] = rgbv(46, 51, 65);
-    c[ImGuiCol_FrameBgActive] = rgbv(54, 60, 77);
+    c[ImGuiCol_Border] = rgbv(38, 43, 54);
+    c[ImGuiCol_FrameBg] = rgbv(31, 35, 45);
+    c[ImGuiCol_FrameBgHovered] = rgbv(40, 45, 58);
+    c[ImGuiCol_FrameBgActive] = rgbv(47, 53, 68);
     c[ImGuiCol_TitleBg] = rgbv(18, 20, 26);
     c[ImGuiCol_TitleBgActive] = rgbv(26, 29, 37);
     c[ImGuiCol_MenuBarBg] = rgbv(22, 25, 32);
@@ -80,23 +81,23 @@ inline void ApplyTheme() {
     c[ImGuiCol_CheckMark] = rgbv(79, 209, 197);
     c[ImGuiCol_SliderGrab] = rgbv(79, 209, 197);
     c[ImGuiCol_SliderGrabActive] = rgbv(129, 230, 217);
-    c[ImGuiCol_Button] = rgbv(40, 45, 58);
-    c[ImGuiCol_ButtonHovered] = rgbv(52, 59, 76);
+    c[ImGuiCol_Button] = rgbv(38, 43, 55);
+    c[ImGuiCol_ButtonHovered] = rgbv(50, 57, 73);
     c[ImGuiCol_ButtonActive] = rgbv(79, 209, 197, 160);
-    c[ImGuiCol_Header] = rgbv(79, 209, 197, 50);
-    c[ImGuiCol_HeaderHovered] = rgbv(79, 209, 197, 80);
+    c[ImGuiCol_Header] = rgbv(255, 255, 255, 14); // faixas recolhiveis e selecao discretas: o destaque fica com os valores
+    c[ImGuiCol_HeaderHovered] = rgbv(79, 209, 197, 60);
     c[ImGuiCol_HeaderActive] = rgbv(79, 209, 197, 120);
     c[ImGuiCol_Separator] = rgbv(42, 47, 59);
     c[ImGuiCol_SeparatorHovered] = rgbv(79, 209, 197, 120);
     c[ImGuiCol_SeparatorActive] = rgbv(79, 209, 197);
     c[ImGuiCol_ResizeGrip] = rgbv(79, 209, 197, 40);
-    c[ImGuiCol_Tab] = rgbv(26, 29, 37);
-    c[ImGuiCol_TabHovered] = rgbv(46, 51, 65);
-    c[ImGuiCol_TabSelected] = rgbv(36, 40, 51);
+    c[ImGuiCol_Tab] = rgbv(21, 24, 30);
+    c[ImGuiCol_TabHovered] = rgbv(40, 45, 58);
+    c[ImGuiCol_TabSelected] = rgbv(31, 35, 45);
     c[ImGuiCol_TabSelectedOverline] = rgbv(79, 209, 197);
-    c[ImGuiCol_TabDimmed] = rgbv(26, 29, 37);
-    c[ImGuiCol_TabDimmedSelected] = rgbv(36, 40, 51);
-    c[ImGuiCol_TableHeaderBg] = rgbv(30, 34, 43);
+    c[ImGuiCol_TabDimmed] = rgbv(21, 24, 30);
+    c[ImGuiCol_TabDimmedSelected] = rgbv(31, 35, 45);
+    c[ImGuiCol_TableHeaderBg] = rgbv(24, 27, 34);
     c[ImGuiCol_TableBorderStrong] = rgbv(42, 47, 59);
     c[ImGuiCol_TableBorderLight] = rgbv(34, 38, 48);
     c[ImGuiCol_TableRowBg] = rgbv(0, 0, 0, 0);
@@ -114,13 +115,21 @@ inline bool BeginCard(const char* id, const char* title, float width = 0.0f, ImU
     bool open = ImGui::BeginChild(id, ImVec2(width, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
     ImGui::PopStyleVar();
     if (title && *title) {
+        // marca na cor do card + titulo; a linha vai de borda a borda (a largura
+        // do conteudo de um card que ajusta a altura nao serve aqui)
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float h = ImGui::GetTextLineHeight();
+        dl->AddRectFilled(ImVec2(p.x, p.y + 2.0f), ImVec2(p.x + 3.0f, p.y + h - 2.0f), titleColor, 1.5f);
+        ImGui::SetCursorScreenPos(ImVec2(p.x + 9.0f, p.y));
         ImGui::PushStyleColor(ImGuiCol_Text, titleColor);
         ImGui::TextUnformatted(title);
         ImGui::PopStyleColor();
-        ImVec2 p = ImGui::GetCursorScreenPos();
-        ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, p.y - 2), ImVec2(p.x + ImGui::GetContentRegionAvail().x, p.y - 2),
-                                            col::kCardBorder, 1.0f);
-        ImGui::Dummy(ImVec2(0, 2));
+        const ImVec2 q = ImGui::GetCursorScreenPos();
+        const ImVec2 w = ImGui::GetWindowPos();
+        dl->AddLine(ImVec2(w.x + 1.0f, q.y), ImVec2(w.x + ImGui::GetWindowWidth() - 1.0f, q.y), col::kCardBorder, 1.0f);
+        ImGui::SetCursorScreenPos(ImVec2(p.x, q.y));
+        ImGui::Dummy(ImVec2(0, 3));
     }
     return open;
 }
@@ -205,9 +214,11 @@ inline bool Knob(const char* label, float* v, float vmin, float vmax, float vdef
     const float a0 = IM_PI * 0.75f, a1 = IM_PI * 2.25f;
     float an = a0 + (a1 - a0) * n;
     float trackR = r - 3.0f;
+    // trilha fina e corpo com borda: o arco de valor e o que chama a atencao
     dl->AddCircleFilled(center, r - 7.0f, hovered || active ? col::kKnobTrack : col::kKnobBody, 32);
+    dl->AddCircle(center, r - 7.0f, rgb(255, 255, 255, hovered || active ? 40 : 18), 32, 1.0f);
     dl->PathArcTo(center, trackR, a0, a1, 40);
-    dl->PathStroke(col::kKnobTrack, 0, 3.5f);
+    dl->PathStroke(col::kKnobTrack, 0, 2.5f);
     bool bipolar = vmin < 0.0f && vmax > 0.0f && !st.logarithmic;
     float from = bipolar ? a0 + (a1 - a0) * knobNorm(0.0f, vmin, vmax, false) : a0;
     if (std::fabs(an - from) > 0.01f) {
@@ -215,7 +226,7 @@ inline bool Knob(const char* label, float* v, float vmin, float vmax, float vdef
         dl->PathStroke(st.color, 0, 3.5f);
     }
     ImVec2 dir(std::cos(an), std::sin(an));
-    dl->AddLine(ImVec2(center.x + dir.x * (r - 16.0f), center.y + dir.y * (r - 16.0f)),
+    dl->AddLine(ImVec2(center.x + dir.x * (r * 0.28f), center.y + dir.y * (r * 0.28f)),
                 ImVec2(center.x + dir.x * (r - 8.0f), center.y + dir.y * (r - 8.0f)), col::kText, 2.0f);
 
     // rotulo e valor (centralizados embaixo)
@@ -266,6 +277,47 @@ inline bool KnobU8(const char* label, uint8_t* v, int vmin, int vmax, int vdefau
     return false;
 }
 
+// --- barra de valor: o numero fica legivel em cima do preenchimento ------------
+// Arrastar na horizontal muda (Shift = fino); Ctrl+clique digita; duplo clique
+// volta ao padrao. Pra colunas estreitas, onde a alca do slider cobria o numero.
+inline bool ValueBar(const char* id, float* v, float vmin, float vmax, float vdefault, const char* fmt, float width, ImU32 color = col::kAccent) {
+    ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 size(width, ImGui::GetFrameHeight());
+    bool changed = false;
+    ImGui::PushID(id);
+    ImGui::InvisibleButton("##bar", size);
+    const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
+    if (active && io.MouseDelta.x != 0.0f) {
+        *v = std::clamp(*v + io.MouseDelta.x * (vmax - vmin) / std::max(1.0f, width) * (io.KeyShift ? 0.15f : 1.0f), vmin, vmax);
+        changed = true;
+    }
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { *v = vdefault; changed = true; }
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && io.KeyCtrl) ImGui::OpenPopup("##edit");
+    if (ImGui::BeginPopup("##edit")) {
+        ImGui::SetNextItemWidth(100);
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        float tmp = *v;
+        if (ImGui::InputFloat("##value", &tmp, 0.0f, 0.0f, fmt, ImGuiInputTextFlags_EnterReturnsTrue)) {
+            *v = std::clamp(tmp, vmin, vmax);
+            changed = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 q(p.x + size.x, p.y + size.y);
+    const float n = std::clamp((*v - vmin) / (vmax - vmin), 0.0f, 1.0f);
+    dl->AddRectFilled(p, q, ImGui::GetColorU32(hovered || active ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), ImGui::GetStyle().FrameRounding);
+    if (n > 0.0f) dl->AddRectFilled(p, ImVec2(p.x + size.x * n, q.y), (color & 0x00FFFFFFu) | (0x70u << 24), ImGui::GetStyle().FrameRounding);
+    char text[32];
+    std::snprintf(text, sizeof text, fmt, *v);
+    const ImVec2 ts = ImGui::CalcTextSize(text);
+    dl->AddText(ImVec2(p.x + (size.x - ts.x) * 0.5f, p.y + (size.y - ts.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), text);
+    ImGui::PopID();
+    return changed;
+}
+
 // --- medidor de nivel (L/R) ------------------------------------------------------
 inline void LevelMeter(const char* id, float level, ImVec2 size) {
     ImGui::PushID(id);
@@ -283,7 +335,10 @@ inline void LevelMeter(const char* id, float level, ImVec2 size) {
     seg(p.x + 1, xY, rgb(79, 209, 140));
     seg(xY, xR, rgb(246, 224, 94));
     seg(xR, p.x + size.x - 1, rgb(252, 100, 100));
-    dl->AddText(ImVec2(p.x + 4, p.y + (size.y - ImGui::GetTextLineHeight()) * 0.5f), rgb(10, 12, 16, 200), id);
+    // rotulo legivel com e sem sinal; marcas em -12 e -3 dB
+    dl->AddLine(ImVec2(xY, p.y + 2), ImVec2(xY, p.y + size.y - 2), rgb(255, 255, 255, 40));
+    dl->AddLine(ImVec2(xR, p.y + 2), ImVec2(xR, p.y + size.y - 2), rgb(255, 255, 255, 40));
+    dl->AddText(ImVec2(p.x + 4, p.y + (size.y - ImGui::GetTextLineHeight()) * 0.5f), n > 0.05f ? rgb(10, 12, 16, 220) : col::kTextDim, id);
     ImGui::Dummy(size);
     ImGui::PopID();
 }

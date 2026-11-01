@@ -49,7 +49,7 @@ inline bool PresetMenuItems(AlgoEditor& e, const std::filesystem::path& dir, Alg
     if (e.user.empty()) ImGui::TextDisabled("(nenhum salvo em %s/)", dir.string().c_str());
     for (const auto& u : e.user)
         if (ImGui::Selectable(u.stem.c_str(), e.current == u.stem)) { out.user = &u; chosen = true; }
-    ImGui::SeparatorText("Fabrica");
+    ImGui::SeparatorText("Fábrica");
     for (int n = 1; n <= kNumAlgorithms; ++n) {
         char lbl[80];
         std::snprintf(lbl, sizeof lbl, "%d: %s", n, algorithmName(n));
@@ -63,7 +63,7 @@ inline bool applyChoice(AlgoEditor& e, const AlgoChoice& c, VoiceParams& v, int 
     VoiceParams next = v;
     if (c.user) {
         ag::Preset p;
-        if (!ag::loadPresetFile(c.user->path, p)) { e.status = "Nao e um preset de algoritmo: " + c.user->path.string(); return false; }
+        if (!ag::loadPresetFile(c.user->path, p)) { e.status = "Não e um preset de algoritmo: " + c.user->path.string(); return false; }
         ag::applyPreset(next, slot, p);
         e.layout = p.layout;
         e.current = c.user->stem;
@@ -212,7 +212,7 @@ inline bool DrawCanvas(AlgoEditor& e, VoiceParams& v, int slot, int& selectedOp,
     const bool barHot = e.connectFrom >= 0 && mouse.y >= barMin.y - 6.0f;
     dl->AddRectFilled(barMin, barMax, barHot ? ui::col::kAccent : ui::rgb(30, 60, 62), 4.0f);
     {
-        const char* t = "SAIDA";
+        const char* t = "SAÍDA";
         const ImVec2 ts = ImGui::CalcTextSize(t);
         dl->AddText(ImVec2((barMin.x + barMax.x - ts.x) * 0.5f, barMin.y + (barH - ts.y) * 0.5f), barHot ? ui::rgb(14, 16, 22) : ui::col::kAccent, t);
     }
@@ -270,10 +270,10 @@ inline bool DrawCanvas(AlgoEditor& e, VoiceParams& v, int slot, int& selectedOp,
     dl->PopClipRect();
 
     if (hovered && e.connectFrom < 0) {
-        if (hitOutPort >= 0) ImGui::SetTooltip("Arraste ate outro operador pra modula-lo,\nou ate a barra SAIDA pra virar portadora");
+        if (hitOutPort >= 0) ImGui::SetTooltip("Arraste até outro operador pra modula-lo,\nou até a barra SAÍDA pra virar portadora");
         else if (hitFb >= 0) ImGui::SetTooltip("Feedback do Op%d: clique pra ligar/desligar", hitFb + 1);
         else if (hitFrom >= 0) ImGui::SetTooltip("Op%d modula Op%d\nClique = selecionar, roda = quantidade, direito = apagar", hitFrom + 1, hitTo + 1);
-        else if (hitWire >= 0) ImGui::SetTooltip("Op%d vai pra saida\nClique = selecionar, roda = nivel, direito = apagar", hitWire + 1);
+        else if (hitWire >= 0) ImGui::SetTooltip("Op%d vai pra saída\nClique = selecionar, roda = nível, direito = apagar", hitWire + 1);
     }
     return changed;
 }
@@ -307,20 +307,20 @@ inline bool DrawInspector(AlgoEditor& e, VoiceParams& v, int slot, int selectedO
                 changed = true;
             }
         }
-        if (ag::closesLoop(m, from, to)) { ImGui::PushTextWrapPos(0.0f); ImGui::TextDisabled("Tracejada: fecha um laco, entao usa a amostra anterior."); ImGui::PopTextWrapPos(); }
-        if (ImGui::Button("Apagar conexao")) { ag::disconnect(m, from, to); e.selFrom = e.selTo = -1; changed = true; }
+        if (ag::closesLoop(m, from, to)) { ImGui::PushTextWrapPos(0.0f); ImGui::TextDisabled("Tracejada: fecha um laco, então usa a amostra anterior."); ImGui::PopTextWrapPos(); }
+        if (ImGui::Button("Apagar conexão")) { ag::disconnect(m, from, to); e.selFrom = e.selTo = -1; changed = true; }
     } else if (e.selOut >= 0 && m.outputMix[e.selOut] != 0.0f) {
         const int op = e.selOut;
-        ImGui::Text("Op%d na saida", op + 1);
+        ImGui::Text("Op%d na saída", op + 1);
         ImGui::SetNextItemWidth(-FLT_MIN);
         float mix = m.outputMix[op];
-        if (ImGui::SliderFloat("##mix", &mix, 0.01f, 1.0f, "nivel %.2f", ImGuiSliderFlags_AlwaysClamp)) { m.outputMix[op] = mix; changed = true; }
-        if (ImGui::Button("Tirar da saida")) { m.outputMix[op] = 0.0f; e.selOut = -1; changed = true; }
+        if (ImGui::SliderFloat("##mix", &mix, 0.01f, 1.0f, "nível %.2f", ImGuiSliderFlags_AlwaysClamp)) { m.outputMix[op] = mix; changed = true; }
+        if (ImGui::Button("Tirar da saída")) { m.outputMix[op] = 0.0f; e.selOut = -1; changed = true; }
     } else {
         ImGui::Text("Op%d", selectedOp + 1);
         ImGui::PushStyleColor(ImGuiCol_Text, ui::col::kTextDim);
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextUnformatted("Clique numa conexao ou no fio de saida pra ajustar.");
+        ImGui::TextUnformatted("Clique numa conexão ou no fio de saída pra ajustar.");
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
         if (ImGui::Checkbox("Ligado", &v.op[selectedOp].enabled)) changed = true;
@@ -330,11 +330,11 @@ inline bool DrawInspector(AlgoEditor& e, VoiceParams& v, int slot, int selectedO
     ImGui::PushStyleColor(ImGuiCol_Text, ui::col::kTextDim);
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextUnformatted("Como usar\n"
-                           "- Arraste da bolinha de baixo de um operador ate outro: ele passa a modular o outro.\n"
-                           "- Ate a barra SAIDA: vira portadora.\n"
+                           "- Arraste da bolinha de baixo de um operador até outro: ele passa a modular o outro.\n"
+                           "- Até a barra SAÍDA: vira portadora.\n"
                            "- Circulo no canto: feedback.\n"
                            "- Arraste o operador pra organizar.\n"
-                           "- Na conexao: roda ajusta, botao direito (ou Delete) apaga.\n"
+                           "- Na conexão: roda ajusta, botão direito (ou Delete) apaga.\n"
                            "- Ctrl+Z desfaz.");
     ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
@@ -388,17 +388,17 @@ inline bool DrawAlgoEditor(AlgoEditor& e, VoiceParams& v, int part, int slot, in
             e.current = target.stem().string();
             e.status = "Salvo em " + target.string();
             e.userDirty = true;
-        } else e.status = "Nao consegui salvar " + target.string();
+        } else e.status = "Não consegui salvar " + target.string();
         e.confirmDelete = false;
     }
-    ImGui::SetItemTooltip("Grava conexoes, feedback, niveis de saida e a posicao dos operadores em %s", target.string().c_str());
+    ImGui::SetItemTooltip("Grava conexões, feedback, níveis de saída e a posição dos operadores em %s", target.string().c_str());
     ImGui::SameLine();
     ImGui::BeginDisabled(!exists);
-    if (ImGui::Button(e.confirmDelete ? "Confirmar exclusao" : "Excluir")) {
+    if (ImGui::Button(e.confirmDelete ? "Confirmar exclusão" : "Excluir")) {
         if (!e.confirmDelete) e.confirmDelete = true;
         else {
             std::filesystem::remove(target, ec);
-            e.status = ec ? "Nao consegui excluir " + target.string() : "Excluido: " + target.stem().string();
+            e.status = ec ? "Não consegui excluir " + target.string() : "Excluido: " + target.stem().string();
             if (!ec && e.current == target.stem().string()) e.current.clear();
             e.userDirty = true;
             e.confirmDelete = false;
@@ -417,8 +417,8 @@ inline bool DrawAlgoEditor(AlgoEditor& e, VoiceParams& v, int part, int slot, in
         e.current.clear();
         changed = true;
     }
-    ImGui::SetItemTooltip("Tira todas as conexoes e saidas (Ctrl+Z desfaz)");
-    if (!ag::anyCarrier(m)) { ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::col::kAccent2), "Nenhum operador vai pra SAIDA: este algoritmo nao soa."); }
+    ImGui::SetItemTooltip("Tira todas as conexões e saídas (Ctrl+Z desfaz)");
+    if (!ag::anyCarrier(m)) { ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::col::kAccent2), "Nenhum operador vai pra SAÍDA: este algoritmo não soa."); }
     else if (!e.status.empty()) ImGui::TextDisabled("%s", e.status.c_str());
     else ImGui::TextDisabled("Toque enquanto edita: a mudanca vale na hora.");
 

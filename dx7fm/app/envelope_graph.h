@@ -246,7 +246,7 @@ inline bool EnvelopeGraph(const char* id, dx7fm::VoiceParams& v, int& selectedOp
         const auto& eg = v.op[selectedOp].ampEG;
         EgTimes t = egTimes(eg);
         float sec = t.stage[hoverNode];
-        ImGui::SetTooltip("Op%d - %s\nrate %d, level %d (%.0f ms)\nArraste: vertical = level, horizontal = tempo\n(Shift: so level)",
+        ImGui::SetTooltip("Op%d - %s\nrate %d, level %d (%.0f ms)\nArraste: vertical = level, horizontal = tempo\n(Shift: só level)",
                           selectedOp + 1, kStage[hoverNode], eg.rate[hoverNode], eg.level[hoverNode], sec * 1000.0f);
     } else if (hovered) {
         int curve = nearestCurve(m);
@@ -268,7 +268,7 @@ inline bool EnvelopeGraph(const char* id, dx7fm::VoiceParams& v, int& selectedOp
         if (ImGui::SmallButton(lbl)) { selectedOp = i; st.visible[i] = true; }
         if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) st.visible[i] = !st.visible[i];
         ImGui::PopStyleColor(3);
-        ImGui::SetItemTooltip("Op%d%s\nclique: selecionar | botao direito: mostrar/esconder", i + 1, used[i] ? "" : " (nao chega na saida)");
+        ImGui::SetItemTooltip("Op%d%s\nclique: selecionar | botão direito: mostrar/esconder", i + 1, used[i] ? "" : " (não chega na saída)");
         ImGui::PopID();
         ImGui::SameLine();
     }
@@ -276,7 +276,7 @@ inline bool EnvelopeGraph(const char* id, dx7fm::VoiceParams& v, int& selectedOp
     ImGui::SameLine();
     if (ImGui::SmallButton("Todos")) for (bool& b : st.visible) b = true;
     ImGui::SameLine();
-    if (ImGui::SmallButton("So usados")) for (int i = 0; i < kNumOps; ++i) st.visible[i] = used[i];
+    if (ImGui::SmallButton("Só usados")) for (int i = 0; i < kNumOps; ++i) st.visible[i] = used[i];
     return changed;
 }
 

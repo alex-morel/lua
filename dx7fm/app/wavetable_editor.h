@@ -178,22 +178,22 @@ inline bool WavetableEditor(dx7fm::OperatorParams& op, ImU32 color, WavetableEdi
         std::snprintf(lbl, sizeof lbl, "morph %.0f%%", wt.position * 100.0f);
         dl->AddText(ImVec2(p0.x + 5, p0.y + 2), col::kTextDim, lbl);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("onda na posicao do knob (sem a modulacao do FX EG e da matriz)");
+            ImGui::SetTooltip("onda na posição do knob (sem a modulação do FX EG e da matriz)");
         ImGui::SameLine();
         float pct = wt.position * 100.0f;
-        if (Knob("Posicao", &pct, 0.0f, 100.0f, 0.0f, "%.0f%%", ks)) { wt.position = pct / 100.0f; changed = true; }
+        if (Knob("Posição", &pct, 0.0f, 100.0f, 0.0f, "%.0f%%", ks)) { wt.position = pct / 100.0f; changed = true; }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("0%% = onda A, 100%% = onda B");
         ImGui::SameLine();
         changed |= Knob("Morph EG", &op.morphDepth, 0.0f, 1.0f, 0.0f, "%.2f", ks);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("quanto o FX EG empurra o morph na direcao de B (soma com a posicao).\n"
-                              "Na mod matrix, o destino OperatorMorph tambem move o morph (LFO, nota, velocity...).");
+            ImGui::SetTooltip("quanto o FX EG empurra o morph na direção de B (soma com a posição).\n"
+                              "Na mod matrix, o destino OperatorMorph também move o morph (LFO, nota, velocity...).");
         ImGui::SameLine();
         ImGui::BeginGroup();
         int mode = wt.spectralMorph ? 0 : 1;
         if (ImGui::RadioButton("Espectral", &mode, 0)) { wt.spectralMorph = true; changed = true; }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("interpola os harmonicos: o meio do caminho e uma onda intermediaria,\nsem cancelamento (ondas de fase oposta nao somem)");
+            ImGui::SetTooltip("interpola os harmônicos: o meio do caminho e uma onda intermediaria,\nsem cancelamento (ondas de fase oposta não somem)");
         if (ImGui::RadioButton("Crossfade", &mode, 1)) { wt.spectralMorph = false; changed = true; }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("mistura as amostras: (1-m)*A + m*B");
         ImGui::EndGroup();
@@ -212,7 +212,7 @@ inline bool WavetableEditor(dx7fm::OperatorParams& op, ImU32 color, WavetableEdi
         if (ImGui::BeginTabItem("Formas", nullptr, tabFlag(0))) {
             struct Shape { const char* name; dx7fm::Waveform w; };
             static const Shape kShapes[] = {
-                {"Seno", dx7fm::Waveform::Sine}, {"Triangulo", dx7fm::Waveform::Triangle}, {"Serra", dx7fm::Waveform::Saw},
+                {"Seno", dx7fm::Waveform::Sine}, {"Triângulo", dx7fm::Waveform::Triangle}, {"Serra", dx7fm::Waveform::Saw},
                 {"Quadrada", dx7fm::Waveform::Square}, {"Ruido", dx7fm::Waveform::Noise}, {"Meio seno", dx7fm::Waveform::HalfSine},
                 {"Seno abs", dx7fm::Waveform::AbsSine}, {"Quarto de seno", dx7fm::Waveform::QuarterSine},
                 {"Seno alternado", dx7fm::Waveform::AlternatingSine}, {"Camelo", dx7fm::Waveform::CamelSine},
@@ -244,10 +244,10 @@ inline bool WavetableEditor(dx7fm::OperatorParams& op, ImU32 color, WavetableEdi
             ImGui::SameLine();
             if (ImGui::SmallButton("Remover DC")) apply([](Wave& w) { wg::removeDc(w); });
             ImGui::SameLine();
-            ImGui::TextDisabled("(cantos vivos geram harmonicos agudos; o motor corta o que passaria de Nyquist)");
+            ImGui::TextDisabled("(cantos vivos geram harmônicos agudos; o motor corta o que passaria de Nyquist)");
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Harmonicos", nullptr, tabFlag(2))) {
+        if (ImGui::BeginTabItem("Harmônicos", nullptr, tabFlag(2))) {
             // le os harmonicos da onda atual quando ela muda por fora deste editor
             if (st.harmFrom != target.get()) {
                 Wave w = waveOrSine(target);
@@ -271,12 +271,12 @@ inline bool WavetableEditor(dx7fm::OperatorParams& op, ImU32 color, WavetableEdi
             ImGui::SameLine();
             ImGui::RadioButton("Amplitude dB", &st.harmUi.view, 1);
             ImGui::SameLine();
-            ImGui::TextDisabled("harmonicos 1..%d (fase zero); a onda e refeita a cada mudanca", dx7fm::kNumPartials);
+            ImGui::TextDisabled("harmônicos 1..%d (fase zero); a onda e refeita a cada mudanca", dx7fm::kNumPartials);
             bool edited = PartialBars("##harm", st.harm, st.harm, st.harmUi, color, ImVec2(ImGui::GetContentRegionAvail().x, 130.0f));
             ImGui::TextUnformatted("Preset:");
             for (const auto& p : dx7fm_app::kAdditivePresets) {
                 std::string n = p.name;
-                if (n == "Orgao" || n == "Sino" || n == "Tambor") continue; // razoes nao inteiras: nao cabem num ciclo
+                if (n == "Órgão" || n == "Sino" || n == "Tambor") continue; // razoes nao inteiras: nao cabem num ciclo
                 ImGui::SameLine();
                 if (ImGui::SmallButton(p.name)) { p.make(st.harm); edited = true; }
             }
@@ -298,7 +298,7 @@ inline bool WavetableEditor(dx7fm::OperatorParams& op, ImU32 color, WavetableEdi
             const bool loaded = st.wav.error.empty() && !st.wav.mono.empty();
             if (!loaded) {
                 ImGui::TextDisabled("Um .wav de wavetable (Serum/Vital: frames de 2048 amostras) -> escolha o frame.\n"
-                                    "Qualquer outro som -> um periodo dele, no instante escolhido.");
+                                    "Qualquer outro som -> um período dele, no instante escolhido.");
             } else {
                 if (st.candidateDirty) updateCandidate(st);
                 const int frames = wg::wavetableFrames(st.wav.mono);

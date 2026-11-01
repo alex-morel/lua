@@ -53,7 +53,7 @@ struct AlgorithmDef {
 inline const std::vector<AlgorithmDef>& algorithmTable() {
     static const std::vector<AlgorithmDef> table = {
         // --- 1 portadora --------------------------------------------------
-        {"1 cadeia unica (8 em serie)", {{0,1,2,3,4,5,6,7}}, {}, {}},
+        {"1 cadeia única (8 em série)", {{0,1,2,3,4,5,6,7}}, {}, {}},
 
         // --- 2 portadoras ---------------------------------------------------
         {"2 cadeias: 7+1", {{0,1,2,3,4,5,6},{7}}, {}, {}},

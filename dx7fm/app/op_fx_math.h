@@ -49,7 +49,7 @@ inline const char* waveshapeLabel(dx7fm::WaveshapeCurve c) {
         case dx7fm::WaveshapeCurve::Soft: return "Suave";
         case dx7fm::WaveshapeCurve::Hard: return "Clip";
         case dx7fm::WaveshapeCurve::Sine: return "Seno";
-        case dx7fm::WaveshapeCurve::Tube: return "Valvula";
+        case dx7fm::WaveshapeCurve::Tube: return "Válvula";
         case dx7fm::WaveshapeCurve::Cheby3: return "Chebyshev 3";
         case dx7fm::WaveshapeCurve::Rectify: return "Retificador";
     }
@@ -64,16 +64,16 @@ struct Info {
 inline Info info(FxType t) {
     switch (t) {
         case FxType::Bypass:    return {"Nenhum", "Sem efeito: o oscilador sai direto."};
-        case FxType::LowPass:   return {"Passa-baixa", "Corta os agudos acima do corte; o carater vem do modelo."};
-        case FxType::BandPass:  return {"Passa-banda", "Deixa so uma faixa em volta do corte (Q estreita a faixa)."};
-        case FxType::HighPass:  return {"Passa-alta", "Corta os graves abaixo do corte; o carater vem do modelo."};
-        case FxType::RingMod:   return {"Ring mod", "Multiplica pela saida de outro operador: soma e diferenca das frequencias."};
-        case FxType::Saturate:  return {"Saturacao", "tanh: arredonda os picos, harmonicos impares, mais forte com o drive."};
+        case FxType::LowPass:   return {"Passa-baixa", "Corta os agudos acima do corte; o caráter vem do modelo."};
+        case FxType::BandPass:  return {"Passa-banda", "Deixa só uma faixa em volta do corte (Q estreita a faixa)."};
+        case FxType::HighPass:  return {"Passa-alta", "Corta os graves abaixo do corte; o caráter vem do modelo."};
+        case FxType::RingMod:   return {"Ring mod", "Multiplica pela saída de outro operador: soma e diferenca das frequências."};
+        case FxType::Saturate:  return {"Saturação", "tanh: arredonda os picos, harmônicos ímpares, mais forte com o drive."};
         case FxType::Crush:     return {"Bitcrusher", "Reduz a taxa de amostragem (aliasing) e os bits (degraus)."};
-        case FxType::FreqShift: return {"Freq shift", "Soma Hz fixos a todas as frequencias: harmonicos viram inarmonicos."};
-        case FxType::Comb:      return {"Comb", "Delay curto com feedback: ressoa na afinacao e nos multiplos (metalico)."};
-        case FxType::Fold:      return {"Wavefolder", "Dobra o sinal que passa do limite: harmonicos brilhantes (estilo Buchla)."};
-        case FxType::Waveshape: return {"Waveshaper", "Passa o sinal por uma curva: cada curva cria um conjunto de harmonicos."};
+        case FxType::FreqShift: return {"Freq shift", "Soma Hz fixos a todas as frequências: harmônicos viram inarmônicos."};
+        case FxType::Comb:      return {"Comb", "Delay curto com feedback: ressoa na afinação e nos múltiplos (metálico)."};
+        case FxType::Fold:      return {"Wavefolder", "Dobra o sinal que passa do limite: harmônicos brilhantes (estilo Buchla)."};
+        case FxType::Waveshape: return {"Waveshaper", "Passa o sinal por uma curva: cada curva cria um conjunto de harmônicos."};
         case FxType::Notch:     return {"Rejeita-faixa", "Filtro SVF: remove uma faixa em volta do corte (Q estreita o corte)."};
     }
     return {"?", ""};

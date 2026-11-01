@@ -25,15 +25,15 @@ struct FxRackHooks {
     std::function<void(float)> sendExpression;               // posicao do pedal (0..1) pra thread de audio
 };
 
-inline const char* const kCategories[] = {"Dinamica", "Drive", "Fita", "Filtro", "Modulacao", "Pitch", "Delay", "Reverb", "Granular"};
+inline const char* const kCategories[] = {"Dinâmica", "Drive", "Fita", "Filtro", "Modulação", "Pitch", "Delay", "Reverb", "Granular"};
 
 inline ImU32 categoryColor(const char* cat, int alpha = 255) {
     const std::string c = cat ? cat : "";
-    if (c == "Dinamica") return ui::rgb(246, 224, 94, alpha);
+    if (c == "Dinâmica") return ui::rgb(246, 224, 94, alpha);
     if (c == "Drive") return ui::rgb(246, 140, 85, alpha);
     if (c == "Fita") return ui::rgb(214, 170, 110, alpha);
     if (c == "Filtro") return ui::rgb(120, 210, 120, alpha);
-    if (c == "Modulacao") return ui::rgb(100, 170, 250, alpha);
+    if (c == "Modulação") return ui::rgb(100, 170, 250, alpha);
     if (c == "Pitch") return ui::rgb(180, 140, 250, alpha);
     if (c == "Delay") return ui::rgb(79, 209, 197, alpha);
     if (c == "Reverb") return ui::rgb(240, 120, 180, alpha);
@@ -243,8 +243,7 @@ inline void DrawPedal(FxRackUi& ui, dx7fm::Synth& synth, int c, int s) {
         KindCombo(sp);
 
         if (empty) {
-            ImGui::Dummy(ImVec2(0, 4));
-            ImGui::TextDisabled("Slot vazio: o sinal passa direto.\nEscolha um efeito ou arraste\num pedal pra ca.");
+            ImGui::TextDisabled("Vazio: o sinal passa direto.");
         } else {
             if (!sp.on) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.55f); // bypass: esmaecido, mas editavel
             ui::KnobStyle ks;
@@ -275,9 +274,10 @@ inline void DrawPedal(FxRackUi& ui, dx7fm::Synth& synth, int c, int s) {
             if (!sp.on) ImGui::PopStyleVar();
         }
 
-        // rodape: footswitch, expressao, medidor
+        // rodape: footswitch, expressao, medidor (pedal vazio nao tem o que ligar)
+        if (!empty) {
         ImGui::Separator();
-        if (Footswitch("##fs", sp.on && !empty, catCol) && !empty) sp.on = !sp.on;
+        if (Footswitch("##fs", sp.on, catCol)) sp.on = !sp.on;
         ImGui::SameLine();
         const bool isExpr = r.expr.chain == c && r.expr.slot == s;
         ImGui::BeginDisabled(empty);
@@ -287,10 +287,10 @@ inline void DrawPedal(FxRackUi& ui, dx7fm::Synth& synth, int c, int s) {
         if (isExpr) ImGui::PopStyleColor();
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(isExpr ? "Pedal de expressao: %s\n(mude a faixa no mixer)" : "Ligar o pedal de expressao a um parametro deste pedal",
+            ImGui::SetTooltip(isExpr ? "Pedal de expressão: %s\n(mude a faixa no mixer)" : "Ligar o pedal de expressão a um parâmetro deste pedal",
                               isExpr && r.expr.param < info.nParams ? info.params[r.expr.param].label : "");
         if (ImGui::BeginPopup("##exp")) {
-            ImGui::TextDisabled("Pedal de expressao controla:");
+            ImGui::TextDisabled("Pedal de expressão controla:");
             for (int i = 0; i < info.nParams; ++i) {
                 const FxParamInfo& pi = info.params[i];
                 if (pi.rebuild) continue;
@@ -303,6 +303,7 @@ inline void DrawPedal(FxRackUi& ui, dx7fm::Synth& synth, int c, int s) {
             ImGui::SameLine();
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 5.0f);
             GainReductionMeter(sp.on ? synth.fxSlotMeter(c, s) : 0.0f, -FLT_MIN);
+        }
         }
     }
     ui::EndCard();
@@ -324,7 +325,7 @@ inline void DrawRackMixer(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks& 
     ks.cellWidth = 52.0f;
 
     if (ui::BeginCard("##fxmix", "ENVIOS POR PARTE")) {
-        ImGui::TextDisabled("Seco = direto pra saida;\n-> 1 / -> 2 = envio pra cada cadeia.");
+        ImGui::TextDisabled("Seco = direto pra saída;\n-> 1 / -> 2 = envio pra cada cadeia.");
         ui::KnobStyle kp = ks;
         kp.size = 28.0f;
         kp.cellWidth = 46.0f;
@@ -353,7 +354,7 @@ inline void DrawRackMixer(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks& 
 
     if (ui::BeginCard("##fxchains", "CADEIAS")) {
         // ligacao entre as cadeias (o algoritmo de cada uma fica no cabecalho dela)
-        ImGui::TextUnformatted("Ligacao entre as cadeias");
+        ImGui::TextUnformatted("Ligação entre as cadeias");
         for (int l = 0; l < kFxNumLinks; ++l) {
             int cur = r.link;
             if (ImGui::RadioButton(kFxLinks[l].name, &cur, l)) r.link = static_cast<uint8_t>(l);
@@ -365,7 +366,7 @@ inline void DrawRackMixer(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks& 
         for (int c = 0; c < kFxChains; ++c) {
             ImGui::PushID(100 + c);
             ImGui::Text("Cadeia %d", c + 1);
-            ui::Knob("Nivel", &r.chain[c].level, 0.0f, 2.0f, 1.0f, "%.2f", ks);
+            ui::Knob("Nível", &r.chain[c].level, 0.0f, 2.0f, 1.0f, "%.2f", ks);
             ImGui::SameLine();
             ui::Knob("Pan", &r.chain[c].pan, -1.0f, 1.0f, 0.0f, "%.2f", ks);
             ImGui::SameLine();
@@ -380,16 +381,16 @@ inline void DrawRackMixer(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks& 
     }
     ui::EndCard();
 
-    if (ui::BeginCard("##fxexpr", "PEDAL DE EXPRESSAO")) {
+    if (ui::BeginCard("##fxexpr", "PEDAL DE EXPRESSÃO")) {
         FxExpression& e = r.expr;
         if (e.chain < 0) {
-            ImGui::TextDisabled("Sem alvo: use o botao EXP de um pedal.");
+            ImGui::TextDisabled("Sem alvo: use o botão EXP de um pedal.");
         } else {
             const FxInfo& info = fxInfo(r.chain[e.chain].slot[e.slot].kind);
             const FxParamInfo& pi = info.params[e.param];
             ImGui::Text("%d.%d %s: %s", e.chain + 1, e.slot + 1, info.name, pi.label);
             if (pi.choices) {
-                ImGui::TextDisabled("escolha: o pedal percorre as opcoes");
+                ImGui::TextDisabled("escolha: o pedal percorre as opções");
             } else {
                 ui::KnobStyle st = ks;
                 st.logarithmic = pi.log && pi.min > 0.0f;
@@ -431,18 +432,18 @@ inline void DrawPresetBar(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks& 
         if (hooks.factory) {
             std::string lastCat;
             for (const auto& pr : *hooks.factory) {
-                if (pr.category != lastCat) { ImGui::SeparatorText(("Fabrica: " + pr.category).c_str()); lastCat = pr.category; }
+                if (pr.category != lastCat) { ImGui::SeparatorText(("Fábrica: " + pr.category).c_str()); lastCat = pr.category; }
                 if (ImGui::Selectable(pr.name.c_str(), ui.current == pr.name)) loadPresetInto(ui, synth, pr.rack, pr.name, now);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pr.description.c_str());
             }
         }
-        ImGui::SeparatorText("Usuario");
+        ImGui::SeparatorText("Usuário");
         if (ui.user.empty()) ImGui::TextDisabled("(nenhum salvo em %s/)", hooks.presetDir.string().c_str());
         for (const auto& e : ui.user)
             if (ImGui::Selectable(e.stem.c_str(), ui.current == e.stem)) {
                 FxRackParams r;
                 if (loadFxRackFile(e.path, r)) loadPresetInto(ui, synth, r, e.stem, now);
-                else ui.status = "Nao e um preset de efeitos: " + e.path.string();
+                else ui.status = "Não e um preset de efeitos: " + e.path.string();
             }
         ImGui::EndCombo();
     }
@@ -459,10 +460,10 @@ inline void DrawPresetBar(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks& 
             ui.current = target.stem().string();
             ui.userListDirty = true;
         } else {
-            ui.status = "Nao consegui salvar " + target.string();
+            ui.status = "Não consegui salvar " + target.string();
         }
     }
-    ImGui::SetItemTooltip("Grava o rack inteiro (pedais, envios, pedal de expressao) em %s", target.string().c_str());
+    ImGui::SetItemTooltip("Grava o rack inteiro (pedais, envios, pedal de expressão) em %s", target.string().c_str());
     ImGui::SameLine();
     if (ImGui::Button("Init")) loadPresetInto(ui, synth, FxRackParams{}, "(init)", now);
     ImGui::SetItemTooltip("Rack vazio: todas as partes entram na cadeia 1, sem efeitos");
@@ -491,7 +492,7 @@ inline void DrawFxRackPanel(FxRackUi& ui, dx7fm::Synth& synth, const FxRackHooks
         DrawRackMixer(ui, synth, hooks);
         ImGui::TableSetColumnIndex(1);
         for (int c = 0; c < kFxChains; ++c) {
-            if (c == 1) ImGui::TextDisabled(ui.edit.link == kFxLinkParallel ? "(em paralelo com a cadeia 1)" : "(recebe a saida da cadeia 1)");
+            if (c == 1) ImGui::TextDisabled(ui.edit.link == kFxLinkParallel ? "(em paralelo com a cadeia 1)" : "(recebe a saída da cadeia 1)");
             ChainHeader(ui.edit.chain[c], c);
             char tid[16];
             std::snprintf(tid, sizeof tid, "##chain%d", c);

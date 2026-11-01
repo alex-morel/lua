@@ -464,7 +464,7 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp, int& soloOp) {
         ImGui::TableSetupColumn("Onda");
         ImGui::TableSetupColumn("Ratio/Hz");
         ImGui::TableSetupColumn("Fixo");
-        ImGui::TableSetupColumn("Nivel");
+        ImGui::TableSetupColumn("Nível");
         ImGui::TableSetupColumn("Feedback");
         ImGui::TableSetupColumn("FX");
         ImGui::TableSetupColumn("Ajuste do FX");
@@ -494,7 +494,7 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp, int& soloOp) {
             ImGui::PushStyleColor(ImGuiCol_Text, op.enabled ? ui::rgb(14, 16, 22) : ui::col::kTextDim);
             if (ImGui::SmallButton(op.enabled ? "On##on" : "Off##on")) { op.enabled = !op.enabled; changed = true; }
             ImGui::PopStyleColor(2);
-            ImGui::SetItemTooltip(op.enabled ? "Ligado: clique pra desligar. Desligado, o operador nao soa nem modula;\nos ajustes ficam guardados e o estado vai no patch."
+            ImGui::SetItemTooltip(op.enabled ? "Ligado: clique pra desligar. Desligado, o operador não soa nem modula;\nos ajustes ficam guardados e o estado vai no patch."
                                              : "Desligado: clique pra ligar");
             ImGui::SameLine(0, 4);
             const bool soloed = soloOp == i;
@@ -502,7 +502,7 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp, int& soloOp) {
             ImGui::PushStyleColor(ImGuiCol_Text, soloed ? ui::rgb(14, 16, 22) : ui::col::kText);
             if (ImGui::SmallButton("S##solo")) soloOp = soloed ? -1 : i;
             ImGui::PopStyleColor(2);
-            ImGui::SetItemTooltip("Solo: ouve so este operador, com os moduladores dele, mesmo que seja um modulador.\nSo vale na edicao: nao vai no patch.");
+            ImGui::SetItemTooltip("Solo: ouve só este operador, com os moduladores dele, mesmo que seja um modulador.\nSo vale na edição: não vai no patch.");
             if (!op.enabled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.45f); // desligado: esmaecido, mas editavel
 
             ImGui::TableSetColumnIndex(2);
@@ -523,14 +523,14 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp, int& soloOp) {
 
             ImGui::TableSetColumnIndex(5);
             {
-                int lvl = op.outputLevel;
-                ImGui::SetNextItemWidth(70);
-                if (ImGui::SliderInt("##lvl", &lvl, 0, 99, "%d", ImGuiSliderFlags_AlwaysClamp)) { op.outputLevel = static_cast<uint8_t>(lvl); changed = true; }
+                float lvl = op.outputLevel;
+                if (ui::ValueBar("lvl", &lvl, 0.0f, 99.0f, 99.0f, "%.0f", 70.0f, ui::opColor(i))) { op.outputLevel = static_cast<uint8_t>(std::lround(lvl)); changed = true; }
+                ImGui::SetItemTooltip("Arraste (Shift = fino), Ctrl+clique digita, duplo clique = 99");
             }
 
             ImGui::TableSetColumnIndex(6);
-            ImGui::SetNextItemWidth(70);
-            changed |= ImGui::SliderFloat("##fb", &op.feedback, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            changed |= ui::ValueBar("fb", &op.feedback, 0.0f, 1.0f, 0.0f, "%.2f", 70.0f, ui::col::kAccent2);
+            ImGui::SetItemTooltip("Arraste (Shift = fino), Ctrl+clique digita, duplo clique = 0");
 
             ImGui::TableSetColumnIndex(7);
             int fx = static_cast<int>(op.fxType);
@@ -550,7 +550,7 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp, int& soloOp) {
             changed |= ui::OperatorFxQuickEdit(v, i, 120);
             ImGui::SameLine();
             if (ImGui::SmallButton("...")) { selectedOp = i; g_scrollToFxCard = true; }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("todos os ajustes do efeito, com grafico (card EFEITO DO OPERADOR %d)", i + 1);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("todos os ajustes do efeito, com gráfico (card EFEITO DO OPERADOR %d)", i + 1);
 
             if (!op.enabled) ImGui::PopStyleVar();
             ImGui::PopID();
@@ -558,7 +558,7 @@ bool DrawOperatorTable(VoiceParams& v, int& selectedOp, int& soloOp) {
         ImGui::EndTable();
     }
     if (soloOp >= 0) {
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::col::kAccent2), "Solo: voce esta ouvindo so o Op%d (e os moduladores dele).", soloOp + 1);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::col::kAccent2), "Solo: você esta ouvindo só o Op%d (e os moduladores dele).", soloOp + 1);
         ImGui::SameLine();
         if (ImGui::SmallButton("Tirar solo")) soloOp = -1;
     }
@@ -571,7 +571,7 @@ bool DrawOperatorDetail(OperatorParams& op, int opIndex) {
     ks.color = ui::opColor(opIndex);
     const float kw = 62.0f; // largura de um knob (pro layout fluido)
 
-    ImGui::TextDisabled("afinacao e modulacao");
+    ImGui::TextDisabled("afinação e modulação");
     changed |= ui::Knob("Fine", &op.fineCents, -100.0f, 100.0f, 0.0f, "%.1f c", ks);
     flowSameLine(kw); changed |= ui::Knob("Detune", &op.detuneCents, -100.0f, 100.0f, 0.0f, "%.1f c", ks);
     flowSameLine(kw); changed |= ui::Knob("Phase dist", &op.phaseDistortion, 0.0f, 1.0f, 0.0f, "%.2f", ks);
@@ -582,7 +582,7 @@ bool DrawOperatorDetail(OperatorParams& op, int opIndex) {
     flowSameLine(kw); changed |= ui::KnobU8("LFO amp", &op.lfoAmpModSens, 0, 3, 0, "%d", ks);
 
     // key scaling: knobs + as opcoes de curva ao lado
-    ImGui::TextDisabled("key scaling (nivel por nota, em volta do breakpoint)");
+    ImGui::TextDisabled("key scaling (nível por nota, em volta do breakpoint)");
     changed |= ui::KnobU8("Breakpt", &op.levelScaling.breakpoint, 0, 127, 60, "%d", ks);
     {
         int ld = op.levelScaling.leftDepth, rd = op.levelScaling.rightDepth;
@@ -620,11 +620,11 @@ bool DrawOperatorFx(VoiceParams& v, int opIndex) {
     // "additive": operador com morph A->B (Additive ou Wavetable), que o FX EG tambem move
     const bool additive = op.waveform == Waveform::Additive || op.waveform == Waveform::Wavetable, sweeps = egSweeps(op.fxType);
     const char* morphOf = op.waveform == Waveform::Wavetable ? "Wavetable" : "Additive";
-    const char* what = sweeps ? (op.fxType == FxType::Fold || op.fxType == FxType::Waveshape ? "varre o drive" : "varre o corte (20% no nivel 0, 100% no 99)") : nullptr;
+    const char* what = sweeps ? (op.fxType == FxType::Fold || op.fxType == FxType::Waveshape ? "varre o drive" : "varre o corte (20% no nível 0, 100% no 99)") : nullptr;
     if (what && additive) ImGui::TextDisabled("FX EG: %s e move o morph A->B da %s", what, morphOf);
     else if (what) ImGui::TextDisabled("FX EG: %s", what);
-    else if (additive) ImGui::TextDisabled("FX EG: move o morph A->B da %s (nao afeta este efeito)", morphOf);
-    else ImGui::TextDisabled("FX EG: nao afeta este efeito (so filtros, Wavefolder, Waveshaper e o morph da Additive/Wavetable)");
+    else if (additive) ImGui::TextDisabled("FX EG: move o morph A->B da %s (não afeta este efeito)", morphOf);
+    else ImGui::TextDisabled("FX EG: não afeta este efeito (só filtros, Wavefolder, Waveshaper e o morph da Additive/Wavetable)");
     ImGui::BeginDisabled(!sweeps && !additive);
     changed |= DrawEGKnobs("fxeg", op.fxEG.rate, op.fxEG.level, ui::opColor(opIndex, 200));
     changed |= ImGui::Checkbox("FX EG acompanha o release do Amp EG", &op.fxEGReleaseWithAmp);
@@ -660,7 +660,7 @@ void DrawAlgorithmDiagram(const VoiceParams& v, const AlgorithmMatrix& m, int& s
     ImVec2 mouse = ImGui::GetIO().MousePos;
 
     dl->AddLine(ImVec2(origin.x + 4, outputY), ImVec2(origin.x + canvasW, outputY), ui::col::kAccent, 2.0f);
-    dl->AddText(ImVec2(origin.x + canvasW - 38.0f, outputY - 16.0f), ui::col::kAccent, "saida");
+    dl->AddText(ImVec2(origin.x + canvasW - 38.0f, outputY - 16.0f), ui::col::kAccent, "saída");
 
     // arestas (setas) primeiro, pra ficarem atras das caixas; na cor do operador que MODULA
     for (int i = 0; i < kNumOps; ++i) {
@@ -708,7 +708,7 @@ void DrawAlgorithmDiagram(const VoiceParams& v, const AlgorithmMatrix& m, int& s
     }
     if (ImGui::IsItemHovered()) ImGui::SetItemTooltip("Clique num operador pra seleciona-lo");
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("Preenchido = portadora | setas = modulacao | circulo laranja = feedback | laranja = ring mod | apagado = desligado");
+    ImGui::TextDisabled("Preenchido = portadora | setas = modulação | circulo laranja = feedback | laranja = ring mod | apagado = desligado");
     ImGui::PopTextWrapPos();
 }
 // [ADICIONADO em 2026-10-24] Morph entre algoritmos: fileira de slots (qual
@@ -720,8 +720,8 @@ bool DrawAlgoSlots(AppState& app, VoiceParams& v) {
     app.algoSlot = std::clamp(app.algoSlot, 0, n - 1);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Algoritmos");
-    ImGui::SetItemTooltip("Ate 8 algoritmos por patch: a posicao do morph passa por eles em ordem,\n"
-                          "interpolando as conexoes. Clique num numero pra editar aquele algoritmo.");
+    ImGui::SetItemTooltip("Até 8 algoritmos por patch: a posição do morph passa por eles em ordem,\n"
+                          "interpolando as conexões. Clique num número pra editar aquele algoritmo.");
     for (int s = 0; s < n; ++s) {
         ImGui::SameLine(0, 4);
         char b[8];
@@ -744,7 +744,7 @@ bool DrawAlgoSlots(AppState& app, VoiceParams& v) {
         changed = true;
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Novo algoritmo (copia do que esta em edicao)");
+    ImGui::SetItemTooltip("Novo algoritmo (cópia do que esta em edição)");
     ImGui::SameLine(0, 4);
     ImGui::BeginDisabled(n <= 1);
     if (ImGui::SmallButton("-")) { // remove o slot em edicao
@@ -755,7 +755,7 @@ bool DrawAlgoSlots(AppState& app, VoiceParams& v) {
         changed = true;
     }
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Remove o algoritmo em edicao");
+    ImGui::SetItemTooltip("Remove o algoritmo em edição");
     n = v.activeAlgos();
     if (n < 2) return changed;
 
@@ -781,13 +781,13 @@ bool DrawAlgoSlots(AppState& app, VoiceParams& v) {
     const float hx = x0 + (x1 - x0) * v.algoMorph;
     dl->AddTriangleFilled(ImVec2(hx, cy - 2), ImVec2(hx - 6, cy - 10), ImVec2(hx + 6, cy - 10), ui::col::kAccent2);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("posicao do morph: %.0f%% (arraste). A matriz de modulacao soma no destino AlgoMorph.", v.algoMorph * 100.0f);
+        ImGui::SetTooltip("posição do morph: %.0f%% (arraste). A matriz de modulação soma no destino AlgoMorph.", v.algoMorph * 100.0f);
     ImGui::SameLine();
     ImGui::BeginGroup();
     changed |= ImGui::Checkbox("Saltar", &v.algoStep);
     ImGui::SetItemTooltip("Pula de algoritmo em algoritmo em vez de passar pelo meio");
-    ImGui::Checkbox("Ver posicao", &app.algoMorphView);
-    ImGui::SetItemTooltip("Diagrama mostra o ponto do morph (setas mais grossas = conexao mais forte)\nem vez do algoritmo em edicao");
+    ImGui::Checkbox("Ver posição", &app.algoMorphView);
+    ImGui::SetItemTooltip("Diagrama mostra o ponto do morph (setas mais grossas = conexão mais forte)\nem vez do algoritmo em edição");
     ImGui::EndGroup();
     return changed;
 }
@@ -817,7 +817,7 @@ bool DrawMatrix(AlgorithmMatrix& m) {
         ImGui::EndTable();
     }
     ImGui::Spacing();
-    ImGui::TextDisabled("Output mix: quanto de cada operador vai pra saida (> 0 = portadora)");
+    ImGui::TextDisabled("Output mix: quanto de cada operador vai pra saída (> 0 = portadora)");
     for (int i = 0; i < kNumOps; ++i) {
         ImGui::PushID(100 + i);
         ui::KnobStyle ks;
@@ -839,13 +839,13 @@ bool DrawLfo(const char* label, LFOParams& lfo) {
     int wave = static_cast<int>(lfo.wave);
     ImGui::SetNextItemWidth(92);
     if (ImGui::Combo("##forma", &wave, kWave, IM_ARRAYSIZE(kWave), IM_ARRAYSIZE(kWave))) { lfo.wave = static_cast<LfoWave>(wave); changed = true; }
-    ImGui::SetItemTooltip("Forma de onda do LFO (SmoothRandom = aleatorio com transicao suave)");
+    ImGui::SetItemTooltip("Forma de onda do LFO (SmoothRandom = aleatório com transição suave)");
     ImGui::SameLine();
     changed |= ImGui::Checkbox("Key sync", &lfo.keySync);
     ImGui::SetItemTooltip("Reinicia o ciclo a cada nota");
     ImGui::SameLine();
     changed |= ImGui::Checkbox("Sync", &lfo.tempoSync);
-    ImGui::SetItemTooltip("Velocidade em divisoes do BPM (knob BPM no topo) em vez de Hz");
+    ImGui::SetItemTooltip("Velocidade em divisões do BPM (knob BPM no topo) em vez de Hz");
     ui::KnobStyle ks;
     ks.color = ui::col::kAccent2;
     ks.size = 32.0f;
@@ -854,7 +854,7 @@ bool DrawLfo(const char* label, LFOParams& lfo) {
     ksLog.logarithmic = true;
     if (lfo.tempoSync) {
         int div = lfo.division; // 4/1 (lento) .. 1/32 (rapido); "." = pontuada, "T" = tercina
-        if (ui::KnobInt("Divisao", &div, 0, kNumLfoDivisions - 1, 6, lfoDivisionName(div), ks)) { lfo.division = static_cast<uint8_t>(div); changed = true; }
+        if (ui::KnobInt("Divisão", &div, 0, kNumLfoDivisions - 1, 6, lfoDivisionName(div), ks)) { lfo.division = static_cast<uint8_t>(div); changed = true; }
     } else {
         changed |= ui::Knob("Rate", &lfo.rate, 0.01f, 50.0f, 5.0f, "%.2f Hz", ksLog);
     }
@@ -866,7 +866,7 @@ bool DrawLfo(const char* label, LFOParams& lfo) {
     {
         int steps = lfo.steps;
         if (ui::KnobInt("Degraus", &steps, 0, 32, 0, steps < 2 ? "suave" : "%d", ks)) { lfo.steps = static_cast<uint8_t>(steps == 1 ? 0 : steps); changed = true; }
-        ImGui::SetItemTooltip("Quantiza o LFO em N niveis (escada); 0 = suave");
+        ImGui::SetItemTooltip("Quantiza o LFO em N níveis (escada); 0 = suave");
     }
     ImGui::PopID();
     return changed;
@@ -888,7 +888,7 @@ void LearnButton(AppState& app, dx7fm_app::CcTarget target, float width); // jun
 bool DrawMacros(AppState& app, int part) {
     auto& v = app.synth.part(part).voice;
     bool changed = false;
-    ImGui::TextDisabled("Fontes Macro1..4 da matriz de modulacao. Nome editavel; botao embaixo = MIDI learn.");
+    ImGui::TextDisabled("Fontes Macro1..4 da matriz de modulação. Nome editável; botão embaixo = MIDI learn.");
     ui::KnobStyle ks;
     ks.color = ui::col::kAccent;
     ks.cellWidth = 96.0f;
@@ -931,19 +931,19 @@ bool DrawMacros(AppState& app, int part) {
 bool DrawArp(ArpParams& a) {
     bool changed = false;
     changed |= ImGui::Checkbox("Ligado##arp", &a.on);
-    ImGui::SetItemTooltip("As teclas da parte montam o padrao; o arpejador toca uma nota por passo no tempo do BPM");
+    ImGui::SetItemTooltip("As teclas da parte montam o padrão; o arpejador toca uma nota por passo no tempo do BPM");
     ImGui::SameLine();
-    static const char* kModes[] = {"Sobe", "Desce", "Sobe/desce", "Aleatorio", "Como tocado"};
+    static const char* kModes[] = {"Sobe", "Desce", "Sobe/desce", "Aleatório", "Como tocado"};
     int mode = static_cast<int>(a.mode);
     ImGui::SetNextItemWidth(130);
     if (ImGui::Combo("##arpmode", &mode, kModes, IM_ARRAYSIZE(kModes))) { a.mode = static_cast<ArpMode>(mode); changed = true; }
     ImGui::SameLine();
     changed |= ImGui::Checkbox("Latch", &a.latch);
-    ImGui::SetItemTooltip("Soltar todas as teclas mantem o arpejo; a proxima tecla comeca um padrao novo");
+    ImGui::SetItemTooltip("Soltar todas as teclas mantem o arpejo; a próxima tecla começa um padrão novo");
     ui::KnobStyle ks;
     ks.color = ui::col::kAccent;
     int div = a.division;
-    if (ui::KnobInt("Divisao", &div, 0, kNumLfoDivisions - 1, 12, lfoDivisionName(div), ks)) { a.division = static_cast<uint8_t>(div); changed = true; }
+    if (ui::KnobInt("Divisão", &div, 0, kNumLfoDivisions - 1, 12, lfoDivisionName(div), ks)) { a.division = static_cast<uint8_t>(div); changed = true; }
     ImGui::SameLine();
     int oct = a.octaves;
     if (ui::KnobInt("Oitavas", &oct, 1, 4, 1, "%d", ks)) { a.octaves = static_cast<uint8_t>(oct); changed = true; }
@@ -954,7 +954,7 @@ bool DrawArp(ArpParams& a) {
     ImGui::SameLine();
     float swing = a.swing * 100.0f;
     if (ui::Knob("Swing", &swing, 0.0f, 75.0f, 0.0f, "%.0f%%", ks)) { a.swing = swing / 100.0f; changed = true; }
-    ImGui::SetItemTooltip("Atrasa os passos impares (33%% = tercina)");
+    ImGui::SetItemTooltip("Atrasa os passos ímpares (33%% = tercina)");
     return changed;
 }
 
@@ -992,10 +992,10 @@ bool DrawPartTuning(AppState& app, int part) {
     auto& t = app.synth.part(part).tuning;
     bool changed = false;
     ImGui::AlignTextToFramePadding();
-    if (t.sclText.empty()) ImGui::Text("Afinacao: 12-TET");
-    else ImGui::Text("Afinacao: %s%s", t.name.c_str(), t.kbmText.empty() ? "" : " + .kbm");
+    if (t.sclText.empty()) ImGui::Text("Afinação: 12-TET");
+    else ImGui::Text("Afinação: %s%s", t.name.c_str(), t.kbmText.empty() ? "" : " + .kbm");
     ImGui::SameLine();
-    if (ImGui::SmallButton("Carregar .scl/.kbm")) { app.tuningBrowser.listed = false; ImGui::OpenPopup("Afinacao"); }
+    if (ImGui::SmallButton("Carregar .scl/.kbm")) { app.tuningBrowser.listed = false; ImGui::OpenPopup("Afinação"); }
     ImGui::SameLine();
     ImGui::BeginDisabled(t.sclText.empty() && t.kbmText.empty());
     if (ImGui::SmallButton("12-TET")) {
@@ -1010,13 +1010,13 @@ bool DrawPartTuning(AppState& app, int part) {
     ImGui::SetNextItemWidth(120);
     changed |= ImGui::DragFloat("A4 (Hz)", &t.a4Hz, 0.1f, 380.0f, 500.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip(t.kbmText.empty() ? "Diapasao: frequencia da nota 69 (la central)" : "O .kbm carregado define a propria referencia");
+    ImGui::SetItemTooltip(t.kbmText.empty() ? "Diapasão: frequência da nota 69 (la central)" : "O .kbm carregado define a própria referência");
     const std::string& err = app.synth.tuningError(part);
-    if (!err.empty()) ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::col::kAccent2), "Afinacao invalida (%s): tocando em 12-TET", err.c_str());
+    if (!err.empty()) ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::col::kAccent2), "Afinação inválida (%s): tocando em 12-TET", err.c_str());
 
     ImGui::SetNextWindowSize(ImVec2(520, 380), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Afinacao", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
-        ImGui::TextDisabled(".scl = a escala (alturas); .kbm (opcional) = quais teclas tocam quais graus e a referencia.");
+    if (ImGui::BeginPopupModal("Afinação", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::TextDisabled(".scl = a escala (alturas); .kbm (opcional) = quais teclas tocam quais graus e a referência.");
         std::string picked = app.tuningBrowser.drawList("##tunbrowser", ImVec2(-1, 260), "");
         std::string typed = app.tuningBrowser.drawPathInput("tunpath");
         if (picked.empty()) picked = typed;
@@ -1073,13 +1073,13 @@ void DrawEnvCurve(const EGParams& eg, ImU32 color, ImVec2 size, bool loop = fals
     }
     char lbl[48];
     if (syncDiv) std::snprintf(lbl, sizeof lbl, "sync: ciclo do loop = %s do BPM", syncDiv);
-    else std::snprintf(lbl, sizeof lbl, "%.2fs ate o sustain", t.untilSustain());
+    else std::snprintf(lbl, sizeof lbl, "%.2fs até o sustain", t.untilSustain());
     dl->AddText(ImVec2(p0.x + 6, p0.y + 3), ui::col::kTextDim, lbl);
 }
 
 bool DrawModEnvelopes(VoiceParams& v) {
     bool changed = false;
-    ImGui::TextDisabled("Fontes Env1..Env3 da matriz de modulacao (0..1 = level/99)");
+    ImGui::TextDisabled("Fontes Env1..Env3 da matriz de modulação (0..1 = level/99)");
     if (ImGui::BeginTabBar("##modenvs")) {
         for (int k = 0; k < kNumModEnvs; ++k) {
             char tab[16];
@@ -1090,11 +1090,11 @@ bool DrawModEnvelopes(VoiceParams& v) {
                 DrawEnvCurve(e, ui::col::kAccent2, ImVec2(ImGui::GetContentRegionAvail().x, 70.0f), e.loop,
                              e.tempoSync ? lfoDivisionName(e.division) : nullptr);
                 changed |= ImGui::Checkbox("Loop", &e.loop);
-                ImGui::SetItemTooltip("Enquanto a nota esta presa, volta do sustain (L3) pro estagio 1: L3 -> L1 -> L2 -> L3 ...\n"
+                ImGui::SetItemTooltip("Enquanto a nota esta presa, volta do sustain (L3) pro estágio 1: L3 -> L1 -> L2 -> L3 ...\n"
                                       "O note off sai do loop e faz o release normal.");
                 ImGui::SameLine();
                 changed |= ImGui::Checkbox("Sync", &e.tempoSync);
-                ImGui::SetItemTooltip("O envelope anda mais rapido ou devagar pro ciclo L3 -> L1 -> L2 -> L3 durar a divisao do BPM");
+                ImGui::SetItemTooltip("O envelope anda mais rápido ou devagar pro ciclo L3 -> L1 -> L2 -> L3 durar a divisão do BPM");
                 if (e.tempoSync) {
                     ImGui::SameLine();
                     int div = e.division;
@@ -1103,7 +1103,7 @@ bool DrawModEnvelopes(VoiceParams& v) {
                         e.division = static_cast<uint8_t>(div);
                         changed = true;
                     }
-                    ImGui::SetItemTooltip("duracao do ciclo (4/1 = 4 compassos ... 1/32)");
+                    ImGui::SetItemTooltip("duração do ciclo (4/1 = 4 compassos ... 1/32)");
                 }
                 static const uint8_t kDefRate[4] = {60, 45, 45, 45}, kDefLevel[4] = {99, 70, 50, 0};
                 changed |= DrawEGKnobs("modenv", v.modEnv[k].rate, v.modEnv[k].level, ui::col::kAccent2, true, kDefRate, kDefLevel);
@@ -1129,28 +1129,28 @@ bool DrawModMatrix(ModRoute (&routes)[kNumModRoutes]) {
     static const char* kDst[] = {"None", "OperatorLevel", "OperatorFx1", "OperatorFeedback", "VoicePitch", "OperatorMorph",
                                  "VoicePan", "VoiceLevel", "OperatorPitch", "OperatorFx2", "LfoRate", "LfoDepth", "AlgoMorph",
                                  "OperatorFmIn", "OperatorPhaseDist", "OperatorEgSpeed", "VoiceFmIn", "VoiceFx1", "VoiceFx2", "PegDepth", "ModEnvSpeed"};
-    static const char* kDstTip[] = {"", "nivel do operador x (1 + quantidade)", "FX1 do operador x (1 + quantidade): corte, taxa, afinacao, drive",
-                                    "feedback do operador + quantidade", "afinacao da voz inteira, quantidade x 12 semitons",
+    static const char* kDstTip[] = {"", "nível do operador x (1 + quantidade)", "FX1 do operador x (1 + quantidade): corte, taxa, afinação, drive",
+                                    "feedback do operador + quantidade", "afinação da voz inteira, quantidade x 12 semitons",
                                     "morph A->B da Additive/Wavetable + quantidade", "pan da voz + quantidade (-1 esquerda, +1 direita)",
-                                    "volume da voz x (1 + quantidade)", "afinacao SO do operador, quantidade x 12 semitons",
+                                    "volume da voz x (1 + quantidade)", "afinação SÓ do operador, quantidade x 12 semitons",
                                     "FX2 do operador x (1 + quantidade): Q, drive, bits, feedback, simetria",
                                     "velocidade do LFO escolhido x 2^(3 x quantidade): +-3 oitavas",
-                                    "saida do LFO escolhido x (1 + quantidade): -1 desliga",
-                                    "posicao do morph entre algoritmos (card Algoritmo) + quantidade",
+                                    "saída do LFO escolhido x (1 + quantidade): -1 desliga",
+                                    "posição do morph entre algoritmos (card Algoritmo) + quantidade",
                                     "FM recebida pelo operador x (1 + quantidade): -1 tira a FM (o auto-feedback fica)",
                                     "phase distortion do operador + quantidade",
                                     "velocidade dos envelopes de amplitude e FX do operador x 2^(3 x quantidade): +-3 oitavas de velocidade",
                                     "FM recebida por TODOS os operadores x (1 + quantidade): o brilho geral do patch",
                                     "FX1 de TODOS os operadores x (1 + quantidade)", "FX2 de TODOS os operadores x (1 + quantidade)",
                                     "profundidade do envelope de pitch x (1 + quantidade)",
-                                    "velocidade do envelope de modulacao escolhido x 2^(3 x quantidade)"};
+                                    "velocidade do envelope de modulação escolhido x 2^(3 x quantidade)"};
     // so as rotas em uso + 1 vazia (as 16 com o checkbox)
     static bool showAll = false;
     int lastUsed = -1;
     for (int i = 0; i < kNumModRoutes; ++i)
         if (routes[i].src != ModSource::None || routes[i].dest != ModDest::None) lastUsed = i;
     const int visible = showAll ? kNumModRoutes : std::min(kNumModRoutes, std::max(lastUsed + 2, 4));
-    ImGui::TextDisabled("LFOs/envelopes/controladores/nota -> parametros");
+    ImGui::TextDisabled("LFOs/envelopes/controladores/nota -> parâmetros");
     ImGui::SameLine();
     ImGui::Checkbox("Mostrar as 16", &showAll);
     if (ImGui::BeginTable("modmatrix", 5, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
@@ -1334,7 +1334,7 @@ void doLoadPatch(AppState& app, int part, const std::filesystem::path& path) {
     auto& ui = app.patchUi[part];
     PartParams loaded;
     if (!loadPartFile(path.string(), loaded)) {
-        setPatchStatus(ui, false, "Falha ao carregar " + path.string() + " (arquivo ausente ou invalido)");
+        setPatchStatus(ui, false, "Falha ao carregar " + path.string() + " (arquivo ausente ou inválido)");
         rescanPatches(app);
         return;
     }
@@ -1420,23 +1420,23 @@ void DrawPatchConfirmPopup(AppState& app, int part) {
     const char* confirmLabel = "Confirmar";
     switch (ui.pending) {
         case Pending::Load:
-            ImGui::Text("A Parte %c tem alteracoes NAO salvas.", 'A' + part);
-            ImGui::Text("Carregar \"%s\" descarta essas alteracoes.", file.c_str());
+            ImGui::Text("A Parte %c tem alterações NÃO salvas.", 'A' + part);
+            ImGui::Text("Carregar \"%s\" descarta essas alterações.", file.c_str());
             confirmLabel = "Descartar e carregar";
             break;
         case Pending::Overwrite:
-            ImGui::Text("Ja existe um patch \"%s\".", file.c_str());
+            ImGui::Text("Já existe um patch \"%s\".", file.c_str());
             ImGui::Text("Substituir o arquivo pelo som atual da Parte %c?", 'A' + part);
             confirmLabel = "Substituir";
             break;
         case Pending::Delete:
             ImGui::Text("Excluir o arquivo \"%s\"?", file.c_str());
-            ImGui::TextDisabled("Nao da pra desfazer.");
+            ImGui::TextDisabled("Não da pra desfazer.");
             confirmLabel = "Excluir";
             break;
         case Pending::Init:
-            ImGui::Text("A Parte %c tem alteracoes NAO salvas.", 'A' + part);
-            ImGui::Text("Zerar o som pro patch Init descarta essas alteracoes.");
+            ImGui::Text("A Parte %c tem alterações NÃO salvas.", 'A' + part);
+            ImGui::Text("Zerar o som pro patch Init descarta essas alterações.");
             confirmLabel = "Descartar e zerar";
             break;
         case Pending::None: break;
@@ -1489,7 +1489,7 @@ void importDx7Voice(AppState& app, int part, int index) {
 
 void DrawDx7Import(AppState& app, int part) {
     if (ImGui::SmallButton("Importar DX7 (.syx)")) { app.dx7Browser.listed = false; ImGui::OpenPopup("Importar DX7"); }
-    ImGui::SetItemTooltip("Bancos de 32 vozes ou voz unica do Yamaha DX7 (os mesmos .syx do Dexed)");
+    ImGui::SetItemTooltip("Bancos de 32 vozes ou voz única do Yamaha DX7 (os mesmos .syx do Dexed)");
     ImGui::SetNextWindowSize(ImVec2(760, 460), ImGuiCond_Appearing);
     if (!ImGui::BeginPopupModal("Importar DX7", nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
     std::string picked = app.dx7Browser.drawList("##dx7browser", ImVec2(330, -ImGui::GetFrameHeightWithSpacing()), app.dx7File);
@@ -1502,7 +1502,7 @@ void DrawDx7Import(AppState& app, int part) {
     if (app.dx7Voices.empty()) {
         ImGui::TextDisabled("Escolha um .syx. Clicar numa voz carrega ela nesta parte --\n"
                             "da pra ir tocando e trocando; Ctrl+Z volta ao som anterior.\n\n"
-                            "A conversao e aproximada: os 6 operadores do DX7 viram os\n"
+                            "A conversão e aproximada: os 6 operadores do DX7 viram os\n"
                             "operadores 1-6 (7 e 8 desligados), algoritmo, envelopes,\n"
                             "level scaling, LFO e pitch EG convertidos.");
     } else {
@@ -1532,16 +1532,16 @@ void loadFactoryPreset(AppState& app, int part, int index) {
     std::snprintf(ui.name, sizeof(ui.name), "%s", f.part.name.c_str());
     ui.currentFile.clear();
     ui.dirty = patchFingerprint(app.synth.part(part)) != ui.baseline;
-    setPatchStatus(ui, true, "Fabrica: " + f.part.name + " (Salvar grava uma copia em patches/)");
+    setPatchStatus(ui, true, "Fábrica: " + f.part.name + " (Salvar grava uma cópia em patches/)");
     app.factorySelected = index;
 }
 
 void DrawFactoryBank(AppState& app, int part) {
-    if (ImGui::SmallButton("Fabrica")) ImGui::OpenPopup("Banco de fabrica");
-    ImGui::SetItemTooltip("%zu patches prontos: demonstracao, estilo DX7, estilo SY77 e originais", app.factory.size());
+    if (ImGui::SmallButton("Fábrica")) ImGui::OpenPopup("Banco de fábrica");
+    ImGui::SetItemTooltip("%zu patches prontos: demonstração, estilo DX7, estilo SY77 e originais", app.factory.size());
     ImGui::SetNextWindowSize(ImVec2(820, 470), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("Banco de fabrica", nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
-    static const char* kFamilies[] = {"Todas", "Demonstracao", "Estilo DX7", "Estilo SY77", "Originais"};
+    if (!ImGui::BeginPopupModal("Banco de fábrica", nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
+    static const char* kFamilies[] = {"Todas", "Demonstração", "Estilo DX7", "Estilo SY77", "Originais"};
     std::vector<std::string> cats = {"Todas"};
     for (const auto& f : app.factory)
         if (std::find(cats.begin(), cats.end(), f.category) == cats.end()) cats.push_back(f.category);
@@ -1558,7 +1558,7 @@ void DrawFactoryBank(AppState& app, int part) {
     }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##fbusca", "buscar no nome ou na descricao...", app.factoryFilter, sizeof app.factoryFilter);
+    ImGui::InputTextWithHint("##fbusca", "buscar no nome ou na descrição...", app.factoryFilter, sizeof app.factoryFilter);
 
     ImGui::BeginChild("##flist", ImVec2(330, -ImGui::GetFrameHeightWithSpacing()), ImGuiChildFlags_Borders);
     int shown = 0;
@@ -1591,13 +1591,13 @@ void DrawFactoryBank(AppState& app, int part) {
         ImGui::TextUnformatted(f.description.c_str());
         ImGui::PopTextWrapPos();
         ImGui::Spacing();
-        ImGui::TextDisabled("Carregado nesta parte: toque pra ouvir. Ctrl+Z volta ao som\nanterior; Salvar grava uma copia editavel em patches/.");
+        ImGui::TextDisabled("Carregado nesta parte: toque pra ouvir. Ctrl+Z volta ao som\nanterior; Salvar grava uma cópia editável em patches/.");
     } else {
         ImGui::TextDisabled("Clique num patch pra carregar nesta parte e ouvir.\n"
                             "Da pra ir trocando enquanto toca; Ctrl+Z volta ao som anterior.\n\n"
                             "Familias:\n"
-                            "  Demonstracao  - um recurso do Mare Tranquillitatis por patch\n"
-                            "  Estilo DX7    - programados em parametros do DX7 (algoritmos originais)\n"
+                            "  Demonstração  - um recurso do Mare Tranquillitatis por patch\n"
+                            "  Estilo DX7    - programados em parâmetros do DX7 (algoritmos originais)\n"
                             "  Estilo SY77   - ondas AFM, filtros, camadas de ataque + sustain\n"
                             "  Originais     - MPE, LFO sincronizado, ring mod, shifter, crusher, lacos...");
     }
@@ -1643,7 +1643,7 @@ void DrawPatchSection(AppState& app, int part) {
             if (ImGui::SmallButton(sd ? "B" : "A") && !on) switchAB(app, part);
             ImGui::PopStyleColor(2);
         }
-        ImGui::SetItemTooltip("Compara duas versoes do som: o outro lado guarda o som e o historico dele");
+        ImGui::SetItemTooltip("Compara duas versões do som: o outro lado guarda o som e o histórico dele");
         ImGui::SameLine();
         if (ImGui::SmallButton(ab.side == 0 ? "Copiar A -> B" : "Copiar B -> A")) copyToOtherSide(app, part);
         // segunda linha: de onde vem o som (fabrica, DX7) e variacoes dele
@@ -1652,7 +1652,7 @@ void DrawPatchSection(AppState& app, int part) {
         DrawDx7Import(app, part);
         ImGui::SameLine(0, 18);
         if (ImGui::SmallButton("Mutar")) mutatePart(app, part);
-        ImGui::SetItemTooltip("Varia o som atual ao acaso (niveis, razoes, envelopes, efeito, LFOs, matriz).\n"
+        ImGui::SetItemTooltip("Varia o som atual ao acaso (níveis, razões, envelopes, efeito, LFOs, matriz).\n"
                               "Cada clique e um passo de desfazer: Ctrl+Z volta.");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(70);
@@ -1685,11 +1685,11 @@ void DrawPatchSection(AppState& app, int part) {
         ui.dirty = patchFingerprint(pp) != ui.baseline;
         app.hist[part].pending = true;
     }
-    ImGui::SetItemTooltip("Volume do patch: vai junto com o som (o nivel da parte e do mix e fica ao trocar de patch).\n"
+    ImGui::SetItemTooltip("Volume do patch: vai junto com o som (o nível da parte e do mix e fica ao trocar de patch).\n"
                           "Ctrl+clique pra digitar.");
-    if (ui.dirty) ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "* alteracoes nao salvas");
+    if (ui.dirty) ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "* alterações não salvas");
     else if (!ui.currentFile.empty()) ImGui::TextDisabled("salvo (%s)", ui.currentFile.filename().string().c_str());
-    else ImGui::TextDisabled("nao salvo em arquivo");
+    else ImGui::TextDisabled("não salvo em arquivo");
 
     // lista de patches da pasta
     ImGui::SetNextItemWidth(220);
@@ -1729,15 +1729,15 @@ void DrawPatchSection(AppState& app, int part) {
     }
     ImGui::EndDisabled();
     ImGui::TextDisabled("duplo clique na lista");
-    ImGui::TextDisabled("tambem carrega");
+    ImGui::TextDisabled("também carrega");
     ImGui::EndGroup();
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("O patch guarda o SOM da parte: operadores, matriz, envelopes, LFOs,\n"
                           "modo de voz, glide, unison, bend e transpose.\n"
-                          "Carregar NAO muda o roteamento desta parte: habilitada, canal MIDI,\n"
-                          "faixas de tecla/velocity, vozes reservadas, nivel e pan ficam como estao.");
+                          "Carregar NÃO muda o roteamento desta parte: habilitada, canal MIDI,\n"
+                          "faixas de tecla/velocity, vozes reservadas, nível e pan ficam como estão.");
 
     if (!ui.status.empty()) {
         ImGui::TextColored(ui.statusOk ? ImVec4(0.5f, 0.9f, 0.5f, 1.0f) : ImVec4(1.0f, 0.45f, 0.45f, 1.0f),
@@ -1769,7 +1769,7 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
         ImGui::SetNextItemWidth(110);
         if (ImGui::Combo("Modo de voz", &mode, kMode, 3)) { pp.voiceMode = static_cast<VoiceMode>(mode); changed = true; }
         ImGui::SameLine();
-        if (ImGui::Button("Panico")) {
+        if (ImGui::Button("Pânico")) {
             AppEvent e;
             e.kind = AppEvent::Kind::AllNotesOff;
             e.part = partIndex;
@@ -1777,7 +1777,7 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
         }
         ImGui::SetItemTooltip("All notes off desta parte");
 
-        changed |= ui::Knob("Nivel", &pp.level, 0.0f, 1.5f, 1.0f, "%.2f");
+        changed |= ui::Knob("Nível", &pp.level, 0.0f, 1.5f, 1.0f, "%.2f");
         flowSameLine(kw); changed |= ui::Knob("Pan", &pp.pan, -1.0f, 1.0f, 0.0f, "%.2f");
         {
             int tr = pp.transpose;
@@ -1802,7 +1802,7 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
         if (pp.voiceMode != VoiceMode::Poly) {
             changed |= ImGui::Checkbox("Glide", &pp.glideEnabled);
             ImGui::SameLine();
-            changed |= ImGui::Checkbox("so em legato", &pp.glideLegatoOnly);
+            changed |= ImGui::Checkbox("só em legato", &pp.glideLegatoOnly);
             ImGui::SameLine();
             changed |= ImGui::Checkbox("Reusa envelope em legato", &pp.monoLegatoEnvReuse);
         }
@@ -1812,7 +1812,7 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
             if (ImGui::SliderInt("##lo", &lo, 0, 127, "de %d", ImGuiSliderFlags_AlwaysClamp)) { pp.loKey = static_cast<uint8_t>(lo); changed = true; }
             ImGui::SameLine();
             ImGui::SetNextItemWidth(100);
-            if (ImGui::SliderInt("Key range", &hi, 0, 127, "ate %d", ImGuiSliderFlags_AlwaysClamp)) { pp.hiKey = static_cast<uint8_t>(hi); changed = true; }
+            if (ImGui::SliderInt("Key range", &hi, 0, 127, "até %d", ImGuiSliderFlags_AlwaysClamp)) { pp.hiKey = static_cast<uint8_t>(hi); changed = true; }
             ImGui::SetNextItemWidth(100);
             if (ImGui::SliderInt("Vozes reservadas", &rv, 0, kMaxVoices, "%d", ImGuiSliderFlags_AlwaysClamp)) { pp.reservedVoices = rv; changed = true; }
         }
@@ -1841,15 +1841,15 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
             ImGui::EndCombo();
         }
         if (nAlgo == 1)
-            ImGui::SetItemTooltip("Escolher um algoritmo ja troca: sobrescreve a matriz e o feedback de todos os operadores (Ctrl+Z desfaz).\n"
-                                  "Design proprio de 32 algoritmos p/ 8 operadores (nao e a lista oficial do DX7\n"
-                                  "nem do Montage) -- ver ARQUITETURA.txt secao 14.");
+            ImGui::SetItemTooltip("Escolher um algoritmo já troca: sobrescreve a matriz e o feedback de todos os operadores (Ctrl+Z desfaz).\n"
+                                  "Design próprio de 32 algoritmos p/ 8 operadores (não e a lista oficial do DX7\n"
+                                  "nem do Montage) -- ver ARQUITETURA.txt seção 14.");
         else
-            ImGui::SetItemTooltip("Escolher um algoritmo ja troca o algoritmo %d (Ctrl+Z desfaz). O feedback do preset vai pra diagonal\n"
+            ImGui::SetItemTooltip("Escolher um algoritmo já troca o algoritmo %d (Ctrl+Z desfaz). O feedback do preset vai pra diagonal\n"
                                   "dele, pra fazer morph junto; o Feedback de cada operador na tabela continua valendo em todos os algoritmos.",
                                   app.algoSlot + 1);
         ImGui::SameLine();
-        if (ImGui::Button("Editor grafico")) app.algoEd.open = true;
+        if (ImGui::Button("Editor gráfico")) app.algoEd.open = true;
         ImGui::SetItemTooltip("Conecte os operadores arrastando e salve o algoritmo como preset");
         if (nAlgo > 1 && app.algoMorphView) {
             // ponto interpolado na posicao do knob (como o motor faz, sem a modulacao)
@@ -1891,18 +1891,18 @@ bool DrawPartRightColumn(AppState& app, int partIndex) {
                 ImGui::PushID(k);
                 changed |= ImGui::Checkbox("Global", &pp.voice.lfo(k).global);
                 ImGui::PopID();
-                ImGui::SetItemTooltip("Um LFO so pra parte inteira: todas as notas ondulam juntas (acordes).\n"
+                ImGui::SetItemTooltip("Um LFO só pra parte inteira: todas as notas ondulam juntas (acordes).\n"
                                       "Com Sync, fica alinhado ao compasso (e ao Start do clock MIDI).\n"
-                                      "Key sync reinicia na primeira nota tocada; LfoRate da matriz nao se aplica.");
+                                      "Key sync reinicia na primeira nota tocada; LfoRate da matriz não se aplica.");
                 changed |= DrawLfo(name, pp.voice.lfo(k));
             }
             ImGui::EndTable();
         }
     }
     ui::EndCard();
-    if (ui::BeginCard("##card_modenv", "ENVELOPES DE MODULACAO", 0.0f, ui::col::kAccent2)) changed |= DrawModEnvelopes(pp.voice);
+    if (ui::BeginCard("##card_modenv", "ENVELOPES DE MODULAÇÃO", 0.0f, ui::col::kAccent2)) changed |= DrawModEnvelopes(pp.voice);
     ui::EndCard();
-    if (ui::BeginCard("##card_modm", "MATRIZ DE MODULACAO", 0.0f, ui::col::kAccent2)) changed |= DrawModMatrix(pp.voice.modMatrix);
+    if (ui::BeginCard("##card_modm", "MATRIZ DE MODULAÇÃO", 0.0f, ui::col::kAccent2)) changed |= DrawModMatrix(pp.voice.modMatrix);
     ui::EndCard();
     return changed;
 }
@@ -1928,7 +1928,7 @@ bool DrawPartLeftColumn(AppState& app, int partIndex) {
         ImGui::Text("Op%d", sel + 1);
         ImGui::PopStyleColor();
         ImGui::SameLine();
-        ImGui::TextDisabled("Amp EG (arraste os pontos no grafico ou gire os knobs)");
+        ImGui::TextDisabled("Amp EG (arraste os pontos no gráfico ou gire os knobs)");
         changed |= DrawEGKnobs("ampeg", pp.voice.op[sel].ampEG.rate, pp.voice.op[sel].ampEG.level, ui::opColor(sel));
     }
     ui::EndCard();
@@ -1951,7 +1951,7 @@ bool DrawPartLeftColumn(AppState& app, int partIndex) {
         if (pp.voice.activeAlgos() > 1) std::snprintf(hdr, sizeof hdr, "MATRIZ DE ALGORITMO (avancado) -- algoritmo %d###mtx", app.algoSlot + 1);
         else std::snprintf(hdr, sizeof hdr, "MATRIZ DE ALGORITMO (avancado)###mtx");
         if (ImGui::CollapsingHeader(hdr)) changed |= DrawMatrix(pp.voice.algo(std::min(app.algoSlot, pp.voice.activeAlgos() - 1)));
-        else ImGui::TextDisabled("Roteamento livre entre os 8 operadores e output mix -- os presets do card Algoritmo ja preenchem isto.");
+        else ImGui::TextDisabled("Roteamento livre entre os 8 operadores e output mix -- os presets do card Algoritmo já preenchem isto.");
     }
     ui::EndCard();
     changed |= dx7fm_app::algoed::DrawAlgoEditor(app.algoEd, pp.voice, partIndex, std::min(app.algoSlot, pp.voice.activeAlgos() - 1), app.selectedOp, app.selectedAlgo, kAlgoPresetDir);
@@ -1998,7 +1998,7 @@ void saveFxRackStateIfDirty(AppState& app, bool force) {
     if (!ui.saveDirty || (!force && ImGui::GetTime() - ui.changedAt < 1.0)) return;
     ui.saveDirty = false;
     if (!saveFxRackFile(dx7fm_app::fxRackStatePath(), ui.edit))
-        std::fprintf(stderr, "[fx] nao consegui salvar %s\n", dx7fm_app::fxRackStatePath().string().c_str());
+        std::fprintf(stderr, "[fx] não consegui salvar %s\n", dx7fm_app::fxRackStatePath().string().c_str());
 }
 
 
@@ -2062,7 +2062,7 @@ void PollMidiLearn(AppState& app) {
 }
 
 void DrawSettingsPopup(AppState& app) {
-    if (!ImGui::BeginPopup("Configuracoes")) return;
+    if (!ImGui::BeginPopup("Configurações")) return;
     ImGui::TextUnformatted("Oversampling (anti-aliasing)");
     ImGui::TextDisabled("Calcula as vozes a 2x/4x a taxa e filtra: menos aliasing em FM agressiva e notas agudas.\n"
                         "Custa ~2x/~4x de CPU nas vozes. Trocar corta as notas que estiverem soando.");
@@ -2086,7 +2086,7 @@ void DrawSettingsPopup(AppState& app) {
         dx7fm_app::saveSettings(app.settings);
     }
     ImGui::SameLine();
-    ImGui::TextDisabled(mpeOn ? "canal 1 = mestre, notas nos canais 2-%d" : "(liga sozinho se o controlador mandar a configuracao MPE)",
+    ImGui::TextDisabled(mpeOn ? "canal 1 = mestre, notas nos canais 2-%d" : "(liga sozinho se o controlador mandar a configuração MPE)",
                         1 + app.mpeMembers.load(std::memory_order_relaxed));
     if (mpeOn) {
         float bend = app.mpeBend.load(std::memory_order_relaxed);
@@ -2099,17 +2099,17 @@ void DrawSettingsPopup(AppState& app) {
             app.mpeDirty.store(true, std::memory_order_release);
         }
         if (ImGui::IsItemDeactivatedAfterEdit()) dx7fm_app::saveSettings(app.settings);
-        ImGui::TextDisabled("As notas tocam nas partes do canal 1 (ou omni). Na matriz: pressao = PolyAT,\n"
-                            "CC74 = Slide (MPE); o bend de cada nota ja vai direto na afinacao dela.");
+        ImGui::TextDisabled("As notas tocam nas partes do canal 1 (ou omni). Na matriz: pressão = PolyAT,\n"
+                            "CC74 = Slide (MPE); o bend de cada nota já vai direto na afinação dela.");
     }
     ImGui::Separator();
     ImGui::TextUnformatted("MIDI learn (CC -> controle)");
-    ImGui::TextDisabled("As macros valem pra parte que recebe o canal do CC; volume, BPM e expressao sao globais.\n"
-                        "Expressao: o parametro alvo e escolhido no pedal (aba Efeitos).");
+    ImGui::TextDisabled("As macros valem pra parte que recebe o canal do CC; volume, BPM e expressão são globais.\n"
+                        "Expressão: o parâmetro alvo e escolhido no pedal (aba Efeitos).");
     for (int t = 0; t <= static_cast<int>(dx7fm_app::CcTarget::Expression); ++t) {
         const auto target = static_cast<dx7fm_app::CcTarget>(t);
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(dx7fm_app::ccTargetName(target));
+        ImGui::TextUnformatted(target == dx7fm_app::CcTarget::Expression ? "Expressão" : dx7fm_app::ccTargetName(target));
         ImGui::SameLine(90);
         LearnButton(app, target, 140);
     }
@@ -2167,7 +2167,7 @@ void DrawMidiInputSelector(AppState& app) {
     ImGui::TextUnformatted("MIDI");
     ImGui::SameLine();
     auto& sel = app.settings.midiDevice;
-    std::string preview = sel.empty() ? "Nenhum (conexao externa)" : sel == dx7fm_app::kMidiAllDevices ? "Todos os dispositivos" : sel;
+    std::string preview = sel.empty() ? "Nenhum (conexão externa)" : sel == dx7fm_app::kMidiAllDevices ? "Todos os dispositivos" : sel;
     if (app.midiMissing) preview += " (desconectado)";
     ImGui::SetNextItemWidth(250);
     if (ImGui::BeginCombo("##midiin", preview.c_str(), ImGuiComboFlags_HeightLarge)) {
@@ -2178,8 +2178,8 @@ void DrawMidiInputSelector(AppState& app) {
             dx7fm_app::saveSettings(app.settings);
             SyncMidiInputs(app, true);
         };
-        if (ImGui::Selectable("Nenhum (conexao externa)", sel.empty())) choose("");
-        ImGui::SetItemTooltip("O app nao conecta nada. Outros programas podem ligar na porta\n\"Mare Tranquillitatis:input\", por exemplo com aconnect.");
+        if (ImGui::Selectable("Nenhum (conexão externa)", sel.empty())) choose("");
+        ImGui::SetItemTooltip("O app não conecta nada. Outros programas podem ligar na porta\n\"Mare Tranquillitatis:input\", por exemplo com aconnect.");
         if (ImGui::Selectable("Todos os dispositivos", sel == dx7fm_app::kMidiAllDevices)) choose(dx7fm_app::kMidiAllDevices);
         ImGui::Separator();
         if (app.midiSources.empty()) ImGui::TextDisabled("nenhum dispositivo encontrado");
@@ -2192,17 +2192,17 @@ void DrawMidiInputSelector(AppState& app) {
         }
         ImGui::EndCombo();
     }
-    ImGui::SetItemTooltip(app.midiMissing ? "O dispositivo escolhido nao esta plugado. Ele volta sozinho quando for reconectado."
+    ImGui::SetItemTooltip(app.midiMissing ? "O dispositivo escolhido não esta plugado. Ele volta sozinho quando for reconectado."
                                           : "De onde o synth recebe MIDI. A escolha fica salva.");
 }
 
 void DrawTopBar(AppState& app) {
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::rgb(24, 27, 35));
-    ImGui::BeginChild("##header", ImVec2(0, 92), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ui::rgb(21, 24, 30));
+    ImGui::BeginChild("##header", ImVec2(0, 104), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
     if (ImGui::BeginTable("##hdr", 3, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("logo", ImGuiTableColumnFlags_WidthFixed, 215.0f);
         ImGui::TableSetupColumn("status", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableSetupColumn("saida", ImGuiTableColumnFlags_WidthFixed, 380.0f); // medidores (200) + knobs BPM e Volume
+        ImGui::TableSetupColumn("saída", ImGuiTableColumnFlags_WidthFixed, 380.0f); // medidores (200) + knobs BPM e Volume
         ImGui::TableNextRow();
 
         // logo
@@ -2212,37 +2212,45 @@ void DrawTopBar(AppState& app) {
         ImGui::TextUnformatted("Mare Tranquillitatis");
         ImGui::PopStyleColor();
         ImGui::PopFont();
-        ImGui::TextDisabled("8-OP FM SYNTH");
-        if (ImGui::SmallButton("Configuracoes")) ImGui::OpenPopup("Configuracoes");
+        ImGui::TextDisabled("Sintetizador FM de 8 operadores");
+        if (ImGui::Button("Configurações")) ImGui::OpenPopup("Configurações");
         DrawSettingsPopup(app);
 
-        // status
+        // status: uma linha pro audio e pro MIDI, outra pro teclado do PC e as vozes
         ImGui::TableSetColumnIndex(1);
         char buf[160];
-        std::snprintf(buf, sizeof buf, "Audio %s  %u Hz  buffer %u  %s  xruns %ld", app.audioOut.isRunning() ? "ativo" : "PARADO",
-                      app.audioOut.sampleRate(), app.audioOut.periodFrames(), app.audioOut.deviceFormatName(), app.audioOut.underruns());
+        std::snprintf(buf, sizeof buf, "Áudio %s", app.audioOut.isRunning() ? "ativo" : "parado");
+        ImGui::AlignTextToFramePadding();
         StatusChip(app.audioOut.isRunning(), buf);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%.1f kHz  ·  buffer %u  ·  %s", app.audioOut.sampleRate() / 1000.0, app.audioOut.periodFrames(), app.audioOut.deviceFormatName());
+        const long xruns = app.audioOut.underruns();
+        ImGui::SameLine();
+        if (xruns > 0) ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(ui::col::kAccent2), "·  xruns %ld", xruns);
+        else ImGui::TextDisabled("·  xruns 0");
         if (!app.audioOut.isRunning() && !app.audioOut.lastError().empty()) {
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "(%s)", app.audioOut.lastError().c_str());
         }
-        ImGui::SameLine(0, 18);
+        ImGui::AlignTextToFramePadding();
         if (app.midiIn.isOpen()) DrawMidiInputSelector(app);
-        else StatusChip(false, "MIDI indisponivel");
-        ImGui::TextDisabled("Teclado do PC: base nota %d (Z/X oitava)  canal", app.piano.baseNote());
+        else StatusChip(false, "MIDI indisponível");
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Teclado do PC: nota %d (Z/X)  ·  canal", app.piano.baseNote());
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(80);
+        ImGui::SetNextItemWidth(70);
         ImGui::SliderInt("##pcch", &app.pcKeyboardChannel, 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Toca todas as partes habilitadas em omni (canal 0) ou neste canal,\n"
                               "igual a um controlador MIDI ligado nesse canal.");
         ImGui::SameLine(0, 18);
+        ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("Vozes %d / %d", app.synth.activeVoiceCount(), kMaxVoices);
 
         // medidores + volume geral
         ImGui::TableSetColumnIndex(2);
         ImGui::BeginGroup();
-        ImGui::Dummy(ImVec2(0, 6));
+        ImGui::Dummy(ImVec2(0, 8));
         ui::LevelMeter("L", app.meterL.load(std::memory_order_relaxed), ImVec2(200, 14));
         ui::LevelMeter("R", app.meterR.load(std::memory_order_relaxed), ImVec2(200, 14));
         ImGui::EndGroup();
@@ -2258,8 +2266,8 @@ void DrawTopBar(AppState& app) {
         ImGui::BeginDisabled(ext);
         if (ui::Knob(ext ? "BPM (MIDI)" : "BPM", &bpm, 20.0f, 300.0f, 120.0f, ext ? "%.1f" : "%.0f", ks)) app.synth.setTempoBpm(std::round(bpm));
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip(ext ? "Seguindo o clock MIDI (desligue em Configuracoes)"
-                                  : "Tempo dos LFOs/envelopes com Sync e do arpejador (todas as partes).\nArraste, ou botao direito pra digitar.");
+        ImGui::SetItemTooltip(ext ? "Seguindo o clock MIDI (desligue em Configurações)"
+                                  : "Tempo dos LFOs/envelopes com Sync e do arpejador (todas as partes).\nArraste, ou botão direito pra digitar.");
         ImGui::SameLine();
         if (ui::Knob("Volume", &volumeDb, -60.0f, 6.0f, 0.0f, volumeDb <= -60.0f ? "mudo" : "%.1f dB", ks))
             app.synth.setMasterVolume(gainFromVolumeDb(volumeDb));
@@ -2330,7 +2338,7 @@ void SetupAppStyle() {
 void DrawVisualizers(AppState& app) {
     const double sr = app.audioOut.sampleRate();
     ui::UpdateSpectrogram(app.spectro, app.tap, sr); // consome o audio novo mesmo com a faixa recolhida
-    if (!ImGui::CollapsingHeader("OSCILOSCOPIO / ESPECTROGRAMA", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    if (!ImGui::CollapsingHeader("OSCILOSCÓPIO / ESPECTROGRAMA", ImGuiTreeNodeFlags_DefaultOpen)) return;
     const float h = 140.0f;
     if (ImGui::BeginTable("##viz", 2, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("scope", ImGuiTableColumnFlags_WidthStretch, 0.38f);
@@ -2340,7 +2348,7 @@ void DrawVisualizers(AppState& app) {
         ImGui::TableSetColumnIndex(0);
         {
             static const char* kZoom[] = {"5 ms", "10 ms", "20 ms", "50 ms"};
-            ImGui::TextDisabled("Osciloscopio");
+            ImGui::TextDisabled("Osciloscópio");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(70);
             ImGui::Combo("##scopezoom", &app.scope.zoom, kZoom, IM_ARRAYSIZE(kZoom));
@@ -2357,12 +2365,12 @@ void DrawVisualizers(AppState& app) {
         ImGui::TableSetColumnIndex(1);
         {
             static const char* kRange[] = {"60 dB", "90 dB", "120 dB"};
-            ImGui::TextDisabled("Espectrograma (20 Hz - 20 kHz, ultimos %.1f s)",
+            ImGui::TextDisabled("Espectrograma (20 Hz - 20 kHz, últimos %.1f s)",
                                 dx7fm_app::SpectrogramHistory::kCols * dx7fm_app::SpectrogramHistory::kHop / sr);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(80);
             ImGui::Combo("##sprange", &app.spectro.range, kRange, IM_ARRAYSIZE(kRange));
-            ImGui::SetItemTooltip("Faixa dinamica: o que fica mais baixo que isso aparece como fundo");
+            ImGui::SetItemTooltip("Faixa dinâmica: o que fica mais baixo que isso aparece como fundo");
             ui::Spectrogram("##spectro", app.spectro, sr, ImVec2(ImGui::GetContentRegionAvail().x, h));
         }
         ImGui::EndTable();
@@ -2442,7 +2450,7 @@ void initAppState(AppState& app) {
         FxRackParams r;
         if (loadFxRackFile(dx7fm_app::fxRackStatePath(), r)) {
             dx7fm_app::fxui::setRack(app.fxUi, app.synth, r, 0.0);
-            app.fxUi.current = "(ultima sessao)";
+            app.fxUi.current = "(última sessão)";
         }
         app.fxUi.committed = app.fxUi.edit;
         app.fxUi.saveDirty = false;
@@ -2494,7 +2502,7 @@ int main(int, char**) {
         // senao tudo sai desafinado. Para o audio antes, pro init() nao
         // correr junto com renderStereo() na audio thread.
         unsigned actualRate = app.audioOut.sampleRate();
-        std::fprintf(stderr, "[audio] dispositivo usa %u Hz (pedido %u Hz), ajustando o synth\n", actualRate, kSampleRate);
+        std::fprintf(stderr, "[áudio] dispositivo usa %u Hz (pedido %u Hz), ajustando o synth\n", actualRate, kSampleRate);
         app.audioOut.stop();
         app.synth.init(actualRate, kMaxVoices, app.settings.oversample);
         app.audioOut.start("default", actualRate, kPeriodFrames, render);

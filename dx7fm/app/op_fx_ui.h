@@ -179,14 +179,14 @@ inline void OperatorFxGraph(const dx7fm::VoiceParams& v, int opIndex, ImVec2 siz
                 }
             }
             char b[64];
-            std::snprintf(b, sizeof b, "harmonicos de 220 Hz (cinza) +%.0f Hz", p1v);
+            std::snprintf(b, sizeof b, "harmônicos de 220 Hz (cinza) +%.0f Hz", p1v);
             label(dl, ImVec2(i0.x + 2, i0.y), b);
             break;
         }
         case FxType::RingMod: {
             const int src = op.ringModSource;
             if (src < 0 || src >= dx7fm::kNumOps || src == opIndex) {
-                const char* s = src == opIndex ? "a fonte nao pode ser o proprio operador" : "escolha o operador fonte";
+                const char* s = src == opIndex ? "a fonte não pode ser o próprio operador" : "escolha o operador fonte";
                 ImVec2 ts = ImGui::CalcTextSize(s);
                 label(dl, ImVec2((p0.x + p1.x - ts.x) * 0.5f, (p0.y + p1.y - ts.y) * 0.5f), s, col::kAccent2);
                 break;
@@ -212,7 +212,7 @@ inline void OperatorFxGraph(const dx7fm::VoiceParams& v, int opIndex, ImVec2 siz
             label(dl, ImVec2(i0.x + 2, i0.y), s, color);
             std::snprintf(s, sizeof s, "x Op%d", src + 1);
             label(dl, ImVec2(i0.x + 2, i0.y + lane), s, opColor(src));
-            label(dl, ImVec2(i0.x + 2, i0.y + 2 * lane), "= saida");
+            label(dl, ImVec2(i0.x + 2, i0.y + 2 * lane), "= saída");
             break;
         }
     }
@@ -304,7 +304,7 @@ inline bool OperatorFxPanel(dx7fm::VoiceParams& v, int opIndex) {
             }
             ImGui::EndCombo();
         }
-        ImGui::SetItemTooltip("SVF 12 dB: limpo (o de sempre)\nSVF 24 dB: limpo, corte mais ingreme\nLadder: 24 dB, gordo; auto-oscila com Q no maximo\n"
+        ImGui::SetItemTooltip("SVF 12 dB: limpo (o de sempre)\nSVF 24 dB: limpo, corte mais ingreme\nLadder: 24 dB, gordo; auto-oscila com Q no máximo\n"
                               "Diodo: estilo baixo acido, ressonancia estreita\nSallen-Key: 12 dB agressivo, estilo MS-20");
     } else if (op.fxType == FxType::Waveshape) {
         ImGui::AlignTextToFramePadding();
@@ -318,8 +318,8 @@ inline bool OperatorFxPanel(dx7fm::VoiceParams& v, int opIndex) {
             }
             ImGui::EndCombo();
         }
-        ImGui::SetItemTooltip("Suave e Clip: harmonicos impares, com mais drive = mais forte\nSeno: dobra suave\nValvula: assimetrica, entram os pares\n"
-                              "Chebyshev 3: seno cheio vira o 3o harmonico\nRetificador: oitava acima");
+        ImGui::SetItemTooltip("Suave e Clip: harmônicos ímpares, com mais drive = mais forte\nSeno: dobra suave\nValvula: assimétrica, entram os pares\n"
+                              "Chebyshev 3: seno cheio vira o 3o harmônico\nRetificador: oitava acima");
     }
 
     // grafico | knobs
@@ -336,7 +336,7 @@ inline bool OperatorFxPanel(dx7fm::VoiceParams& v, int opIndex) {
         case FxType::Bypass: ImGui::TextDisabled("nada a ajustar"); break;
         case FxType::LowPass: case FxType::BandPass: case FxType::HighPass: case FxType::Notch:
             changed |= Knob("Corte", &op.fxParam1, 20.0f, 20000.0f, 2000.0f, "%.0f Hz", logk);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("corte com o FX EG no maximo (99); no nivel 0 o corte cai pra 20%%");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("corte com o FX EG no máximo (99); no nível 0 o corte cai pra 20%%");
             ImGui::SameLine();
             { KnobStyle qk = logk; changed |= Knob("Q", &op.fxParam2, 0.1f, 16.0f, 0.707f, "%.2f", qk); }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("ressonancia: 0.7 = sem pico; acima disso, pico no corte");
@@ -356,7 +356,7 @@ inline bool OperatorFxPanel(dx7fm::VoiceParams& v, int opIndex) {
                 if (ImGui::SmallButton(b)) { op.ringModSource = s; changed = true; }
                 ImGui::PopStyleColor(2);
             }
-            ImGui::TextDisabled("(usa a saida da amostra\nanterior do operador fonte)");
+            ImGui::TextDisabled("(usa a saída da amostra\nanterior do operador fonte)");
             break;
         }
         case FxType::Saturate:
@@ -372,28 +372,28 @@ inline bool OperatorFxPanel(dx7fm::VoiceParams& v, int opIndex) {
         }
         case FxType::FreqShift:
             changed |= Knob("Desloc.", &op.fxParam1, 1.0f, 5000.0f, 50.0f, "+%.0f Hz", logk);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hz somados a todas as frequencias (nao e transposicao:\nos intervalos entre harmonicos mudam)");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hz somados a todas as frequências (não e transposição:\nos intervalos entre harmônicos mudam)");
             break;
         case FxType::Comb:
-            changed |= Knob("Afinacao", &op.fxParam1, 20.0f, 20000.0f, 440.0f, "%.0f Hz", logk);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("frequencia de ressonancia (atraso = 1 / afinacao)");
+            changed |= Knob("Afinação", &op.fxParam1, 20.0f, 20000.0f, 440.0f, "%.0f Hz", logk);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("frequência de ressonancia (atraso = 1 / afinação)");
             ImGui::SameLine();
             { float fb = std::min(op.fxParam2, 0.99f);
               if (Knob("Feedback", &fb, 0.0f, 0.99f, 0.7f, "%.2f", ks)) { op.fxParam2 = fb; changed = true; } }
             break;
         case FxType::Waveshape:
             changed |= Knob("Drive", &op.fxParam1, 1.0f, 16.0f, 2.0f, "%.2f", ks);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("drive com o FX EG no maximo; no nivel 0 cai pra 20%% do excesso");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("drive com o FX EG no máximo; no nível 0 cai pra 20%% do excesso");
             ImGui::SameLine();
             changed |= Knob("Bias", &op.fxParam2, 0.0f, 1.0f, 0.0f, "%.2f", ks);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("desloca o sinal na curva: entram harmonicos pares");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("desloca o sinal na curva: entram harmônicos pares");
             break;
         case FxType::Fold:
             changed |= Knob("Drive", &op.fxParam1, 1.0f, 16.0f, 3.0f, "%.2f", ks);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("drive com o FX EG no maximo; no nivel 0 cai pra 20%% do excesso");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("drive com o FX EG no máximo; no nível 0 cai pra 20%% do excesso");
             ImGui::SameLine();
             changed |= Knob("Simetria", &op.fxParam2, 0.0f, 1.0f, 0.0f, "%.2f", ks);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = so harmonicos impares; acima disso entram os pares");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = só harmônicos ímpares; acima disso entram os pares");
             break;
     }
     if (opfx::keyTracks(op.fxType)) {
@@ -403,7 +403,7 @@ inline bool OperatorFxPanel(dx7fm::VoiceParams& v, int opIndex) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("O valor em Hz acompanha a nota, em volta do C4:\n"
                               "100%% = uma oitava acima dobra (o comb/filtro fica afinado com a nota),\n"
-                              "50%% = meia oitava por oitava, 0%% = Hz fixo.\nSegue o glide; nao segue pitch bend nem vibrato.");
+                              "50%% = meia oitava por oitava, 0%% = Hz fixo.\nSegue o glide; não segue pitch bend nem vibrato.");
     }
     ImGui::EndGroup();
     return changed;

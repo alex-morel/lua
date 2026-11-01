@@ -118,10 +118,10 @@ inline bool PartialBars(const char* id, dx7fm_app::PartialSet& set, const dx7fm_
     if (hovered && !active && m.x < barsX1) {
         const float a = set.amp[mk];
         if (a > 0.0f)
-            ImGui::SetTooltip("Parcial %d\namplitude %.3f (%.1f dB)\nrazao %.3fx\n(outro espectro: amp %.3f, razao %.3fx)", mk + 1, a,
+            ImGui::SetTooltip("Parcial %d\namplitude %.3f (%.1f dB)\nrazao %.3fx\n(outro espectro: amp %.3f, razão %.3fx)", mk + 1, a,
                               20.0f * std::log10(a), set.ratio[mk], ghost.amp[mk], ghost.ratio[mk]);
         else
-            ImGui::SetTooltip("Parcial %d (desligado)\nrazao %.3fx\n(outro espectro: amp %.3f, razao %.3fx)", mk + 1, set.ratio[mk],
+            ImGui::SetTooltip("Parcial %d (desligado)\nrazao %.3fx\n(outro espectro: amp %.3f, razão %.3fx)", mk + 1, set.ratio[mk],
                               ghost.amp[mk], ghost.ratio[mk]);
     }
     return changed;
@@ -146,20 +146,20 @@ inline bool AdditiveEditor(dx7fm::OperatorParams& op, int opIndex, ImU32 color, 
     ImGui::SameLine();
     ImGui::RadioButton("Amplitude dB", &st.view, 1);
     ImGui::SameLine();
-    ImGui::RadioButton("Razao", &st.view, 2);
+    ImGui::RadioButton("Razão", &st.view, 2);
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Cada barra e um oscilador senoidal: soa em (razao x frequencia do operador)\n"
-                          "com a sua amplitude. Razoes inteiras = harmonicos; fracionarias =\n"
-                          "inarmonicos (sinos, tambores).\n\n"
-                          "Clique e arraste pra PINTAR as barras. Botao direito: desliga o parcial\n"
-                          "(vista de amplitude) ou volta a razao pro harmonico (vista de razao).\n"
-                          "Shift na vista de razao: encaixa em harmonicos inteiros.\n\n"
-                          "A e B sao dois espectros: o envelope de FX leva de A ate B\n"
-                          "(x profundidade do morph), interpolando amplitudes E razoes. A marca\n"
+        ImGui::SetTooltip("Cada barra e um oscilador senoidal: soa em (razão x frequência do operador)\n"
+                          "com a sua amplitude. Razões inteiras = harmônicos; fracionarias =\n"
+                          "inarmônicos (sinos, tambores).\n\n"
+                          "Clique e arraste pra PINTAR as barras. Botão direito: desliga o parcial\n"
+                          "(vista de amplitude) ou volta a razão pro harmônico (vista de razão).\n"
+                          "Shift na vista de razão: encaixa em harmônicos inteiros.\n\n"
+                          "A e B são dois espectros: o envelope de FX leva de A até B\n"
+                          "(x profundidade do morph), interpolando amplitudes E razões. A marca\n"
                           "branca em cada barra e o outro espectro. Parciais acima de Nyquist\n"
-                          "sao desligados sozinhos (sem aliasing).");
+                          "são desligados sozinhos (sem aliasing).");
 
     PartialSet& set = st.editB ? op.additiveB : op.additiveA;
     const PartialSet& ghost = st.editB ? op.additiveA : op.additiveB;
@@ -195,12 +195,12 @@ inline bool AdditiveEditor(dx7fm::OperatorParams& op, int opIndex, ImU32 color, 
         changed |= ImGui::DragFloat("amp##selamp", &set.amp[st.selected], 0.002f, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(90);
-        changed |= ImGui::DragFloat("razao##selratio", &set.ratio[st.selected], 0.005f, 0.01f, kMaxPartialRatio, "%.3fx",
+        changed |= ImGui::DragFloat("razão##selratio", &set.ratio[st.selected], 0.005f, 0.01f, kMaxPartialRatio, "%.3fx",
                                     ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("x frequencia do operador; ctrl+clique pra digitar");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("x frequência do operador; ctrl+clique pra digitar");
         ImGui::SameLine();
-        if (ImGui::SmallButton("= harmonico")) { changed |= additive_detail::setIfChanged(set.ratio[st.selected], static_cast<float>(st.selected + 1)); }
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("razao = %d (o harmonico desta posicao)", st.selected + 1);
+        if (ImGui::SmallButton("= harmônico")) { changed |= additive_detail::setIfChanged(set.ratio[st.selected], static_cast<float>(st.selected + 1)); }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("razão = %d (o harmônico desta posição)", st.selected + 1);
     }
 
     ImGui::AlignTextToFramePadding();
@@ -216,13 +216,13 @@ inline bool AdditiveEditor(dx7fm::OperatorParams& op, int opIndex, ImU32 color, 
     ImGui::SameLine();
     if (ImGui::SmallButton("Trocar A <-> B")) { std::swap(op.additiveA, op.additiveB); changed = true; }
     ImGui::SameLine();
-    if (ImGui::SmallButton("Razoes harmonicas")) {
+    if (ImGui::SmallButton("Razões harmônicas")) {
         for (int k = 0; k < kNumPartials; ++k) changed |= additive_detail::setIfChanged(set.ratio[k], static_cast<float>(k + 1));
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("razao de cada parcial = sua posicao (1, 2, 3 ..), amplitudes intactas");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("razão de cada parcial = sua posição (1, 2, 3 ..), amplitudes intactas");
     ImGui::SameLine();
     if (ImGui::SmallButton("Limpar")) { presets::clear(set); changed = true; }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("desliga todos os parciais (silencio) e volta as razoes pros harmonicos");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("desliga todos os parciais (silêncio) e volta as razões pros harmônicos");
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Button, (color & 0x00FFFFFF) | (0x60u << 24));
     if (ImGui::SmallButton("Ressintetizar WAV...")) st.resynth.requestOpen = true;

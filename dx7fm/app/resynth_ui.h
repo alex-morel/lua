@@ -47,7 +47,7 @@ inline void load(ResynthUiState& st, const std::string& path) {
     st.ovMin.clear();
     if (!st.wav.error.empty()) { st.status = "Erro: " + st.wav.error; return; }
     st.status.clear();
-    if (st.wav.truncated) st.status = "Arquivo longo: so os primeiros 5 minutos foram carregados.";
+    if (st.wav.truncated) st.status = "Arquivo longo: só os primeiros 5 minutos foram carregados.";
     auto env = dx7fm::resynth::analyzeEnvelope(st.wav.mono.data(), st.wav.mono.size(), st.wav.sampleRate);
     dx7fm::resynth::defaultTimes(env, st.wav.seconds(), st.opt, st.wav.sampleRate, st.aSec, st.bSec);
     st.manualRef = false;
@@ -185,8 +185,8 @@ inline bool ResynthDialog(dx7fm::OperatorParams& op, int opIndex, ResynthUiState
 
     const bool loaded = st.wav.error.empty() && !st.wav.mono.empty();
     if (!loaded) {
-        ImGui::TextDisabled("Escolha um .wav (mono ou estereo; PCM 8/16/24/32 bits ou float).\n\n"
-                            "Melhor com uma nota so, isolada: o som e decomposto em ate 64\n"
+        ImGui::TextDisabled("Escolha um .wav (mono ou estéreo; PCM 8/16/24/32 bits ou float).\n\n"
+                            "Melhor com uma nota só, isolada: o som e decomposto em até 64\n"
                             "senoides (parciais) em dois instantes -- A no ataque e B no\n"
                             "sustain -- e o operador faz o morph de A pra B ao longo da nota.");
     } else {
@@ -200,7 +200,7 @@ inline bool ResynthDialog(dx7fm::OperatorParams& op, int opIndex, ResynthUiState
         ImGui::SameLine(160);
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col::kAccent2), "B: %.3f s", st.bSec);
         ImGui::SameLine(320);
-        ImGui::TextDisabled("(linha tracejada = inicio do som)");
+        ImGui::TextDisabled("(linha tracejada = início do som)");
         PeakPlot(st, color, ImVec2(w, 120));
 
         // opcoes
@@ -228,7 +228,7 @@ inline bool ResynthDialog(dx7fm::OperatorParams& op, int opIndex, ResynthUiState
         ImGui::SameLine();
         ImGui::SetNextItemWidth(120);
         st.dirty |= ImGui::SliderFloat("##thr", &st.opt.thresholdDb, -90.0f, -20.0f, "%.0f dB");
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("picos mais fracos que isso (relativo ao mais forte) sao ignorados");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("picos mais fracos que isso (relativo ao mais forte) são ignorados");
         ImGui::SameLine(0, 18);
         ImGui::TextUnformatted("Max parciais");
         ImGui::SameLine();
@@ -238,7 +238,7 @@ inline bool ResynthDialog(dx7fm::OperatorParams& op, int opIndex, ResynthUiState
         char note[16];
         dx7fm_app::noteName(r.detectedHz, note, sizeof note);
         ImGui::AlignTextToFramePadding();
-        ImGui::Text("Referencia (razao 1x): detectada %.2f Hz (%s)", r.detectedHz, note);
+        ImGui::Text("Referência (razão 1x): detectada %.2f Hz (%s)", r.detectedHz, note);
         ImGui::SameLine();
         st.dirty |= ImGui::Checkbox("manual", &st.manualRef);
         if (st.manualRef) {
@@ -252,16 +252,16 @@ inline bool ResynthDialog(dx7fm::OperatorParams& op, int opIndex, ResynthUiState
         ImGui::Checkbox("Ajustar o Amp EG ao volume do som", &st.apply.ampEG);
         ImGui::SameLine();
         ImGui::Checkbox("Operador em 1x", &st.apply.resetTuning);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("frequencia por razao 1, sem fine/detune: a nota da referencia soa na altura original");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("frequência por razão 1, sem fine/detune: a nota da referência soa na altura original");
         if (st.apply.morph && op.fxType != dx7fm::FxType::Bypass)
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col::kAccent2), "Aviso: o FX EG tambem controla o efeito deste operador (FX diferente de Bypass).");
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col::kAccent2), "Aviso: o FX EG também controla o efeito deste operador (FX diferente de Bypass).");
 
         char refNote[16];
         dx7fm_app::noteName(r.refHz, refNote, sizeof refNote);
         if (r.ok)
             ImGui::Text("A: %d parciais, B: %d (%d pareados).  Toque %s pra ouvir na altura original.", r.partialsA, r.partialsB, r.paired, refNote);
         else
-            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col::kAccent2), "Nenhum parcial encontrado nesses instantes (silencio?).");
+            ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(col::kAccent2), "Nenhum parcial encontrado nesses instantes (silêncio?).");
     }
     ImGui::EndGroup();
 
